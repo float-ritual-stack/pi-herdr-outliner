@@ -68,6 +68,11 @@ test("the service advertises its protocol floor and every additive capability", 
   await expect(client.request({ action: "blocks.read", ids: [block.id] })).resolves.toBeDefined();
   await expect(client.request({ action: "properties.preview", text: "[status::draft]" })).resolves.toBeDefined();
   await expect(client.request({ action: "views.read", viewId: block.id })).resolves.toMatchObject({ status: "unsupported" });
+  const staged = store.create("Expression fixture [stage::review]");
+  const matched = await client.request<{ blocks: Array<{ id: string }> }>({
+    action: "blocks.query", query: { expression: "stage=validate OR stage=review", limit: 5 },
+  });
+  expect(matched.blocks.map(entry => entry.id)).toEqual([staged.id]);
 });
 
 test("a client needing a capability rejects a current service that lacks it, before sending the request", async () => {
@@ -117,6 +122,30 @@ test("CLI view requires views.read before sending the read", async () => {
   const withCapability = await run(["views.read"]);
   expect(withCapability.stderr).toContain("Unknown action: views.read");
   expect(withCapability.actions).toEqual(["ping", "views.read"]);
+});
+
+test("CLI list --query requires query.expression so an older service cannot ignore it", async () => {
+  const run = async (capabilities: string[], args: string[]) => {
+    const { socket, actions } = await fakeService({ protocolVersion: OUTLINER_PROTOCOL_VERSION, capabilities });
+    const root = temporaryDirectory();
+    const child = Bun.spawn([process.execPath, "src/cli.ts", "list", ...args], {
+      cwd: join(import.meta.dir, ".."),
+      env: { ...process.env, OUTLINER_REMOTE: "1", OUTLINER_SOCKET_PATH: socket,
+        OUTLINER_WORKSPACE_ROOT: root, OUTLINER_STATE_DIR: join(root, "state") },
+      stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 5_000,
+    });
+    const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+    return { exitCode, stderr, actions };
+  };
+  const without = await run(["views.read"], ["--query", "status=open OR status=review"]);
+  expect(without.exitCode).toBe(1);
+  expect(without.stderr).toContain("does not support query.expression. Restart the service");
+  expect(without.actions).toEqual(["ping"]);
+  // A plain clause list still goes straight to the older service.
+  const plain = await run(["views.read"], ["--filter", "status=open"]);
+  expect(plain.actions).toEqual(["blocks.query"]);
+  const withCapability = await run(["query.expression"], ["--query", "status=open OR status=review"]);
+  expect(withCapability.actions).toEqual(["ping", "blocks.query"]);
 });
 
 test("a newer service is accepted; a service below the minimum is rejected", () => {

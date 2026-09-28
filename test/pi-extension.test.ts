@@ -1416,6 +1416,7 @@ test("requires the current protocol, attributes agent creates and page follows, 
   };
   let protocolVersion: number = OUTLINER_PROTOCOL_VERSION;
   let minClientProtocol: number | undefined;
+  let capabilities: string[] | undefined;
   let queryCollection = collection;
   let queryError: Error | undefined;
   const requests: RequestInput[] = [];
@@ -1457,7 +1458,7 @@ test("requires the current protocol, attributes agent creates and page follows, 
         : clients) as T;
     }
     if (input.action === "ping") {
-      return { status: "ready", protocolVersion, minClientProtocol } as unknown as T;
+      return { status: "ready", protocolVersion, minClientProtocol, capabilities } as unknown as T;
     }
     throw new Error(`Unexpected request: ${input.action}`);
   };
@@ -1768,6 +1769,18 @@ test("requires the current protocol, attributes agent creates and page follows, 
     expect(largeEnvelope.presentation.returned).toBe(100);
     expect(largeEnvelope.presentation.presented).toBe(largeEnvelope.blocks.length);
     expect(largeEnvelope.presentation.omitted).toBeGreaterThan(0);
+    // `expression` is sent only to a service that parses it; plain queries need no capability.
+    requests.length = 0;
+    await expect(tools.get("outliner_query")!.execute("old-service-expression", { expression: "a OR b" } as never)).rejects.toThrow(
+      "does not support query.expression",
+    );
+    expect(requests.some(request => request.action === "blocks.query")).toBe(false);
+    await tools.get("outliner_query")!.execute("old-service-plain", { text: "plain" });
+    capabilities = ["query.expression"];
+    requests.length = 0;
+    await tools.get("outliner_query")!.execute("expression-query", { expression: "a OR b" } as never);
+    expect(requests.find(request => request.action === "blocks.query")).toMatchObject({ query: { expression: "a OR b" } });
+    capabilities = undefined;
     protocolVersion = OUTLINER_PROTOCOL_VERSION + 1;
     await tools.get("outliner_query")!.execute("newer-service-query", {});
     minClientProtocol = OUTLINER_PROTOCOL_VERSION + 1;

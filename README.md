@@ -1212,7 +1212,10 @@ created < 2026-09-01T12:00Z
   `query` property and position.
 - **Service:** the grammar requires a service that reports the
   `query.expression` capability. CLI `list --query` and
-  `outliner_query.expression` check for it before sending.
+  `outliner_query.expression` check for it before sending, and Tree and bookmark
+  navigators, which send a saved view's parsed `where` when admitting new
+  children or scoping a bookmark, require it at startup. Queries without
+  `expression` or `where` need no capability.
 
 The Tree **Advanced property filter**, `expand-when`, checklist views and
 repeated CLI `--filter` flags keep the positive-AND clause syntax.
