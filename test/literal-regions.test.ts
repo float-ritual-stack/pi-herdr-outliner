@@ -179,9 +179,11 @@ test("startup on a version-three workspace re-indexes regions without rewriting 
   // Simulate the index a version-three parser wrote for this note.
   fixture.store.database.exec(`
     INSERT INTO block_properties (block_id, key, value, ordinal, raw, start, end, line, column, placement, scope, syntax)
-    VALUES ('${original.id}', 'stage', 'doing', 9, 'stage:: doing', 0, 0, 4, 0, 'metadata-line', 'line', 'bare');
+    VALUES ('${original.id}', 'stage', 'queued', 9, '[stage::queued]', 0, 0, 3, 0, 'trailing-metadata', 'block', 'bracket');
     UPDATE metadata SET value = '3' WHERE key = 'property_parser_version';
   `);
+  expect(fixture.store.queryBlocks({ filters: [{ key: "stage" }], limit: 20 }).blocks.map(block => block.id))
+    .toEqual([original.id]);
   const before = fixture.store.sequence;
   fixture.store.close();
 
