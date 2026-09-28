@@ -655,6 +655,19 @@ describe("InboxRepository", () => {
     expect(repository.results()).toEqual([]);
   });
 
+  test("records the Inbox agent as who filed a capture and who undid it (PIE-451)", () => {
+    const { store, repository } = fixture();
+    const source = capture(store);
+    const result = repository.apply("attributed", source, plan({ notes: [{ text: "Filed output" }] }));
+    const structural = () => store.recentEditActivity({ author: "agent", kinds: ["move", "delete", "restore"], limit: 50 })
+      .entries.map(entry => [entry.block.id, entry.kind, entry.actorId]);
+    expect(structural()).toEqual([[source.id, "move", "inbox-agent"]]);
+    repository.undo(result.id);
+    const output = result.outputIds[0]!;
+    expect(structural()).toEqual(expect.arrayContaining([[source.id, "move", "inbox-agent"], [output, "delete", "inbox-agent"]]));
+    expect(store.recentEditActivity({ author: "system", kinds: ["move", "delete", "restore"] }).entries).toEqual([]);
+  });
+
   test.each(["edit", "move", "delete", "new child", "child edit", "annotation"])("undo refuses a later %s without partial restoration", change => {
     const { store, repository } = fixture();
     const source = capture(store);

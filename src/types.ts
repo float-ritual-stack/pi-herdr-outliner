@@ -121,10 +121,14 @@ export interface MutationProvenance {
  * `delete` (moved to Trash) and `restore` are structural changes, recorded only
  * when the request declared who made them (capability `mutations.provenance`).
  */
-export type BlockActivityKind = "text" | "properties" | "move" | "delete" | "restore";
+export const BLOCK_ACTIVITY_KINDS = ["text", "properties", "move", "delete", "restore"] as const;
+export type BlockActivityKind = (typeof BLOCK_ACTIVITY_KINDS)[number];
 
-/** What `activity.recent` returns when the request names no `kinds`. */
-export const BLOCK_EDIT_ACTIVITY_KINDS: readonly BlockActivityKind[] = ["text", "properties"];
+/** Edits: what `activity.recent` returns without `kinds`, and what "latest edit" readers count. */
+export const BLOCK_EDIT_ACTIVITY_KINDS = ["text", "properties"] as const satisfies readonly BlockActivityKind[];
+
+/** `kind IN (...)` for the edit kinds, for readers that must not count structural changes. */
+export const BLOCK_EDIT_ACTIVITY_KIND_SQL = `kind IN (${BLOCK_EDIT_ACTIVITY_KINDS.map(kind => `'${kind}'`).join(", ")})`;
 
 export interface BlockEditActivity {
   cursor: number;

@@ -615,7 +615,7 @@ Do not leave older editors running across this upgrade.
 - selection-neutral capture: `capture.create`
 - delivery identity: `deliveries.ensure`
 - mutations: `create`, `update`, `move`, `delete` (move to Trash), `trash.restore`, `trash.purge`; `move`, `delete` and `trash.restore` take an optional `mutation` (capability `mutations.provenance`)
-- activity: `activity.recent` returns each block's latest recorded change by one author. Edits (`text`, `properties`) by default; `kinds` (capability `mutations.provenance`) adds `move`, `delete` and `restore`, which are recorded only when the request declared a `mutation`. A trashed block is listed only for the entry that trashed it
+- activity: `activity.recent` returns each block's latest recorded change by one author. Edits (`text`, `properties`) by default; `kinds` (capability `mutations.provenance`) adds `move`, `delete` and `restore`, which are recorded only when the request declared a `mutation` (Tree and Detail declare the person, the Inbox worker `inbox-agent`). A trashed block is listed only for the entry that trashed it, and only while it is still a Trash root
 - properties: `properties.patch`, `properties.catalog`, `properties.inventory`, read-only draft parsing `properties.preview`
 - virtual ordering: `virtual.occurrences.reorder`
 - references: `references.resolve`, `references.backlinks`

@@ -114,3 +114,24 @@ test("move and delete without --author stay the person's, through the CLI", asyn
   expect(bad.stderr).toContain("--author must be user, agent, or system");
   expect(store.get(twine.id)!.deletedAt).toBeFalsy();
 });
+
+test("--author agent without --actor is refused for every write, before anything is written", async () => {
+  const { env, store } = await setup();
+  const bench = store.create("Workbench");
+  const gloves = store.create("Gloves");
+  const cases = [
+    ["create", "--text", "Unsigned note", "--author", "agent"],
+    ["update", "--id", gloves.id, "--text", "Gloves, mended", "--expected", String(gloves.revision), "--author", "agent"],
+    ["move", "--id", gloves.id, "--parent", bench.id, "--author", "agent"],
+    ["delete", "--id", gloves.id, "--author", "agent"],
+    ["restore", "--id", gloves.id, "--author", "agent", "--actor", " "],
+  ];
+  for (const args of cases) {
+    const r = await runCli(args, env);
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toContain("--author agent requires --actor");
+  }
+  const after = store.get(gloves.id)!;
+  expect([after.text, after.parentId, Boolean(after.deletedAt)]).toEqual(["Gloves", null, false]);
+  expect(store.recentEditActivity({ author: "agent", kinds: ["text", "properties", "move", "delete", "restore"] }).entries).toEqual([]);
+});

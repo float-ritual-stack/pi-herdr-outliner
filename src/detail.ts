@@ -31,6 +31,7 @@ import {
 import { OutlinerActionKeymap, filterActionMenuItems, type OutlinerActionMenuItem } from "./outliner-actions";
 import {
   createDetailController,
+  detailRestoreRequest,
   type DetailEffects,
   type DetailController,
   type DetailViewport,
@@ -431,7 +432,7 @@ const effects: DetailEffects = {
     });
   },
   async restoreBlock(blockId) {
-    return client.request<Block>({ action: "trash.restore", blockId });
+    return client.request<Block>(detailRestoreRequest(blockId));
   },
   async resolveReference(target) {
     return resolveOutlinerLinkTarget(client, target);

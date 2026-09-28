@@ -9,7 +9,7 @@ import {TreeConnections} from "./tree-connections";
 import {TreeWorkingSelection} from "./tree-working-selection";
 import {OpenDestinationChooser, destinationRecoveryKey, missingNavigationDestination, type OpenDestinationTarget} from "./open-destination-chooser";
 import type {DetailDestinationPlacement} from "./detail-pane-placement";
-import type {ChangeFeedPage, OutlinerCapability, OutlinerServiceStatus, OutlinerViewAddress} from "./types";
+import type {ChangeFeedPage, MutationProvenance, OutlinerCapability, OutlinerServiceStatus, OutlinerViewAddress} from "./types";
 import {checkServiceCompatibility} from "./service-compatibility";
 import {DocumentPreview, type DocumentPreviewState} from './document-preview';
 import {treePreviewFrame, defaultPreviewPreferences, type PreviewPreferences} from './tree-preview';
@@ -273,6 +273,9 @@ interface PendingBrowsingPublication {
   readonly target: OutlinerNavigationTarget | null;
   readonly dispatchPreview: boolean;
 }
+/** Who the Tree says made a change: the person, through the Tree. */
+const TREE_MUTATION = { author: "user", actorId: "tree" } as const satisfies MutationProvenance;
+
 const MAX_TREE_HISTORY_ENTRIES = 200;
 
 
@@ -1134,7 +1137,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         blockId: selected.canonicalId,
         text,
         expectedRevision: quickEditSource.revision,
-        mutation: { author: "user", actorId: "tree" },
+        mutation: TREE_MUTATION,
       });
       return selected.canonicalId;
     }
@@ -1158,12 +1161,13 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       if (draft.created.text !== text) {
         draft.created = await effects.request<Block>({
           action: "update", blockId: draft.created.id, expectedRevision: draft.created.revision,
-          text, mutation: { author: "user", actorId: "tree" },
+          text, mutation: TREE_MUTATION,
         });
       }
       // Keep the receipt until the move succeeds, so retry cannot create a second child.
       await effects.request({
         action: "move", blockId: draft.created.id, parentId: draft.parent.canonicalId, position: 0,
+        mutation: TREE_MUTATION,
       });
       setCollapsed(draft.parent, false);
       return draft.created.id;
@@ -1191,6 +1195,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       });
       await effects.request({
         action: "move",
+        mutation: TREE_MUTATION,
         blockId: created.id,
         parentId: selected.canonicalId,
         position: 0,
@@ -1210,6 +1215,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       });
       await effects.request({
         action: "move",
+        mutation: TREE_MUTATION,
         blockId: created.id,
         parentId: canonical.parentId,
         position: canonical.position + 1,
@@ -1763,6 +1769,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       ) {
         await effects.request({
           action: "move",
+          mutation: TREE_MUTATION,
           blockId: selected.canonicalId,
           parentId: candidate.canonicalId,
         });
@@ -1781,6 +1788,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     const parent = await effects.request<Block>({ action: "get", blockId: canonical.parentId });
     await effects.request({
       action: "move",
+      mutation: TREE_MUTATION,
       blockId: canonical.id,
       parentId: parent.parentId,
       position: parent.position + 1,
@@ -1805,6 +1813,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     } else {
       await effects.request({
         action: "move",
+        mutation: TREE_MUTATION,
         blockId: canonical.id,
         parentId: canonical.parentId,
         position: targetIndex,
@@ -2983,7 +2992,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       if (str.toLowerCase() === "y" && isBlockTreeRow(selected)) {
         const fallback = fallbackRowBeforeDelete(rows, selectedIndex, physicalBlocksById);
         await publishBrowsingContext(fallback?.canonicalId ?? null);
-        await effects.request({ action: "delete", blockId: selected.canonicalId });
+        await effects.request({ action: "delete", blockId: selected.canonicalId, mutation: TREE_MUTATION });
         await reload(fallback?.rowId ?? null, { exactRowIdOnly: true });
         const visible = rows[selectedIndex];
         lastVisibleCanonicalId = isBlockTreeRow(visible) ? visible.canonicalId : null;
@@ -3162,7 +3171,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         reloadRequired = true;
       } else if (selected.hasChildren) selectedIndex = Math.min(rows.length - 1, selectedIndex + 1);
     } else if (str === "r" && selected?.block.deletedAt) {
-      await effects.request({ action: "trash.restore", blockId: selected.canonicalId });
+      await effects.request({ action: "trash.restore", blockId: selected.canonicalId, mutation: TREE_MUTATION });
       status = "Restored from Trash";
       reloadRequired = true;
     } else if (str === "p" && selected?.block.deletedAt) {

@@ -619,7 +619,7 @@ bun run cli work-id-allocate --id <block-uuid> --expected <revision>
 
 Text updates require the integer `revision` returned by the read before editing. Omitting `--expected` or saving an old revision fails without replacing newer text. Sibling moves do not invalidate an unchanged text draft.
 
-`create`, `update`, `move`, `delete` (to Trash) and `restore` (from Trash) record who wrote: `--author user|agent|system` (default `user`), `--actor <id>` (default `cli` except for `create`) and `--session <id>`. An agent passes `--author agent --actor <its id>`, so the change feed, activity and Detail attribute the write to it, not to the person. `activity` reads the same record (`activity.recent`): edits by default, and moves, trashing and restores with `--kinds`. Attributed moves and Trash operations need a service with the `mutations.provenance` capability.
+`create`, `update`, `move`, `delete` (to Trash) and `restore` (from Trash) record who wrote: `--author user|agent|system` (default `user`), `--actor <id>` (default `cli` for the person's writes; required with `--author agent`) and `--session <id>`. An agent passes `--author agent --actor <its id>`, so the change feed, activity and Detail attribute the write to it, not to the person. `activity` reads the same record (`activity.recent`): edits by default, and moves, trashing and restores with `--kinds`. Attributed moves and Trash operations need a service with the `mutations.provenance` capability.
 
 `view` and the agent tool `outliner_view` read a saved virtual branch's matching
 canonical roots in branch order through the service's `views.read`, the same

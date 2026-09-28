@@ -5,7 +5,7 @@ import { ChangeFeed, raiseChangeFeedFloor, type SequenceChange } from "./change-
 import { checklistItems, queryChecklistItems, updateChecklistText, validateChecklistIdentityChanges } from "./checklist-items";
 import type { ChecklistCollection, ChecklistIdentityChange, ChecklistQuery, ChecklistSearchQuery, ChecklistSearchCollection, ChecklistUpdateInput, ChecklistUpdateReceipt } from "./types";
 import type {QueryExpression, SavedViewReadOptions, SavedViewReadProblem, SavedViewReadResult, VirtualBranchOrder, VirtualBranchPlacementInput} from "./types";
-import { BLOCK_EDIT_ACTIVITY_KINDS } from "./types";
+import { BLOCK_ACTIVITY_KINDS, BLOCK_EDIT_ACTIVITY_KINDS } from "./types";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -335,7 +335,19 @@ function normalizeCreatorProvenance(
   };
 }
 
-const BLOCK_ACTIVITY_KINDS: readonly BlockActivityKind[] = ["text", "properties", "move", "delete", "restore"];
+/** The activity table, shared by creation and the kind migration so the two cannot drift. */
+function blockActivityTableSql(name: string, options: { ifNotExists?: boolean } = {}): string {
+  return `CREATE TABLE ${options.ifNotExists ? "IF NOT EXISTS " : ""}${name} (
+    activity_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+    author TEXT NOT NULL CHECK (author IN ('user', 'agent', 'system')),
+    actor_id TEXT,
+    session_id TEXT,
+    task_id TEXT,
+    kind TEXT NOT NULL CHECK (kind IN (${BLOCK_ACTIVITY_KINDS.map(kind => `'${kind}'`).join(", ")})),
+    edited_at TEXT NOT NULL
+  )`;
+}
 
 function normalizeMutationProvenance(
   mutation: MutationProvenance,
@@ -1638,10 +1650,12 @@ export class OutlinerStore {
     if (options.since !== undefined && !Number.isFinite(Date.parse(options.since))) {
       throw new Error("Activity since must be an ISO timestamp");
     }
-    const kinds = [...new Set(options.kinds ?? BLOCK_EDIT_ACTIVITY_KINDS)];
-    if (kinds.length === 0 || kinds.some(kind => !BLOCK_ACTIVITY_KINDS.includes(kind))) {
-      throw new Error(`Activity kinds must be one or more of ${BLOCK_ACTIVITY_KINDS.join(", ")}`);
+    const requested: unknown = options.kinds ?? BLOCK_EDIT_ACTIVITY_KINDS;
+    const listed = Array.isArray(requested) ? [...new Set(requested as unknown[])] : [];
+    if (listed.length === 0 || listed.some(kind => !(BLOCK_ACTIVITY_KINDS as readonly unknown[]).includes(kind))) {
+      throw new Error(`Activity kinds must be a non-empty list of ${BLOCK_ACTIVITY_KINDS.join(", ")}`);
     }
+    const kinds = listed as BlockActivityKind[];
     // Filtered before grouping, so a block's latest edit still shows after a later move.
     const kindClause = `kind IN (${kinds.map(() => "?").join(", ")})`;
     const cursorRow = this.database.query(`
@@ -1663,9 +1677,12 @@ export class OutlinerStore {
     `).all(afterCursor, author, since, ...kinds, limit) as BlockEditActivityRow[];
     const entries = rows.flatMap((row): BlockEditActivity[] => {
       const block = this.get(row.block_id);
-      // A trashed block is listed only for the entry that trashed it.
       if (!block) return [];
-      if (block.effectiveDeletedRootId && !(row.kind === "delete" && block.deletedAt)) return [];
+      // A trashed block is listed only for the entry that trashed it, and that
+      // entry only while the block is still a Trash root; after an unrecorded
+      // restore it would describe a state the block is no longer in.
+      const trashRoot = Boolean(block.deletedAt);
+      if (row.kind === "delete" ? !trashRoot : Boolean(block.effectiveDeletedRootId)) return [];
       return [{
         cursor: row.activity_id,
         block,
@@ -3225,17 +3242,8 @@ export class OutlinerStore {
         annotation_ids TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
-      CREATE TABLE IF NOT EXISTS block_edit_activity (
-        activity_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
-        author TEXT NOT NULL CHECK (author IN ('user', 'agent', 'system')),
-        actor_id TEXT,
-        session_id TEXT,
-        task_id TEXT,
-        kind TEXT NOT NULL CHECK (kind IN ('text', 'properties', 'move', 'delete', 'restore')),
-        edited_at TEXT NOT NULL
-      );
     `);
+    this.database.query(blockActivityTableSql("block_edit_activity", { ifNotExists: true })).run();
     this.migrateActivityKinds();
     this.database.exec(`
       CREATE INDEX IF NOT EXISTS block_edit_activity_author_cursor
@@ -3278,30 +3286,36 @@ export class OutlinerStore {
     const table = this.database.query(
       "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'block_edit_activity'",
     ).get() as { sql: string } | null;
-    if (!table || table.sql.includes("'restore'")) return;
+    if (!table || BLOCK_ACTIVITY_KINDS.every(kind => table.sql.includes(`'${kind}'`))) return;
+    // One statement per call: a multi-statement exec can skip a failed statement
+    // and carry on to the DROP, which would lose the history.
     this.database.transaction(() => {
       // Keep AUTOINCREMENT past ids a client may already hold as a cursor.
       const issued = this.database.query(
         "SELECT seq FROM sqlite_sequence WHERE name = 'block_edit_activity'",
       ).get() as { seq: number } | null;
-      this.database.exec(`
-        CREATE TABLE block_edit_activity_next (
-          activity_id INTEGER PRIMARY KEY AUTOINCREMENT,
-          block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
-          author TEXT NOT NULL CHECK (author IN ('user', 'agent', 'system')),
-          actor_id TEXT,
-          session_id TEXT,
-          task_id TEXT,
-          kind TEXT NOT NULL CHECK (kind IN ('text', 'properties', 'move', 'delete', 'restore')),
-          edited_at TEXT NOT NULL
-        );
+      // A row whose block is gone (a raw delete with foreign keys off) cannot be
+      // shown by any reader and would fail the new table's foreign key.
+      const { expected } = this.database.query(
+        "SELECT COUNT(*) AS expected FROM block_edit_activity WHERE block_id IN (SELECT id FROM blocks)",
+      ).get() as { expected: number };
+      this.database.query("DROP TABLE IF EXISTS block_edit_activity_next").run();
+      this.database.query(blockActivityTableSql("block_edit_activity_next")).run();
+      this.database.query(`
         INSERT INTO block_edit_activity_next
           (activity_id, block_id, author, actor_id, session_id, task_id, kind, edited_at)
         SELECT activity_id, block_id, author, actor_id, session_id, task_id, kind, edited_at
-        FROM block_edit_activity;
-        DROP TABLE block_edit_activity;
-        ALTER TABLE block_edit_activity_next RENAME TO block_edit_activity;
-      `);
+        FROM block_edit_activity
+        WHERE block_id IN (SELECT id FROM blocks)
+      `).run();
+      const { copied } = this.database.query(
+        "SELECT COUNT(*) AS copied FROM block_edit_activity_next",
+      ).get() as { copied: number };
+      if (copied !== expected) {
+        throw new Error(`Activity migration copied ${copied} of ${expected} rows; the original table is unchanged`);
+      }
+      this.database.query("DROP TABLE block_edit_activity").run();
+      this.database.query("ALTER TABLE block_edit_activity_next RENAME TO block_edit_activity").run();
       if (issued) {
         const kept = this.database.query(
           "UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = 'block_edit_activity'",

@@ -57,6 +57,7 @@ import {
 } from "./outliner-actions";
 import {
   createDetailController,
+  detailRestoreRequest,
   type DetailDirectSelectionCapture,
   type DetailEffects,
   type DetailController,
@@ -662,7 +663,7 @@ const effects: DetailEffects = {
     });
   },
   async restoreBlock(blockId) {
-    return client.request<Block>({ action: "trash.restore", blockId });
+    return client.request<Block>(detailRestoreRequest(blockId));
   },
   async resolveReference(target) {
     return resolveOutlinerLinkTarget(client, target);

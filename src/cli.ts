@@ -32,15 +32,22 @@ if(process.argv[2]==='doctor'){
 }
 const paths = resolveClientPaths();
 /** `--author` for writes and filters: who made the change, as the service records it. */
-function writerAuthor(value: string | undefined): "user" | "agent" | "system" {
+function parseAuthor(value: string | undefined): "user" | "agent" | "system" {
   if (value === "user" || value === "agent" || value === "system") return value;
   throw new Error("--author must be user, agent, or system");
+}
+
+/** An agent must say which agent it is; the CLI's own `cli` label would hide it. */
+function writerAuthor(value: string | undefined, actor: string | undefined): "user" | "agent" | "system" {
+  const author = parseAuthor(value);
+  if (author === "agent" && !actor?.trim()) throw new Error("--author agent requires --actor <agent id>");
+  return author;
 }
 
 /** Who made a structural change: the person through the CLI unless --author/--actor say otherwise. */
 function writerMutation(values: { author?: string; actor?: string; session?: string }): MutationProvenance {
   return {
-    author: writerAuthor(values.author),
+    author: writerAuthor(values.author, values.actor),
     actorId: values.actor ?? "cli",
     ...(values.session ? { sessionId: values.session } : {}),
   };
@@ -392,7 +399,7 @@ switch (command) {
       strict: true,
     });
     if (!values.text) throw new Error("create requires --text");
-    const author = writerAuthor(values.author);
+    const author = writerAuthor(values.author, values.actor);
     request = {
       action: "create",
       text: values.text,
@@ -466,7 +473,7 @@ switch (command) {
       ...(values.limit ? { limit: parseRevision(values.limit) } : {}),
       ...(values.since ? { since: values.since } : {}),
       ...(values.after ? { afterCursor: parseRevision(values.after) } : {}),
-      ...(values.author ? { author: writerAuthor(values.author) } : {}),
+      ...(values.author ? { author: parseAuthor(values.author) } : {}),
     };
     break;
   }

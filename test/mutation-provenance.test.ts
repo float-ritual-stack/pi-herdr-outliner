@@ -7,6 +7,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OutlinerClient } from "../src/client";
+import { detailRestoreRequest } from "../src/detail-controller";
 import { EditRecoveryRepository } from "../src/edit-recovery";
 import { OutlinerServer } from "../src/server";
 import { requireCapabilities } from "../src/service-compatibility";
@@ -148,6 +149,10 @@ test("activity without kinds still returns edits only, even after an attributed 
     .toEqual([[compost.id, "text"]]);
   await expect(activity(client, { author: "agent", kinds: ["rename"] })).rejects.toThrow("Activity kinds must be");
   await expect(activity(client, { author: "agent", kinds: [] })).rejects.toThrow("Activity kinds must be");
+  // Over RPC, a malformed `kinds` gets the same clear error, not a runtime type error.
+  for (const kinds of [5, "move", { move: true }, [5]]) {
+    await expect(activity(client, { author: "agent", kinds })).rejects.toThrow("Activity kinds must be a non-empty list of text, properties, move, delete, restore");
+  }
 });
 
 test("an attributed move does not count as the note's latest edit for edit recovery", () => {
@@ -212,4 +217,76 @@ test("an older workspace's activity table is rebuilt once, keeping its rows and 
   expect((again.database.query("SELECT sql FROM sqlite_master WHERE name = 'block_edit_activity'").get() as { sql: string }).sql).toBe(schema);
   expect(again.recentEditActivity({ author: "agent", kinds: ["move"] }).entries.length).toBe(1);
   expect(again.recentEditActivity({ author: "user" }).entries.map(entry => [entry.block.id, entry.kind])).toEqual([[note.id, "text"]]);
+});
+
+test("an orphaned activity row does not erase the history when the table is rebuilt", () => {
+  const directory = workspace();
+  const database = join(directory, "outliner.sqlite");
+  const first = new OutlinerStore(database);
+  const kept = first.create("Cold frame");
+  first.update(kept.id, "Cold frame, propped open", kept.revision, { author: "user", actorId: "detail" });
+  first.close();
+
+  const raw = new Database(database);
+  raw.exec(`
+    PRAGMA foreign_keys = OFF;
+    CREATE TABLE old_activity AS SELECT * FROM block_edit_activity;
+    DROP TABLE block_edit_activity;
+    CREATE TABLE block_edit_activity (
+      activity_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+      author TEXT NOT NULL CHECK (author IN ('user', 'agent', 'system')),
+      actor_id TEXT,
+      session_id TEXT,
+      task_id TEXT,
+      kind TEXT NOT NULL CHECK (kind IN ('text', 'properties')),
+      edited_at TEXT NOT NULL
+    );
+    INSERT INTO block_edit_activity SELECT * FROM old_activity;
+    DROP TABLE old_activity;
+    -- A row whose block is gone, as a raw delete with foreign keys off leaves behind.
+    INSERT INTO block_edit_activity (block_id, author, kind, edited_at)
+      VALUES ('00000000-0000-4000-8000-00000000dead', 'user', 'text', '2026-01-01T00:00:00.000Z');
+  `);
+  const total = (raw.query("SELECT COUNT(*) AS n FROM block_edit_activity").get() as { n: number }).n;
+  const live = raw.query(
+    "SELECT * FROM block_edit_activity WHERE block_id IN (SELECT id FROM blocks) ORDER BY activity_id",
+  ).all();
+  expect(live.length).toBe(total - 1);
+  raw.close();
+
+  const reopened = new OutlinerStore(database);
+  cleanups.push(() => reopened.close());
+  // Every row with a block survives; only the orphan, which no reader could show, is dropped.
+  expect(reopened.database.query("SELECT * FROM block_edit_activity ORDER BY activity_id").all()).toEqual(live);
+  expect(reopened.recentEditActivity({ author: "user" }).entries.map(entry => [entry.block.id, entry.kind]))
+    .toEqual([[kept.id, "text"]]);
+});
+
+test("an agent's trash entry is hidden once the block is out of Trash, and the person's restore is the latest entry", async () => {
+  const { store, client } = await service();
+  const mulch = store.create("Mulch order");
+  await client.request({ action: "delete", blockId: mulch.id, mutation: gardenAgent });
+  const every = { kinds: ["text", "properties", "move", "delete", "restore"] };
+  expect((await activity(client, { author: "agent", ...every })).entries.map(entry => entry.kind)).toEqual(["delete"]);
+
+  // An unrecorded restore (an older client): the agent's "delete" no longer describes the block.
+  await client.request({ action: "trash.restore", blockId: mulch.id });
+  expect((await activity(client, { author: "agent", ...every })).entries).toEqual([]);
+
+  // Trashed again by the agent and restored by the person through the Tree's request shape.
+  await client.request({ action: "delete", blockId: mulch.id, mutation: gardenAgent });
+  await client.request({ action: "trash.restore", blockId: mulch.id, mutation: { author: "user", actorId: "tree" } });
+  expect((await activity(client, { author: "agent", ...every })).entries).toEqual([]);
+  expect((await activity(client, { author: "user", ...every })).entries.map(entry => [entry.kind, entry.actorId]))
+    .toEqual([["restore", "tree"]]);
+});
+
+test("Detail's restore request says the person restored the block through Detail", async () => {
+  const { store, client } = await service();
+  const trellis = store.create("Trellis plan");
+  await client.request({ action: "delete", blockId: trellis.id, mutation: gardenAgent });
+  await client.request(detailRestoreRequest(trellis.id));
+  const entries = (await activity(client, { author: "user", kinds: ["restore"] })).entries;
+  expect(entries.map(entry => [entry.block.id, entry.kind, entry.actorId])).toEqual([[trellis.id, "restore", "detail"]]);
 });

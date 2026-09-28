@@ -10,8 +10,17 @@ This file records notable user-facing changes. The project remains active dogfoo
   `delete` or `restore` entries. `activity.recent` returns them when asked with
   `kinds`; by default it still returns edits only. Without `mutation` nothing
   changes. The CLI's `move` and `delete`, the new `restore`, and Pi's
-  `outliner_move` say who made the change. The activity table is rebuilt once
-  on startup to allow the new kinds, keeping its rows and cursors. PIE-451.
+  `outliner_move` say who made the change, as do the Tree's and Detail's
+  moves, trashing and restores (the person, through `tree` or `detail`) and the
+  Inbox worker's (`inbox-agent`, as its edits already were). A trash entry is
+  hidden once its block is out of Trash. The CLI's `--author agent` now needs
+  `--actor` on every write, including `create` and `update`. The activity table
+  is rebuilt once on startup to allow the new kinds, keeping every row whose
+  block still exists, its ids and cursors; the rebuild checks its copy before
+  replacing the table. **Downgrading:** an older build reads the new `move`,
+  `delete` and `restore` rows as if they were edits (Pi's recent-edit context,
+  note assistance and edit recovery would count them), and its own table
+  definition keeps the widened check. PIE-451.
 
 - Items with several deliveries: `work deliver --key <name>` records a PR as
   its own delivery (`PIE-123/<name>`); without a key, a PR in another

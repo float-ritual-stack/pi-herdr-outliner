@@ -2,6 +2,7 @@ import {createHash} from "node:crypto";
 import {mergeEdits, type EditMerge} from "./edit-merge";
 import type {OutlinerStore} from "./store";
 import type {Block, ChecklistIdentityChange, MutationProvenance} from "./types";
+import {BLOCK_EDIT_ACTIVITY_KIND_SQL} from "./types";
 
 export interface EditRecoveryStart {
   id: string;
@@ -154,7 +155,7 @@ export class EditRecoveryRepository {
     return block;
   }
   private latestEdit(blockId:string):EditRecovery["latestEdit"] {
-    return this.store.database.query("SELECT author, actor_id AS actorId, session_id AS sessionId, task_id AS taskId, kind, edited_at AS editedAt FROM block_edit_activity WHERE block_id=? AND kind IN ('text','properties') ORDER BY activity_id DESC LIMIT 1").get(blockId) as EditRecovery["latestEdit"];
+    return this.store.database.query(`SELECT author, actor_id AS actorId, session_id AS sessionId, task_id AS taskId, kind, edited_at AS editedAt FROM block_edit_activity WHERE block_id=? AND ${BLOCK_EDIT_ACTIVITY_KIND_SQL} ORDER BY activity_id DESC LIMIT 1`).get(blockId) as EditRecovery["latestEdit"];
   }
   private retained(id:string,expectedRevision:number):EditRecovery {
     revision(expectedRevision);

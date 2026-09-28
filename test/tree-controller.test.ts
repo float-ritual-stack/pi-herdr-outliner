@@ -1312,6 +1312,43 @@ describe("createTreeController", () => {
     expect(fake.calls.some(({action}) => action === "navigation.link.set")).toBe(false);
     expect(fake.calls.some(({ action }) => action === "navigation.resolve")).toBe(false);
   });
+  test("says the person moved, trashed or restored a block through the Tree (PIE-451)", async () => {
+    const first = block("first");
+    const second = block("second", { position: 1 });
+    const binned = block("binned", { position: 2, deletedAt: "2026-08-22T00:00:00.000Z" });
+    const siblings = [first, second];
+    let selected: Block = second;
+    const fake = harness((input) => {
+      if (input.action === "tree.index") return snapshot([...siblings, binned], selected);
+      if (input.action === "children") return siblings;
+      if (input.action === "move") {
+        const index = siblings.findIndex(candidate => candidate.id === input.blockId);
+        const [moved] = siblings.splice(index, 1);
+        siblings.splice(input.position!, 0, moved!);
+        return moved;
+      }
+      return undefined;
+    });
+    fake.effects = { ...fake.effects, actionKeymap: new OutlinerActionKeymap("<test>", { "tree.reorder.up": ["z"] }) };
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+    const tree = { author: "user" as const, actorId: "tree" };
+
+    await controller.handleKeypress("z", { name: "z" }, "pass");
+    expect(lastCall(fake.calls, "move")).toMatchObject({ blockId: second.id, mutation: tree });
+
+    await controller.handleKeypress("", { name: "delete" }, "pass");
+    await controller.handleKeypress("y", { name: "y" }, "pass");
+    expect(lastCall(fake.calls, "delete")).toEqual({ action: "delete", blockId: second.id, mutation: tree });
+
+    selected = binned;
+    const restorer = createTreeController(fake.effects);
+    await restorer.initialize();
+    expect(selectedBlockRow(restorer).canonicalId).toBe(binned.id);
+    await restorer.handleKeypress("r", { name: "r" }, "pass");
+    expect(lastCall(fake.calls, "trash.restore")).toEqual({ action: "trash.restore", blockId: binned.id, mutation: tree });
+  });
+
   test("reorders through rebound keys and menu actions without legacy keys moving data or opening panes", async () => {
     const first = block("first");
     const second = block("second", { position: 1 });
@@ -2101,6 +2138,7 @@ describe("createTreeController", () => {
       blockId: "child",
       parentId: "parent",
       position: 0,
+      mutation: { author: "user", actorId: "tree" },
     });
     expect(controller.view().mode).toBe("browse");
     expect(controller.view().status).toBe("Multiline editor opened in linked Detail");
@@ -2887,7 +2925,7 @@ describe("createTreeController", () => {
     await controller.handleKeypress("", { name: "delete" }, "pass");
     await controller.handleKeypress("y", { name: "y" }, "pass");
 
-    expect(lastCall(fake.calls, "delete")).toEqual({ action: "delete", blockId: "target" });
+    expect(lastCall(fake.calls, "delete")).toEqual({ action: "delete", blockId: "target", mutation: { author: "user", actorId: "tree" } });
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).toBe("tail");
     expect(controller.view().rows[controller.view().selectedIndex]?.rowId).not.toBe(
       "occurrence:lane-view:card",
@@ -2973,6 +3011,7 @@ describe("createTreeController", () => {
     expect(lastCall(fake.calls, "delete")).toEqual({
       action: "delete",
       blockId: "card",
+      mutation: { author: "user", actorId: "tree" },
     });
     const deleteIndex = fake.calls.findIndex((call) => call.action === "delete");
     expect(fake.calls[deleteIndex - 1]).toEqual({ action: "browsing-context.publish", sourceClientId: "tree-test", contextId: "tree-test-context", target: { kind: "block", blockId: "view" } });
@@ -3640,6 +3679,7 @@ describe("createTreeController", () => {
     expect(restoreFake.calls).toContainEqual({
       action: "trash.restore",
       blockId: deleted.id,
+      mutation: { author: "user", actorId: "tree" },
     });
     expect(restoreController.view().status).toBe("Restored from Trash");
 

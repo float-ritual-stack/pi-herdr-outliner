@@ -6,7 +6,7 @@ import {removedListItemIds} from "./checklist-items";
 import {checklistFoldState, restoreChecklistFold, checklistControlId, checklistCommentRange, findChecklistControl, type ChecklistControl} from "./checklist-controls";
 import {ChecklistSession, type ChecklistChoice, type ChecklistResult} from "./checklist-session";
 import type {ChecklistUpdateInput, ChecklistUpdateReceipt} from "./types";
-import type {ChecklistIdentityChange} from "./types";
+import type {ChecklistIdentityChange, MutationProvenance} from "./types";
 import { COMPLETION_ROWS } from "./reference-completion-renderer";
 import { ReferenceCompletionSession, type ReferenceCompletionItem, type ReferenceCompletionState } from "./reference-completion";
 import { buildDetailAnnotationView, displayedResourceText, detailAnnotationGroups, annotationReferenceTokens, resolveAnnotationReferences, sameAnnotationReferences, selectedAnnotationThread } from "./detail-annotations";
@@ -203,6 +203,14 @@ export interface DetailBacklinkState {
   /** Kind groups the reader opened; groups start collapsed. */
   expandedKinds: Set<string>;
   expandedSourceIds: Set<string>;
+}
+
+/** Who Detail says made a change: the person, through Detail. */
+export const DETAIL_MUTATION: Readonly<MutationProvenance> = { author: "user", actorId: "detail" };
+
+/** The `trash.restore` request behind `DetailEffects.restoreBlock`, attributed to the person (PIE-451). */
+export function detailRestoreRequest(blockId: string): { action: "trash.restore"; blockId: string; mutation: MutationProvenance } {
+  return { action: "trash.restore", blockId, mutation: { ...DETAIL_MUTATION } };
 }
 
 export function createDetailBacklinkState(): DetailBacklinkState {

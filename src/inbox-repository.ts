@@ -351,7 +351,7 @@ export class InboxRepository {
       }
       finalText=connected(finalText,sourceOriginals,sourceBefore);
       this.store.update(current.id, finalText, current.revision, mutation);
-      this.store.move(current.id, destination.id);
+      this.store.move(current.id, destination.id, undefined, mutation);
       const recovery: Recovery = {
         before, createdIds,
         after: [...before.map(block => block.id), ...createdIds].map(blockId => ({ id: blockId, shape: this.shape(blockId) })),
@@ -429,17 +429,17 @@ export class InboxRepository {
       for (const before of recovery.before) {
         if (before.parentId) this.store.requireActive(before.parentId);
       }
-      for (const createdId of recovery.createdIds) this.store.delete(createdId);
+      for (const createdId of recovery.createdIds) this.store.delete(createdId, mutation);
       for (const before of recovery.before) {
         const current = this.store.requireActive(before.id);
         this.store.update(before.id, before.text, current.revision, mutation);
-        if (current.parentId !== before.parentId) this.store.move(before.id, before.parentId, before.position);
+        if (current.parentId !== before.parentId) this.store.move(before.id, before.parentId, before.position, mutation);
       }
       // A helper folder may now be shared by later cleanups. Remove it only while still empty and untouched.
       for (const root of recovery.roots) {
         const current = this.store.get(root.id);
         if (current && !current.effectiveDeletedRootId && current.revision === root.revision &&
-          current.parentId === root.parentId && this.store.children(root.id).length === 0) this.store.delete(root.id);
+          current.parentId === root.parentId && this.store.children(root.id).length === 0) this.store.delete(root.id, mutation);
       }
       checkpointRestored?.(recovery.before.map(before => this.store.requireActive(before.id)));
       result.state = "undone";
