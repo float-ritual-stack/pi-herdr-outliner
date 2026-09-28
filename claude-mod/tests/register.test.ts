@@ -328,7 +328,9 @@ describe('register', () => {
       return { value: { tool: `mcp__pi-outliner__${e.name}` } }
     })
     await session.begin(() => $.session.start(START))
-    expect(registered).toEqual(['show'])
+    expect(registered).toEqual([
+      'show', 'work_create', 'work_stage', 'work_set', 'work_deliver', 'work_complete', 'work_body', 'note_section',
+    ])
 
     const shown = await $.tool.call({ tool: 'mcp__pi-outliner__show', reference: '[[Daily notes]]' })
     expect(shown).toMatchObject({ result: "Showing Daily notes in Claude's Outliner pane." })
@@ -336,6 +338,62 @@ describe('register', () => {
 
     const empty = await $.tool.call({ tool: 'mcp__pi-outliner__show', reference: ' ' })
     expect(empty.deny).toContain('Give a Work ID')
+  })
+
+  test('a workboard tool runs the installed CLI in the workspace as this Claude session', async ($, on) => {
+    const session = sessionIn(on, `${WORKSPACE}/projects/mod`, run =>
+      run.argv.includes('work') ? { exitCode: 0, stdout: '{"workId":"PIE-008","workStage":"review","revision":4}\n', stderr: '' } : succeeding(run),
+    )
+    on('tool.register', ($, e) => ({ value: { tool: `mcp__pi-outliner__${e.name}` } }))
+    await session.begin(() => $.session.start({ ...START, cwd: `${WORKSPACE}/projects/mod` }))
+
+    const staged = await $.tool.call({ tool: 'mcp__pi-outliner__work_stage', item: 'PIE-8', stage: 'review', expectedRevision: 3 })
+    expect(staged).toMatchObject({ result: '{"workId":"PIE-008","workStage":"review","revision":4}' })
+    const run = session.runs.find(candidate => candidate.argv.includes('work'))!
+    expect(run.argv).toEqual([
+      '/bin/sh', '/opt/outliner/scripts/run-bun.sh', '/opt/outliner/src/cli.ts',
+      'work', 'stage', 'PIE-8', 'review', '--expected', '3',
+      '--author', 'agent', '--actor', 'claude-code', '--session', 'session-1',
+    ])
+    expect(run.init?.cwd).toBe(WORKSPACE)
+    expect(run.init?.env).toEqual({ OUTLINER_WORKSPACE_ROOT: WORKSPACE })
+
+    await $.tool.call({ tool: 'mcp__pi-outliner__work_complete', item: 'PIE-8', delivery: 'd-1', proof: 'Proof\n\nChecked.' })
+    const completed = session.runs.findLast(candidate => candidate.argv.includes('complete'))!
+    expect(completed.argv.slice(3, 9)).toEqual(['work', 'complete', 'PIE-8', '--delivery', 'd-1', '--stdin'])
+    expect(completed.init?.stdin).toBe('Proof\n\nChecked.')
+
+    await $.tool.call({ tool: 'mcp__pi-outliner__note_section', block: 'PIE-8', heading: '## Now', body: 'Updated.' })
+    const section = session.runs.findLast(candidate => candidate.argv.includes('section'))!
+    expect(section.argv.slice(3, 8)).toEqual(['note', 'section', 'PIE-8', '## Now', '--stdin'])
+    expect(section.init?.stdin).toBe('Updated.')
+  })
+
+  test('a refused workboard change is denied with the reason, and unusable input never runs', async ($, on) => {
+    const session = sessionIn(on, WORKSPACE, run =>
+      run.argv.includes('work')
+        ? { exitCode: 1, stdout: '', stderr: 'error: Unknown work stage "shipping"; use one of queued, doing\n' }
+        : succeeding(run),
+    )
+    on('tool.register', ($, e) => ({ value: { tool: `mcp__pi-outliner__${e.name}` } }))
+    await session.begin(() => $.session.start(START))
+
+    const refused = await $.tool.call({ tool: 'mcp__pi-outliner__work_stage', item: 'PIE-8', stage: 'shipping' })
+    expect(refused.deny).toBe('Unknown work stage "shipping"; use one of queued, doing')
+
+    const runs = session.runs.length
+    const both = await $.tool.call({ tool: 'mcp__pi-outliner__work_complete', item: 'PIE-8', proof: 'x', proofBlock: 'y' })
+    expect(both.deny).toContain('either proof text or an existing proofBlock')
+    expect(session.runs.length).toBe(runs)
+  })
+
+  test('outside the configured workspaces, workboard tools change nothing', async ($, on) => {
+    const session = sessionIn(on, '/elsewhere', succeeding)
+    on('tool.register', ($, e) => ({ value: { tool: `mcp__pi-outliner__${e.name}` } }))
+    await session.begin(() => $.session.start({ ...START, cwd: '/elsewhere' }))
+    const denied = await $.tool.call({ tool: 'mcp__pi-outliner__work_stage', item: 'PIE-8', stage: 'doing' })
+    expect(denied.deny).toContain('not in a configured Outliner workspace')
+    expect(session.runs).toEqual([])
   })
 
   test('outside the configured workspaces, replies are not linked', async ($, on) => {

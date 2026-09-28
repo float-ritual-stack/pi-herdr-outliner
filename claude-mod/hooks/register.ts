@@ -17,6 +17,7 @@ import {
   outlinerUriOf,
   scratchPaneOf,
 } from './references'
+import { WORK_TOOLS } from './work-tools'
 
 /**
  * What drawing a reply needs, read once per session: the Outliner workspace the
@@ -73,8 +74,26 @@ export function register(on: On, options: PluginOptions): void {
         additionalProperties: false,
       },
     })
+    for (const tool of WORK_TOOLS) {
+      await $.tool.register({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema })
+    }
     return result
   })
+
+  for (const tool of WORK_TOOLS) {
+    on('tool.call', { tool: `mcp__pi-outliner__${tool.name}` }, async ($, e) => {
+      const command = tool.command(e as Record<string, unknown>)
+      if (typeof command === 'string') return { deny: command }
+      if (!references) await loadReferences($, option)
+      const workspace = references?.workspace
+      if (!workspace) return { deny: 'This session is not in a configured Outliner workspace.' }
+      try {
+        return { result: await runWorkCommand($, workspace, command) }
+      } catch (error) {
+        return { deny: error instanceof Error ? error.message : String(error) }
+      }
+    })
+  }
 
   on('tool.call', { tool: 'mcp__pi-outliner__show' }, async ($, e) => {
     // A plugin tool's arguments arrive flat on the event, beside `tool`.
@@ -186,6 +205,33 @@ async function deliver($: EngineInterface, message: MentionMessage): Promise<voi
     const reason = failureReasonOf(ingested.stderr)
     throw Error(`mentions ingest failed${reason ? `: ${reason}` : ''}`)
   }
+}
+
+/**
+ * Runs one `work` / `note` command through the installed CLI in the session's
+ * workspace, as Claude (agent author, this session as provenance). Resolves to
+ * the command's JSON; a refusal throws with the CLI's reason.
+ */
+async function runWorkCommand(
+  $: EngineInterface,
+  workspace: string,
+  command: { args: string[]; stdin?: string },
+): Promise<string> {
+  const root = await outlinerRootOf($)
+  if (!root) throw Error('the Outliner plugin is disabled')
+  const sessionId = await $.session.id()
+  const ran = await $.process.run(
+    ['/bin/sh', `${root}/scripts/run-bun.sh`, `${root}/src/cli.ts`, ...command.args,
+      '--author', 'agent', '--actor', 'claude-code', '--session', sessionId],
+    {
+      cwd: workspace,
+      env: { OUTLINER_WORKSPACE_ROOT: workspace },
+      ...(command.stdin === undefined ? {} : { stdin: command.stdin }),
+      timeoutMs: 60_000,
+    },
+  )
+  if (ran.exitCode !== 0) throw Error(failureReasonOf(ran.stderr) || `${command.args.slice(0, 2).join(' ')} failed`)
+  return ran.stdout.trim()
 }
 
 /**

@@ -1,4 +1,4 @@
-# Claude Code mod: Recent Mentions
+# Claude Code mod: Recent Mentions and workboard tools
 
 A [Claude Mod](https://github.com/anthropics/claude-code/issues/91870) (a plugin
 with a function-hooks module) that forwards each completed Claude Code answer to
@@ -38,6 +38,17 @@ ID, `[[page]]`, `((uuid))` or `pi-outliner://` URI).
   hyperlink support (a Herdr pane), it prints each URL beside its text; set
   `FORCE_HYPERLINK=1` in the settings `env` block to draw the text alone.
 - A target the Outliner cannot resolve is a toast, never a new page.
+
+## Workboard tools
+
+In the same workspaces Claude also gets `work_create`, `work_stage`, `work_set`,
+`work_deliver`, `work_complete`, `work_body` and `note_section`. Each one runs the
+installed CLI's `work` / `note` command (see the
+[roadmap operations reference](../pi-extension/skills/outliner-workflow/references/roadmap-items.md#agent-commands))
+in the session's workspace, as an agent write attributed to `claude-code` and
+this session. Items are named by Work ID or block UUID, never by title. The tool
+result is the command's JSON; a refusal (stale revision, unknown stage, unmerged
+delivery…) comes back as the CLI's reason.
 
 ## Use
 

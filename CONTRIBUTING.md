@@ -59,6 +59,10 @@ source evidence or distinguish authored glyphs from controls.
 - `src/detail-controller.ts` plus `src/detail-*` own Detail behavior and presentation.
 - `src/virtual-branches.ts` owns projection semantics.
 - `pi-extension/index.ts` is a host adapter, not a second implementation of the service.
+- `src/work-tools.ts` owns agent workboard operations (create, stage/set, PR delivery,
+  completion with proof, note sections, item bodies) over the existing RPCs. The CLI
+  `work`/`note` commands, the Claude mod tools and Pi's task completion call it;
+  add workboard operations there rather than in a host adapter or a one-off script.
 
 Reuse these seams. Do not add a second property parser, query path, authoritative block cache, or independent persistence layer. A bounded disposable Detail preview cache may retain service-owned revisions but never authorizes writes.
 

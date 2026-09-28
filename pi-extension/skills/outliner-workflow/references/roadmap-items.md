@@ -5,6 +5,32 @@ Read the live **How this workboard works** block
 through the configured service with `get`; do not change Tree focus to read it.
 This reference documents the metadata and tool contract.
 
+## Agent commands
+
+Agents without Pi's session tools (Claude, Codex, scripts) use the CLI, which
+shares one implementation (`src/work-tools.ts`) with Pi's task completion. Every
+command names its item explicitly by Work ID or block UUID, checks the revision
+it read, reads the result back and prints JSON with the Work ID, `((block ref))`
+and new revision. Refusals print one `error: …` line and exit 1.
+
+```sh
+bun src/cli.ts work create --title … --project … --arc … --track … --priority … [--stage queued] [--stdin|--body-file f]
+bun src/cli.ts work stage PIE-123 doing [--expected N]
+bun src/cli.ts work set PIE-123 priority high [--expected N]
+bun src/cli.ts work deliver PIE-123 --repo owner/name --pr 42 [--base main] [--branch feature/x]
+bun src/cli.ts work complete PIE-123 [--delivery <uuid>] --proof-file proof.md|--stdin|--proof-block <uuid>
+bun src/cli.ts work body PIE-123 --file body.md|--stdin [--expected N]
+bun src/cli.ts note section <uuid> "Heading" --file section.md|--stdin [--expected N]
+```
+
+Add `--author agent --actor <id>` for agent writes. `work stage … done` is
+refused: Done goes through `work complete`, which needs the named delivery merged
+(or no incomplete delivery) and creates or links the proof. `work deliver` reads
+the PR through `gh` and refuses a PR whose branches differ from the delivery's.
+`note section` replaces what Detail folds under the heading, up to the next
+heading of its level (a trailing callout included) and returns it as `previous`.
+The Claude mod exposes the same commands as `work_*` and `note_section` tools.
+
 ## Canonical records
 
 A roadmap item is one block beneath its project's active `type=work-queue`.

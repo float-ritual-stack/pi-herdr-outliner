@@ -1300,6 +1300,17 @@ test("drives an explicit task through context, focus, durable proof, and complet
     expect(create.parentId).toBe(task.id);
     expect(create.text).toContain("[type::implementation-proof]");
     expect(create.text).toContain(`[source-block::${task.id}]`);
+    // A proof of several paragraphs is still typed as a proof, not merely mentions one.
+    await tools.get("outliner_publish")!.execute("publish-long-proof", {
+      text: "PIE-144 journey\n\nOpened the item.\n\n- created\n- delivered",
+      type: "implementation-proof",
+    }, undefined, undefined, context);
+    const longCreate = requests.filter(
+      (request): request is Extract<RequestInput, { action: "create" }> => request.action === "create",
+    ).at(-1)!;
+    expect(parsePropertyRecords(longCreate.text).filter(record => record.scope === "block").map(record => record.key))
+      .toEqual(["type", "source-block"]);
+    expect(longCreate.text).toContain("- delivered");
 
     pullRequestState = "merged";
     await tools.get("outliner_delivery")!.execute("sync-merge", { operation: "sync" }, undefined, undefined, context);

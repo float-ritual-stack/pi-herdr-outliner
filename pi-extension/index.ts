@@ -46,8 +46,9 @@ import {
 } from "./delivery-lifecycle";
 import { inspectWorkEnvironment, type ExtensionExec } from "./work-environment";
 import { resolveClientPaths } from "../src/paths"
+import { completeWorkItem, propertyTransition, typedArtifactText } from "../src/work-tools";
 import { currentPaneIdentity } from "../src/pane-control";
-import { getProperty, matchesFilters, parsePropertyRecords } from "../src/properties";
+import { getProperty, matchesFilters } from "../src/properties";
 import { blockDisplayTitle } from "../src/references";
 import {
   containsWorkIdPlaceholder,
@@ -90,7 +91,6 @@ import {
   type MutationProvenance,
   type PropertyCatalogItem,
   type PageAddressResolution,
-  type PropertyPatchOperation,
   type SelectionContext,
   type ResourceDescription,
   type RoadmapItemCreateReceipt,
@@ -1034,14 +1034,6 @@ function reportHerdrMetadataFailure(error: unknown): void {
   );
 }
 
-type DurableArtifactType =
-  | "field-note"
-  | "finding"
-  | "decision"
-  | "implementation-proof"
-  | "synthesis"
-  | "roadmap-review"
-  | "progress";
 
 interface ActiveTaskEntryData {
   version: 1;
@@ -1145,24 +1137,6 @@ function boundAgentContext(content: string): string {
   if (content.length <= MAX_SELECTION_CONTEXT_CHARS) return content;
   const suffix = "\n… context truncated; use outliner tools for full text.";
   return content.slice(0, MAX_SELECTION_CONTEXT_CHARS - suffix.length) + suffix;
-}
-
-function propertyTransition(
-  block: Block,
-  key: string,
-  value: string,
-): PropertyPatchOperation {
-  let ordinal: number | undefined;
-  for (const property of parsePropertyRecords(block.text)) {
-    if (property.scope !== "block" || property.key !== key) continue;
-    if (ordinal !== undefined) {
-      throw new Error(`Roadmap item has duplicate [${key}::…] properties: ${block.id}`);
-    }
-    ordinal = property.ordinal;
-  }
-  return ordinal === undefined
-    ? { op: "append", key, value }
-    : { op: "replace", ordinal, value };
 }
 
 function formatContext(
@@ -1288,18 +1262,6 @@ async function focusOutlinerAddress(
     limit,
     targetClientId,
   );
-}
-
-function durableArtifactText(
-  text: string,
-  type: DurableArtifactType,
-  parentId: string | null,
-): string {
-  const body = text.trim();
-  if (!body) throw new Error("Durable artifact text cannot be empty");
-  const metadata = [`[type::${type}]`];
-  if (parentId) metadata.push(`[source-block::${parentId}]`);
-  return `${body}\n${metadata.join(" ")}`;
 }
 
 async function reportHerdrTask(
@@ -1466,27 +1428,6 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
 
   async function taskDeliveryChildren(task: Block): Promise<Block[]> {
     return client.request<Block[]>({ action: "children", parentId: task.id });
-  }
-
-  async function patchBlockProperties(
-    block: Block,
-    values: Readonly<Record<string, string>>,
-    context: ExtensionContext,
-    taskId: string,
-  ): Promise<Block> {
-    const operations = Object.entries(values).flatMap(([key, value]) =>
-      getProperty(block.properties, key) === value
-        ? []
-        : [propertyTransition(block, key, value)]
-    );
-    if (operations.length === 0) return block;
-    return client.request<Block>({
-      action: "properties.patch",
-      blockId: block.id,
-      expectedRevision: block.revision,
-      operations,
-      mutation: agentMutation(actorId, context, taskId),
-    });
   }
 
   async function ensureTaskDelivery(
@@ -1688,47 +1629,12 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     }
     const synchronized = await syncDelivery(activeTask, context);
     const task = synchronized.task;
-    if (
-      synchronized.delivery &&
-      (
-        !["validate", "complete"].includes(synchronized.delivery.stage) ||
-        !synchronized.delivery.mergeCommit
-      )
-    ) {
-      throw new Error(
-        `Delivery ${synchronized.delivery.key} must have a merged PR and reach Validate before completion`,
-      );
-    }
-    const proof = await client.request<Block>({ action: "get", blockId: proofBlockId });
-    if (proof.effectiveDeletedRootId) throw new Error(`Proof block is in Trash: ${proof.id}`);
-    const linkedProof = proof.parentId === task.id ||
-      proof.properties.some((property) =>
-        property.key === "source-block" && property.value === task.id
-      );
-    if (!linkedProof) {
-      throw new Error(`Proof block must be a child of or reference the active task: ${task.id}`);
-    }
-    const operations: PropertyPatchOperation[] = [
-      propertyTransition(task, "work-stage", "done"),
-    ];
-    if (!task.properties.some((property) => property.key === "proof" && property.value === proof.id)) {
-      operations.push({ op: "append", key: "proof", value: proof.id });
-    }
-    if (synchronized.delivery?.stage === "validate") {
-      await patchBlockProperties(
-        synchronized.delivery.block,
-        { "delivery-stage": "complete" },
-        context,
-        "outliner-task:complete",
-      );
-    }
-    const updated = await client.request<Block>({
-      action: "properties.patch",
-      blockId: task.id,
-      expectedRevision: task.revision,
-      operations,
-      mutation: agentMutation(actorId, context, "outliner-task:complete"),
-    });
+    const completed = await completeWorkItem(client, {
+      task,
+      ...(synchronized.delivery ? { delivery: synchronized.delivery.block } : {}),
+      proof: { blockId: proofBlockId },
+    }, { ...agentMutation(actorId, context, "outliner-task:complete"), actorId });
+    const updated = await client.request<Block>({ action: "get", blockId: completed.blockId });
     persistActiveTask(null);
     const presenceReported = await presentTask(context, null, "clear");
     return {
@@ -1736,7 +1642,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
       workId: requireRoadmapTask(updated),
       stage: getProperty(updated.properties, "work-stage"),
       workBatchId: getProperty(updated.properties, "work-batch"),
-      proofBlockId: proof.id,
+      proofBlockId: completed.proof.blockId,
       presenceReported,
     };
   }
@@ -2387,7 +2293,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
         : activeTaskId ?? await selectedBlockId() ?? null;
       const block = await client.request<Block>({
         action: "create",
-        text: durableArtifactText(params.text, params.type, parentId),
+        text: typedArtifactText(params.text, params.type, parentId),
         parentId,
         author: "agent",
         provenance: toolProvenance(actorId, context, toolCallId),

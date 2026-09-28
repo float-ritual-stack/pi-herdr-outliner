@@ -1,7 +1,7 @@
 import { createBlockComment } from "./block-comments";
 import { readSavedView } from "./saved-view-read";
 import {inspectWorkspaceConnection} from './workspace-diagnostics';
-import { parseArgs } from "node:util";
+import { parseArgs, type ParseArgsOptionsConfig } from "node:util";
 import { normalizePropertyQueryScope, parsePropertyFilterClause } from "./block-query";
 import {
   focusBlockByQuery,
@@ -12,7 +12,18 @@ import { requireClientIdForRole } from "./client-target";
 import { resolveClientPaths } from "./paths";
 import { navigateOutlinerLink, parseOutlinerLinkUri, resolveOutlinerLinkTarget } from "./outliner-links";
 import { blockDisplayTitle } from "./references";
-import type { BlockReadField, BlockSearchQuery, CaptureReceipt } from "./types";
+import type { BlockReadField, BlockSearchQuery, CaptureReceipt, RoadmapItemCreateInput } from "./types";
+import {
+  completeWorkItem,
+  createWorkItem,
+  deliverPullRequest,
+  readPullRequestFacts,
+  replaceItemBody,
+  replaceNoteSection,
+  setWorkProperty,
+  setWorkStage,
+  type WorkActor,
+} from "./work-tools";
 
 if(process.argv[2]==='doctor'){
  const report=await inspectWorkspaceConnection();
@@ -38,6 +49,136 @@ function parseLimit(value: string | undefined, fallback: number): number {
 /** Comma-separated block fields; the service validates the names. */
 function parseFields(value: string): BlockReadField[] {
   return value.split(",").map((field) => field.trim()).filter(Boolean) as BlockReadField[];
+}
+
+/** Text from exactly one of `--<file>` or `--stdin`. */
+async function textInput(values: Record<string, unknown>, fileOption: string, label: string, required = true): Promise<string | undefined> {
+  const file = values[fileOption] as string | undefined;
+  if (file !== undefined && values.stdin) throw new Error(`${label}: use --${fileOption} or --stdin, not both`);
+  if (file !== undefined) return Bun.file(file).text();
+  if (values.stdin) return Bun.stdin.text();
+  if (required) throw new Error(`${label} requires --${fileOption} or --stdin`);
+  return undefined;
+}
+
+function workActor(values: Record<string, unknown>): WorkActor {
+  const author = (values.author as string | undefined) ?? "user";
+  if (author !== "user" && author !== "agent") throw new Error("--author must be user or agent");
+  const actorId = (values.actor as string | undefined) ?? "cli";
+  if (!actorId.trim()) throw new Error("--actor requires an actor ID");
+  const sessionId = values.session as string | undefined;
+  return { author, actorId, ...(sessionId ? { sessionId } : {}) };
+}
+
+const ACTOR_OPTIONS = {
+  author: { type: "string" }, actor: { type: "string" }, session: { type: "string" }, expected: { type: "string" },
+} as const;
+
+/**
+ * `work …` / `note …`: agent workboard operations over src/work-tools.ts.
+ * Refusals print one `error: …` line and exit 1.
+ */
+async function runWorkCommand(group: "work" | "note", args: string[]): Promise<unknown> {
+  try {
+    const [operation, ...operands] = args;
+    const parse = (options: ParseArgsOptionsConfig) => parseArgs({
+      args: operands, allowPositionals: true, strict: true, options: { ...ACTOR_OPTIONS, ...options },
+    }) as { values: Record<string, string | boolean | string[] | undefined>; positionals: string[] };
+    const expected = (value: unknown) => value === undefined ? {} : { expectedRevision: parseRevision(value as string) };
+    await client.requireCompatibleService();
+    if (group === "note") {
+      if (operation !== "section") throw new Error("note expects: section <block> <heading> --file <path>|--stdin");
+      const { values, positionals } = parse({ file: { type: "string" }, stdin: { type: "boolean" } });
+      if (positionals.length !== 2) throw new Error("note section requires a block and a heading");
+      const body = (await textInput(values, "file", "note section"))!;
+      return await replaceNoteSection(client, positionals[0]!, positionals[1]!, body, workActor(values), expected(values.expected));
+    }
+    switch (operation) {
+      case "create": {
+        const { values, positionals } = parse({
+          title: { type: "string" }, project: { type: "string" }, arc: { type: "string" },
+          track: { type: "string", multiple: true }, priority: { type: "string" }, stage: { type: "string" },
+          batch: { type: "string" }, "depends-on": { type: "string", multiple: true },
+          "related-to": { type: "string", multiple: true }, source: { type: "string" },
+          "body-file": { type: "string" }, stdin: { type: "boolean" },
+        });
+        if (positionals.length) throw new Error("work create takes no positional arguments");
+        for (const name of ["title", "project", "arc", "track", "priority"] as const) {
+          if (values[name] === undefined) throw new Error(`work create requires --${name}`);
+        }
+        const body = await textInput(values, "body-file", "work create", false);
+        return await createWorkItem(client, {
+          title: values.title as string,
+          project: values.project as string,
+          arc: values.arc as string,
+          tracks: values.track as string[],
+          priority: values.priority as RoadmapItemCreateInput["priority"],
+          ...(values.stage === undefined ? {} : { workStage: values.stage as RoadmapItemCreateInput["workStage"] }),
+          ...(values.batch === undefined ? {} : { workBatchId: values.batch as string }),
+          ...(values["depends-on"] === undefined ? {} : { dependsOn: values["depends-on"] as string[] }),
+          ...(values["related-to"] === undefined ? {} : { relatedTo: values["related-to"] as string[] }),
+          ...(values.source === undefined ? {} : { sourceBlockId: values.source as string }),
+          ...(body === undefined ? {} : { body }),
+        }, workActor(values));
+      }
+      case "stage": {
+        const { values, positionals } = parse({});
+        if (positionals.length !== 2) throw new Error("work stage requires an item and a stage");
+        return await setWorkStage(client, positionals[0]!, positionals[1]!, workActor(values), expected(values.expected));
+      }
+      case "set": {
+        const { values, positionals } = parse({});
+        if (positionals.length !== 3) throw new Error("work set requires an item, a key and a value");
+        return await setWorkProperty(client, positionals[0]!, positionals[1]!, positionals[2]!, workActor(values), expected(values.expected));
+      }
+      case "deliver": {
+        const { values, positionals } = parse({
+          repo: { type: "string" }, pr: { type: "string" }, base: { type: "string" },
+          branch: { type: "string" }, key: { type: "string" },
+        });
+        if (positionals.length !== 1) throw new Error("work deliver requires one item");
+        if (!values.repo || !values.pr) throw new Error("work deliver requires --repo owner/name and --pr N");
+        const number = Number(values.pr);
+        if (!Number.isSafeInteger(number) || number < 1) throw new Error("--pr must be a pull request number");
+        const pullRequest = await readPullRequestFacts(values.repo as string, number);
+        return await deliverPullRequest(client, {
+          address: positionals[0]!,
+          repository: values.repo as string,
+          pullRequest,
+          ...(values.base === undefined ? {} : { baseBranch: values.base as string }),
+          ...(values.branch === undefined ? {} : { workBranch: values.branch as string }),
+          ...(values.key === undefined ? {} : { deliveryKey: values.key as string }),
+        }, workActor(values));
+      }
+      case "complete": {
+        const { values, positionals } = parse({
+          delivery: { type: "string" },
+          "proof-file": { type: "string" }, "proof-block": { type: "string" }, stdin: { type: "boolean" },
+        });
+        if (positionals.length !== 1) throw new Error("work complete requires one item");
+        const proofText = await textInput(values, "proof-file", "work complete", false);
+        if ((proofText === undefined) === (values["proof-block"] === undefined)) {
+          throw new Error("work complete requires proof: --proof-file, --stdin, or an existing --proof-block");
+        }
+        return await completeWorkItem(client, {
+          task: positionals[0]!,
+          ...(values.delivery === undefined ? {} : { delivery: values.delivery as string }),
+          proof: proofText === undefined ? { blockId: values["proof-block"] as string } : { text: proofText },
+        }, workActor(values));
+      }
+      case "body": {
+        const { values, positionals } = parse({ file: { type: "string" }, stdin: { type: "boolean" } });
+        if (positionals.length !== 1) throw new Error("work body requires one item");
+        const body = (await textInput(values, "file", "work body"))!;
+        return await replaceItemBody(client, positionals[0]!, body, workActor(values), expected(values.expected));
+      }
+      default:
+        throw new Error("work expects: create, stage, set, deliver, complete, or body");
+    }
+  } catch (error) {
+    console.error(`error: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
 }
 
 const [command = "list", ...rest] = process.argv.slice(2);
@@ -378,6 +519,11 @@ switch (command) {
       sourceClientId, sourceRegion, detailClientId, treeClientId,
       ...(values["no-focus"] ? { focus: false } : {}),
     });
+    break;
+  }
+  case "work":
+  case "note": {
+    directResult = await runWorkCommand(command, rest);
     break;
   }
   case "work-id-status":
