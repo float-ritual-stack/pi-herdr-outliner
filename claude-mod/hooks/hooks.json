@@ -1,4 +1,4 @@
 {
-  "description": "Recent Mentions: forwards each completed main-loop answer in a configured Outliner workspace to the Outliner's mentions.ingest contract",
+  "description": "Recent Mentions (forwards each completed main-loop answer in a configured Outliner workspace to mentions.ingest), clickable references, the show tool and workboard tools over the installed Outliner CLI",
   "modules": ["./register.ts"]
 }

@@ -4,6 +4,17 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+- Agent workboard commands: `work create`, `work stage`, `work set`,
+  `work deliver`, `work complete`, `work body` and `note section` in the CLI,
+  and matching `work_*` / `note_section` tools in the Claude mod. Items are
+  named by Work ID or block UUID; writes are checked against the revision read
+  and read back; results name the Work ID, block reference and new revision.
+  `work deliver` reads the PR through `gh` and refuses one whose branches differ
+  from the delivery's; `work complete` needs the named delivery merged and
+  records the proof. Pi's task completion uses the same code, and a
+  multi-paragraph `outliner_publish` artifact is now typed as block metadata
+  rather than as an inline property. PIE-438.
+
 - Literal regions: text between `<!-- literal -->` and `<!-- /literal -->`
   lines shows outline syntax as plain text. Bracket, bare `key::` and hashtag
   properties inside are not stored, queried, indexed or previewed; links still

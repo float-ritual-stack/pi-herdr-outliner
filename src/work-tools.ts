@@ -53,6 +53,8 @@ export class WorkToolRefusal extends Error {
 const BLOCK_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 /** Identity is assigned once; changing it would orphan links, deliveries and reservations. */
 const IMMUTABLE_KEYS = new Set(["type", "work-id"]);
+/** Roadmap list relationships: setting one value would drop the others. */
+const LIST_KEYS = new Set(["track", "depends-on", "related-to", "proof"]);
 
 function mutationOf(actor: WorkActor): MutationProvenance {
   return {
@@ -225,6 +227,7 @@ export async function setWorkProperty(
 ): Promise<WorkSetResult> {
   const { key, value } = validateProperty(normalizePropertyKey(rawKey), rawValue);
   if (IMMUTABLE_KEYS.has(key)) throw new WorkToolRefusal(`[${key}::…] is the item's identity and cannot be changed`);
+  if (LIST_KEYS.has(key)) throw new WorkToolRefusal(`[${key}::…] is a list on roadmap items; edit it with properties.patch, not work set`);
   if (key === "status") throw new WorkToolRefusal("Roadmap items have no status; set work-stage instead");
   let stage = value;
   if (key === "work-stage") {
