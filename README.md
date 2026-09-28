@@ -1156,6 +1156,31 @@ Investigate page navigation [type::roadmap-item] [work-stage::queued]
 
 Every deliberate non-literal property is indexed in `block_properties`; canonical `Block.text` remains the source of truth. The first contiguous property-only run after an optional subject line is block metadata, as is the trailing bracket-property run on the subject. Bare `key:: value` properties later in the body have `line` scope; later bracket tokens have `inline` scope. Literal examples inside inline/fenced code and escaped bracket syntax are not indexed.
 
+To show outline syntax as ordinary text without backticking each token, wrap it
+in a literal region. Each marker is an HTML comment alone on its line (up to
+three leading spaces; spacing inside the comment and letter case are ignored):
+
+```text
+Property syntax brief [type::note]
+
+<!-- literal -->
+Put [stage::queued] on the subject line, or write stage:: doing on its own line.
+Tag it #example.
+<!-- /literal -->
+```
+
+Inside the region, bracket `[key::value]`, bare `key:: value` and `#hashtag`
+properties are not parsed, so they are not stored, queried, indexed or reported by
+`properties.preview`. Everything else still works: formatting, `[[page]]`,
+`((block))`, Work-ID and ticket links resolve and count as backlinks. Markers
+inside fenced code are code, a fence inside a region keeps its contents
+(including any marker lines) as code, regions do not nest, and the first closing
+marker ends the region. An opening marker without a closing line protects
+nothing, and Detail shows a warning. Detail hides matched marker lines (each
+reads as a paragraph break, as GitHub renders an HTML comment); Markdown
+renderers hide them too. Property parser version 4 introduced regions; startup
+re-indexes existing notes without changing their text.
+
 Clients that edit text should ask the service how a draft will parse rather than
 copying these rules. The read-only `properties.preview` request takes `text` and
 returns the block `properties` a save would index, plus every `tokens` record with

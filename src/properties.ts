@@ -12,9 +12,9 @@ const PROPERTY_PATTERN = /\[([A-Za-z][A-Za-z0-9_.-]*)::([^\]\r\n]+)\]/g;
 const PROPERTY_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]*$/;
 const HASHTAG_VALUE_PATTERN = /[\p{L}\p{N}_][\p{L}\p{M}\p{N}_-]*(?:\/[\p{L}\p{N}_][\p{L}\p{M}\p{N}_-]*)*/u;
 
-export const PROPERTY_PARSER_VERSION = 3;
+export const PROPERTY_PARSER_VERSION = 4;
 
-interface SourceRange {
+export interface SourceRange {
   start: number;
   end: number;
 }
@@ -103,7 +103,7 @@ function findEqualBacktickRun(text: string, start: number, end: number, length: 
   return -1;
 }
 
-function inlineLiteralRanges(text: string, lines: SourceLine[], fences: SourceRange[]): SourceRange[] {
+function inlineLiteralRanges(text: string, lines: SourceLine[], blockRanges: SourceRange[]): SourceRange[] {
   const ranges: SourceRange[] = [];
   let lineIndex = 0;
 
@@ -130,19 +130,84 @@ function inlineLiteralRanges(text: string, lines: SourceLine[], fences: SourceRa
   }
 
   let regionStart = 0;
-  for (const fence of fences) {
-    scanRegion(regionStart, fence.start);
-    regionStart = fence.end;
+  for (const range of blockRanges) {
+    scanRegion(regionStart, range.start);
+    regionStart = range.end;
   }
   scanRegion(regionStart, text.length);
   return ranges;
 }
 
+const LITERAL_REGION_OPEN = /^[ \t]{0,3}<!--[ \t]*literal[ \t]*-->[ \t]*$/i;
+const LITERAL_REGION_CLOSE = /^[ \t]{0,3}<!--[ \t]*\/literal[ \t]*-->[ \t]*$/i;
+
+/** A closed `<!-- literal -->` ... `<!-- /literal -->` region, marker lines included. */
+export interface LiteralRegion {
+  start: number;
+  end: number;
+  /** The opening marker line, excluding its line break. */
+  opener: SourceRange;
+  /** The closing marker line, excluding its line break. */
+  closer: SourceRange;
+}
+
+export interface LiteralRegionScan {
+  regions: LiteralRegion[];
+  /** An opening marker without a closer. It protects nothing; clients warn. */
+  unterminated: SourceRange | null;
+}
+
+function literalRegionsFromLines(text: string, lines: SourceLine[], fences: SourceRange[]): LiteralRegionScan {
+  // Markers are recognised only outside fenced code, so a fence can show the
+  // marker syntax and a fence inside a region hides a closer it contains.
+  const outsideFence = (line: SourceLine) => !offsetInRanges(line.start, fences);
+  const matches = (line: SourceLine, pattern: RegExp) =>
+    outsideFence(line) && pattern.test(text.slice(line.start, line.contentEnd));
+  const regions: LiteralRegion[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const opening = lines[index]!;
+    if (!matches(opening, LITERAL_REGION_OPEN)) continue;
+    let closing = index + 1;
+    while (closing < lines.length && !matches(lines[closing]!, LITERAL_REGION_CLOSE)) closing += 1;
+    if (closing >= lines.length) {
+      return { regions, unterminated: { start: opening.start, end: opening.contentEnd } };
+    }
+    const closer = lines[closing]!;
+    regions.push({
+      start: opening.start,
+      end: closer.end,
+      opener: { start: opening.start, end: opening.contentEnd },
+      closer: { start: closer.start, end: closer.contentEnd },
+    });
+    index = closing;
+  }
+  return { regions, unterminated: null };
+}
+
+/** Literal regions as the save-time parser sees them, for renderers that hide markers. */
+export function scanLiteralRegions(text: string): LiteralRegionScan {
+  const lines = sourceLines(text);
+  return literalRegionsFromLines(text, lines, fencedRanges(text, lines));
+}
+
+function mergeRanges(ranges: SourceRange[]): SourceRange[] {
+  const merged: SourceRange[] = [];
+  for (const range of [...ranges].sort((left, right) => left.start - right.start)) {
+    const last = merged.at(-1);
+    if (last && range.start <= last.end) last.end = Math.max(last.end, range.end);
+    else merged.push({ ...range });
+  }
+  return merged;
+}
+
 export function scanPropertyLiteralRanges(text: string): SourceRange[] {
   const lines = sourceLines(text);
   const fences = fencedRanges(text, lines);
-  const inlineLiterals = inlineLiteralRanges(text, lines, fences);
-  return [...fences, ...inlineLiterals].sort((left, right) => left.start - right.start);
+  const { regions } = literalRegionsFromLines(text, lines, fences);
+  // Fences and regions are block-level; inline code never pairs across them.
+  const blockRanges = mergeRanges([...fences, ...regions]);
+  const inlineLiterals = inlineLiteralRanges(text, lines, blockRanges);
+  return mergeRanges([...blockRanges, ...inlineLiterals]);
 }
 
 function containsNonWhitespace(text: string, start: number, end: number): boolean {
