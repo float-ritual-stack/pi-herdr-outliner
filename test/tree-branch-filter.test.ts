@@ -146,3 +146,20 @@ test('a removed filtered target explains the focus change and explicit workspace
  expect(c.view().status).toContain('DEM-370');expect(c.view().status).toContain('no longer');
  await c.handleAction('tree.root.workspace');expect(c.view().branchFilterCue).toBeUndefined();expect(c.view().rows.some(r=>r.kind==='physical'&&r.canonicalId===f.other.id)).toBe(true);
 });
+
+test('Advanced property filter evaluates OR, NOT, groups and ranges through the service while clause lists keep their meaning',async()=>{
+ const f=await fixture();
+ const open=f.store.create('Alpha [status::open]'),review=f.store.create('Beta [status::review]'),done=f.store.create('Gamma [status::done]');
+ const c=await f.open('expression');
+ const own=new Set([open.id,review.id,done.id]);
+ const matched=()=>new Set(c.view().rows.filter(isBlockTreeRow).map(r=>r.canonicalId).filter(id=>own.has(id)));
+ const submit=async(query:string)=>{await c.handleAction('tree.filter.properties');for(const _ of c.view().activeFilter)await c.handleKeypress('',{name:'backspace'},'pass');await c.handlePaste(query);await c.handleKeypress('',{name:'return'},'pass');};
+ await submit('status=open');expect(matched()).toEqual(new Set([open.id]));
+ await submit('status=open OR status=review');expect(matched()).toEqual(new Set([open.id,review.id]));
+ await submit('status NOT status=open');expect(matched()).toEqual(new Set([review.id,done.id]));
+ await submit('(status=done OR status=open) created>=-1d');expect(matched()).toEqual(new Set([open.id,done.id]));
+ await submit('status=open OR');
+ expect(c.view().mode).toBe('filter');expect(c.view().status).toMatch(/^Invalid filter: .* at character \d+$/);
+ await c.handleKeypress('',{name:'escape'},'pass');
+ expect(c.view().activeFilter).toBe('(status=done OR status=open) created>=-1d');expect(matched()).toEqual(new Set([open.id,done.id]));
+});

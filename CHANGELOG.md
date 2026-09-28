@@ -4,6 +4,13 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+- Tree's **Advanced property filter** accepts the query grammar: `OR`, `NOT`,
+  parentheses and `created`/`updated` ranges, for example
+  `status=open OR status=review` or `NOT status=done updated >= -7d`. Clause
+  lists are sent exactly as before and keep their meaning, including
+  `deleted=true`. Invalid queries show the character position and keep the
+  previous filter. Uses the existing `query.expression` capability. PIE-192.
+
 - Content events now say what changed: block, parent (and previous parent for
   moves), revision, change kind and declared actor. A client that reconnects
   can ask `changes.since` for exactly what it missed, in order, or get an

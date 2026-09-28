@@ -21,7 +21,7 @@ import { InboxController } from "./inbox-controller";
 import { inboxStatusCue } from "./inbox-renderer";
 import {
   filterCompletionTargetAtCursor,
-  parsePropertyFilterExpression,
+  parseSearchExpression,
   serializePropertyFilterValue,
 } from "./block-query";
 import { referencedFilePreview, type FileContents } from "./files";
@@ -832,10 +832,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       action: "tree.index",
       view: activeFilter && !branchFilter
         ? {
-            query: {
-              filters: parsePropertyFilterExpression(activeFilter),
-              limit: 500,
-            },
+            query: { ...parseSearchExpression(activeFilter), limit: 500 },
           }
         : undefined,
     });
@@ -1451,7 +1448,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (mode === "filter") {
       const candidate = quickInputText().trim();
       try {
-        parsePropertyFilterExpression(candidate);
+        parseSearchExpression(candidate);
       } catch (error) {
         quickCompletion = null;
         status = `Invalid filter: ${errorMessage(error)}`;

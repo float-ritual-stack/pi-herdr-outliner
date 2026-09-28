@@ -1221,12 +1221,15 @@ created < 2026-09-01T12:00Z
 - **Service:** the grammar requires a service that reports the
   `query.expression` capability. CLI `list --query` and
   `outliner_query.expression` check for it before sending, and Tree and bookmark
-  navigators, which send a saved view's parsed `where` when admitting new
-  children or scoping a bookmark, require it at startup. Queries without
-  `expression` or `where` need no capability.
+  navigators, which send a parsed `where` for the Advanced property filter, when
+  admitting new children or when scoping a bookmark, require it at startup.
+  Queries without `expression` or `where` need no capability.
 
-The Tree **Advanced property filter**, `expand-when`, checklist views and
-repeated CLI `--filter` flags keep the positive-AND clause syntax.
+The Tree **Advanced property filter** accepts the same grammar. A clause list
+still reaches the service as plain `filters` (so `deleted=true` still selects
+Trash); a query using `OR`, `NOT`, parentheses or ranges is sent as a
+structured `where`. `expand-when`, checklist views and repeated CLI `--filter`
+flags keep the positive-AND clause syntax.
 
 Property filters and catalogs default to `block` scope, so body examples and line-local annotations cannot silently change workflow semantics. Callers can explicitly request `block`, `line`, `inline`, or `all` through `propertyScope`; broader block-query results include each matching record’s scope, ordinal, line, column, and source span. Text substring, subtree root, deleted-content mode, projection rank context, timestamp sort, and limit remain explicit structured fields rather than reserved filter words. Timestamp sorting accepts `created` or `updated` with `asc` or `desc`, orders the full matched collection before applying the limit, and cannot be combined with manual projection ranks. Every query carries a limit from 1 through 1000 and returns `complete` or `truncated` metadata. Tree **Advanced property filter** uses the block-scoped property catalog for key/value completion; agents call `outliner_query` with structured filters and never parse the shorthand. CLI `list` exposes the same parser through repeatable `--filter` flags and accepts `--limit` (default 500).
 

@@ -1506,6 +1506,48 @@ describe("createTreeController", () => {
     expect(controller.view().status).toContain("Invalid filter:");
   });
 
+  test("sends boolean property filters as a structured where and rejects Trash inside them", async () => {
+    const alpha = block("alpha", { text: "Alpha [status::open]", properties: [{ key: "status", value: "open" }] });
+    const fake = harness((input) => {
+      if (input.action === "tree.index") return snapshot([alpha], alpha);
+      if (input.action === "browsing-context.publish") return { selected: alpha, ancestors: [], children: [] };
+      return undefined;
+    });
+    const controller = createTreeController(fake.effects);
+    await controller.initialize();
+
+    await controller.handleAction("tree.filter.properties");
+    await controller.handlePaste("status=open OR NOT priority");
+    await controller.handleKeypress("", { name: "return" }, "pass");
+    expect(controller.view().activeFilter).toBe("status=open OR NOT priority");
+    expect(lastCall(fake.calls, "tree.index")).toEqual({
+      action: "tree.index",
+      view: {
+        query: {
+          filters: [],
+          where: {
+            kind: "or",
+            operands: [
+              { kind: "property", key: "status", value: "open" },
+              { kind: "not", operand: { kind: "property", key: "priority" } },
+            ],
+          },
+          limit: 500,
+        },
+      },
+    });
+
+    const reads = fake.calls.filter((call) => call.action === "tree.index").length;
+    await controller.handleAction("tree.filter.properties");
+    for (const _ of controller.view().activeFilter) await controller.handleKeypress("", { name: "backspace" }, "pass");
+    await controller.handlePaste("deleted=true OR status=open");
+    await controller.handleKeypress("", { name: "return" }, "pass");
+    expect(controller.view().mode).toBe("filter");
+    expect(controller.view().status).toContain("deleted=true selects Trash");
+    expect(controller.view().activeFilter).toBe("status=open OR NOT priority");
+    expect(fake.calls.filter((call) => call.action === "tree.index")).toHaveLength(reads);
+  });
+
   test("opens a Herdr capture popup without moving the selected Tree row", async () => {
     const origin = block("origin", { text: "Deep origin" });
     const fake = harness((input) =>
