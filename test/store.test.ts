@@ -159,7 +159,7 @@ test("checklist queries without a query object name the missing field", () => {
   expect(() => store.queryChecklist(block.id, undefined as never)).toThrow("Checklist query is required");
   expect(() => store.queryChecklist(block.id, {} as never)).toThrow("Checklist query limit must be between 1 and 1000");
   expect(() => store.searchChecklist(undefined as never)).toThrow("Checklist search query is required");
-  expect(() => store.searchChecklist({} as never)).toThrow("Checklist query is required");
+  expect(() => store.searchChecklist({} as never)).toThrow("Checklist search query.items is required");
 });
 
 test("an unassigned checklist target without start says so instead of reporting a moved item", () => {

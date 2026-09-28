@@ -1449,6 +1449,7 @@ export class OutlinerStore {
 
   searchChecklist(query: ChecklistSearchQuery): ChecklistSearchCollection {
     if(!query||typeof query!=='object')throw new Error('Checklist search query is required');
+    if(!query.items||typeof query.items!=='object'||Array.isArray(query.items))throw new Error('Checklist search query.items is required');
     // Validate even when the workspace or plan selection is empty.
     queryChecklistItems('', query.items, []);
     const scope=normalizeBlockSearchQuery({...query.scope,limit:1000});
