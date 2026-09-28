@@ -318,6 +318,11 @@ test("a delivery left in validate on a done item is completed with work set, rev
   expect(h.store.require(primary.json.delivery.blockId).properties).toContainEqual({ key: "delivery-stage", value: "complete" });
   expect((await h.run(["work", "complete", "PIE-001", "--proof-block", h.store.children(json.blockId)[1]!.id])).error)
     .toBe("error: PIE-001 is already done");
+
+  const reopened = await h.run(["work", "set", doorId, "delivery-stage", "validate", "--expected", String(revision + 1)]);
+  expect(reopened.json).toMatchObject({ previous: "complete", stage: "validate", changed: true, revision: revision + 2 });
+  const unchanged = await h.run(["work", "set", doorId, "delivery-stage", "validate"]);
+  expect(unchanged.json).toMatchObject({ previous: "validate", stage: "validate", changed: false, revision: revision + 2 });
 });
 
 test("an existing proof block completes work that has no delivery; unlinked proof is refused", async () => {
