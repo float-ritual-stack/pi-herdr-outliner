@@ -246,13 +246,20 @@ export function readResourceProjections(
   const result = (projections: ResourceProjection[]): ResourceProjectionReadResult =>
     ({ blockId: block.id, revision: block.revision, projections: projections.slice(0, MAX_PROJECTIONS) });
   if (block.text.length > MAX_TEXT_UNITS) return result([]);
+  if (request.line !== undefined && request.line >= block.text.split("\n").length) {
+    throw new Error(`resources.projection.read line ${request.line} is outside the block`);
+  }
 
   const sources = source.resources.listSources();
+  const matchers = new Map(RESOURCE_DIRECTIVE_PROVIDERS.map((provider) =>
+    [provider.propertyKey, contextMatcher(provider, sources)] as const));
   const self: ContextBlock = { id: block.id, text: block.text };
   const ancestors: ContextBlock[] = [...context.ancestors].reverse()
     .map((ancestor) => ({ id: ancestor.id, text: ancestor.text }));
+  // Only the first MAX_PROJECTIONS provider lines are resolved; the rest would be dropped anyway.
   const directives = resourceDirectiveOccurrences(block.text)
-    .filter((directive) => request.line === undefined || directive.line === request.line);
+    .filter((directive) => request.line === undefined || directive.line === request.line)
+    .slice(0, MAX_PROJECTIONS);
   const projections: ResourceProjection[] = [];
   const directiveKeys = new Set<string>();
 
@@ -268,7 +275,7 @@ export function readResourceProjections(
       block: self,
       line: directive.line,
       ancestors,
-      matcher: contextMatcher(provider, sources),
+      matcher: matchers.get(provider.propertyKey)!,
       ...(directive.explicitKey ? { explicitKey: directive.explicitKey } : {}),
     });
     if (resolution.kind === "none") {
@@ -299,7 +306,7 @@ export function readResourceProjections(
     // A ticket page shows its ticket at the top of the body, unless a provider
     // line in the page already shows that ticket where the author placed it.
     for (const provider of RESOURCE_DIRECTIVE_PROVIDERS) {
-      const matcher = contextMatcher(provider, sources);
+      const matcher = matchers.get(provider.propertyKey)!;
       const line = pageAnchorLine(block.text);
       for (const key of blockPropertyKeys(block.text, matcher)) {
         if (directiveKeys.has(key)) continue;
@@ -319,7 +326,7 @@ export function readResourceProjections(
       propertyKey: provider.propertyKey,
       options: { unknown: [] },
     };
-    const resolution = resolveContextKey({ block: self, line: request.line, ancestors, matcher: contextMatcher(provider, sources) });
+    const resolution = resolveContextKey({ block: self, line: request.line, ancestors, matcher: matchers.get(provider.propertyKey)! });
     if (resolution.kind === "resolved") projections.push(keyedProjection(source, base, resolution.key, resolution.site));
     else if (resolution.kind === "ambiguous") {
       projections.push({ ...base, status: "ambiguous", candidates: resolution.keys, resolvedFrom: resolution.site,

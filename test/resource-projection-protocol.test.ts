@@ -174,6 +174,23 @@ test("no key in context is reported, and the workboard prefix never resolves as 
   expect(result.projections[0]!.reason).toContain("No ticket key");
 });
 
+test("a requested line outside the block is rejected with a clear error", async () => {
+  const { store, client } = await start();
+  const note = store.create("Notes ACME-1\nsecond\nthird");
+  await expect(read(client, note.id, 50)).rejects.toThrow("line 50 is outside the block");
+  await expect(read(client, note.id, 3)).rejects.toThrow("line 3 is outside the block");
+});
+
+test("only the first provider lines are resolved when a note holds many", async () => {
+  const { store, client } = await start();
+  const note = store.create(["Notes", ...Array.from({ length: 40 }, (_, index) => `jira:: ACME-${index + 1}`)].join("\n"));
+  const result = await read(client, note.id);
+  expect(result.projections).toHaveLength(16);
+  expect(result.projections.map((projection) => projection.key)).toEqual(
+    Array.from({ length: 16 }, (_, index) => `ACME-${index + 1}`),
+  );
+});
+
 test("a ticket page shows its ticket at the top of the body, and a provider line inside it takes over", async () => {
   const { store, client, register } = await start();
   const id = register("ACME-40");
