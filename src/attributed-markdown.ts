@@ -398,12 +398,15 @@ function layout(nodes:readonly LayoutNode[],width:number,theme:MarkdownTheme,lis
 export class AttributedMarkdown implements Component {
   private cache:{width:number;frame:DocumentFrame}|null=null;
   private constructor(private readonly nodes:readonly LayoutNode[],private readonly theme:MarkdownTheme,private readonly linksEnabled:boolean){}
+  // Raw and code/HTML slices reach glyphs verbatim, so terminal controls are
+  // stripped here rather than trusting every caller to sanitize first.
   static compile(document:MappedDocument,theme:MarkdownTheme,linksEnabled:boolean,path='root'):AttributedMarkdown|null {
+    document=sanitizeReaderDocument(document);
     const nodes=document.text.trim()?compileBlocks(normalized(document),path):[];
     return nodes?new AttributedMarkdown(nodes,theme,linksEnabled):null;
   }
   static compileInline(document:MappedDocument,theme:MarkdownTheme,linksEnabled:boolean):AttributedMarkdown|null {
-    const glyphs=inline(document);
+    const glyphs=inline(sanitizeReaderDocument(document));
     return glyphs?new AttributedMarkdown([{kind:'flow',glyphs,blankAfter:false}],theme,linksEnabled):null;
   }
   glyphRows(width:number):DocumentGlyph[][] {return layout(this.nodes,Math.max(1,Math.floor(width)),this.theme);}

@@ -1269,7 +1269,8 @@ export class DetailPiPreviewLayout extends VStack {
     if(frame?.cells.some(cell=>cell.origins.some(origin=>origin.kind!=='generated'))) {
       const starts=sourceLineStarts(source.text);
       for(const cell of frame.cells) {
-        if(cell.row!==this.scrollView.scrollTop)continue;
+        // Rows are row-major; skip generated chrome at the top to the next authored line.
+        if(cell.row<this.scrollView.scrollTop)continue;
         for(const origin of cell.origins) {
           const slices=origin.kind==='source'?origin.slices:origin.kind==='reference'?[origin.token]:[];
           for(const slice of slices) {
