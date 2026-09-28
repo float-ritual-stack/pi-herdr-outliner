@@ -418,8 +418,9 @@ switch (command) {
       options: { since: { type: "string" }, limit: { type: "string" } },
       strict: true,
     });
-    const sequence = Number(values.since);
-    if (values.since === undefined || !Number.isSafeInteger(sequence) || sequence < 0) {
+    const sequence =
+      values.since !== undefined && /^\d+$/.test(values.since) ? Number(values.since) : Number.NaN;
+    if (!Number.isSafeInteger(sequence)) {
       throw new Error("changes requires --since <sequence>, a non-negative integer");
     }
     await client.requireCompatibleService(["changes.since"]);
