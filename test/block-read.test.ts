@@ -115,6 +115,18 @@ test("projects blocks.query without changing its matches, order or completeness"
   expect(JSON.stringify(projected).length * 20).toBeLessThan(JSON.stringify(full).length);
 });
 
+test("keeps property match context on projected blocks.query results", async () => {
+  const { store, client } = await startService();
+  const block = store.create("Scoped card\n\nBody [status::body-inline]");
+  const query = { filters: [{ key: "status", value: "body-inline" }], propertyScope: "inline" as const, limit: 10 };
+  const full = await client.request<VisibleBlockCollection>({ action: "blocks.query", query });
+  const projected = await client.request<ProjectedBlockCollection>({ action: "blocks.query", query, fields: ["title"] });
+  expect(full.blocks[0]?.propertyMatches).toBeDefined();
+  expect(projected.blocks).toEqual([
+    { id: block.id, depth: full.blocks[0]!.depth, title: "Scoped card", propertyMatches: full.blocks[0]!.propertyMatches },
+  ]);
+});
+
 test("rejects malformed batch reads before reading", async () => {
   const { client } = await startService();
   const request = (input: unknown) => client.request(input as RequestInput);

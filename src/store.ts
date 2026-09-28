@@ -2371,6 +2371,7 @@ export class OutlinerStore {
       blocks: blocks.map((block) => ({
         ...projectBlock(block, block.hasChildren, projection),
         depth: block.depth,
+        ...(block.propertyMatches ? { propertyMatches: block.propertyMatches } : {}),
       })),
       completeness,
       fields: projection,

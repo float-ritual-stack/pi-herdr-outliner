@@ -1323,6 +1323,8 @@ export interface ProjectedBlock {
 
 export interface ProjectedVisibleBlock extends ProjectedBlock {
   depth: number;
+  /** Query metadata like `depth`: which property records matched, when the query scope attaches them. */
+  propertyMatches?: PropertyMatchContext[];
 }
 
 export interface ProjectedBlockCollection {

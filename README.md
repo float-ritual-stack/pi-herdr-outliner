@@ -1165,7 +1165,8 @@ actor/session/task provenance), `hasChildren` and opt-in `text`. Omitting
 `unavailable` as `missing` or `trashed` (with its `deletedRootId`); one absent
 id never fails the batch. Duplicate ids collapse to their first occurrence.
 `blocks.query` accepts the same optional `fields` and then returns
-`{ blocks, completeness, fields }`, each block carrying its query `depth`; the
+`{ blocks, completeness, fields }`, each block carrying its query `depth` and,
+when the property scope attaches them, its `propertyMatches`; the
 matches, order and completeness are unchanged. Without `fields`, `blocks.query`
 keeps its full-block shape. Projected results echo `fields`; a response without
 it came from an older service that ignored the projection. Prefer one `blocks.read` to per-block `get`
