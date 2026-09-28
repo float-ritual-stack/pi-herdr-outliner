@@ -4,6 +4,14 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+- Install the declarative status-summary renderer independently of the app.
+  Detail, Tree Preview and Inbox Preview share responsive labelled counts,
+  links, copying and comments. Disabled or missing installations preserve
+  readable, editable source; reopen the note after configuration changes.
+  Resizing and folding retain the open document’s renderer settings.
+  Installation lifecycle and narrow-reader behavior now have a repeatable
+  native application journey. PIE-382.
+
 - Detail and Preview share cell-level source evidence for rendered copying and
   comments, including formatted text, tables, Unicode and repeated embeds.
   Comments retain immutable quotes and separate source fragments; ambiguous

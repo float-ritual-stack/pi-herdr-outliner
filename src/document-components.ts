@@ -37,26 +37,47 @@ export type DocumentComponent =
   | {kind: 'labelled-values'; entries: readonly {id: string; label: MappedDocument; value: MappedDocument}[]}
   | {kind: 'unavailable'; reason: string};
 
+type RendererDefinition = {id:string; renderer:{layout:'labelled-values'}} | {kind:'unavailable';reason:string};
+
+/** One document load owns its installation decisions. Reflow, folding and
+ * theme changes may recompile layouts, but never reread a resolved renderer.
+ * A new source load gets a fresh catalog, including fresh unavailable results. */
+export class DocumentRendererCatalog {
+  private readonly definitions = new Map<string,RendererDefinition>();
+  private readonly registryPath = process.env.OUTLINER_DOCUMENT_RENDERERS ?? join(
+    process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'pi-herdr-outliner', 'document-renderers.json');
+
+  resolve(name:string):RendererDefinition {
+    let definition=this.definitions.get(name);
+    if(!definition){definition=this.load(name);this.definitions.set(name,definition);}
+    return definition;
+  }
+
+  private load(name:string):RendererDefinition {
+    let manifest;
+    try {
+      const registry = Parse(registrySchema, readDefinition(this.registryPath));
+      if (!Object.hasOwn(registry.renderers, name)) return {kind: 'unavailable', reason: 'renderer is not installed'};
+      const install = registry.renderers[name]!;
+      if (!install.enabled) return {kind: 'unavailable', reason: 'renderer is disabled'};
+      if (!isAbsolute(install.manifest)) throw new Error('invalid manifest path');
+      manifest = Parse(manifestSchema, readDefinition(install.manifest));
+    } catch {
+      return {kind: 'unavailable', reason: 'renderer installation is unavailable or invalid'};
+    }
+    return manifest;
+  }
+}
+
 /** Resolve only a declared component fence. Ordinary fenced code is untouched.
  * Input remains readable canonical text; separators are consumed, not searched
  * after rendering. Source and derived origins pass through unchanged. */
-export function documentComponent(language: string, body: MappedDocument, path: string): DocumentComponent | null {
+export function documentComponent(language: string, body: MappedDocument, path: string, catalog = new DocumentRendererCatalog()): DocumentComponent | null {
   if (!language.startsWith('component:')) return null;
   const name = language.slice('component:'.length);
   if (!identifier.test(name)) return {kind: 'unavailable', reason: 'invalid renderer name'};
-  const registryPath = process.env.OUTLINER_DOCUMENT_RENDERERS ?? join(
-    process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'pi-herdr-outliner', 'document-renderers.json');
-  let manifest;
-  try {
-    const registry = Parse(registrySchema, readDefinition(registryPath));
-    if (!Object.hasOwn(registry.renderers, name)) return {kind: 'unavailable', reason: 'renderer is not installed'};
-    const install = registry.renderers[name]!;
-    if (!install.enabled) return {kind: 'unavailable', reason: 'renderer is disabled'};
-    if (!isAbsolute(install.manifest)) throw new Error('invalid manifest path');
-    manifest = Parse(manifestSchema, readDefinition(install.manifest));
-  } catch {
-    return {kind: 'unavailable', reason: 'renderer installation is unavailable or invalid'};
-  }
+  const manifest = catalog.resolve(name);
+  if ('kind' in manifest) return manifest;
   if (Buffer.byteLength(body.text, 'utf8') > 16 * 1024) return {kind: 'unavailable', reason: 'component input exceeds 16 KiB'};
   const entries: {id: string; label: MappedDocument; value: MappedDocument}[] = [];
   let offset = 0;

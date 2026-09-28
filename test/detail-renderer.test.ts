@@ -755,3 +755,20 @@ test("recovery headers fit narrow panes without cutting link controls",()=>{
     }
   }
 });
+
+test('ANSI Detail retains component installation on resize and reloads it on a new document read',async()=>{
+ const {mkdtempSync,writeFileSync,rmSync}=await import('node:fs');
+ const {tmpdir}=await import('node:os');const {join,resolve}=await import('node:path');
+ const {buildDetailAnsiPreview}=await import('../src/detail-renderer');
+ const directory=mkdtempSync(join(tmpdir(),'ansi-renderers-')),registry=join(directory,'registry.json');
+ const prior=process.env.OUTLINER_DOCUMENT_RENDERERS;process.env.OUTLINER_DOCUMENT_RENDERERS=registry;
+ const install=(enabled:boolean)=>writeFileSync(registry,JSON.stringify({version:1,renderers:{status:{manifest:resolve('extensions/status-summary/manifest.json'),enabled}}}));
+ const text='```component:status\nWaiting :: 4\nDone :: 5\n```';
+ const detail=state({resolvedSelectedText:text,projectedSelectedText:text});detail.context.selected=block(text);
+ const paint=(width:number)=>buildDetailAnsiPreview(detail,width).sourceLines.map(stripTerminalSequences).join('\n');
+ try {
+  install(true);expect(paint(80)).toContain('Waiting: 4 · Done: 5');install(false);
+  expect(paint(18)).toContain('Waiting: 4');expect(paint(18)).not.toContain('disabled');
+  detail.context.selected=block(text);expect(paint(80)).toContain('renderer is disabled');
+ } finally {if(prior===undefined)delete process.env.OUTLINER_DOCUMENT_RENDERERS;else process.env.OUTLINER_DOCUMENT_RENDERERS=prior;rmSync(directory,{recursive:true,force:true});}
+});

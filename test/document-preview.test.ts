@@ -229,3 +229,32 @@ test('refresh retains local folds until a source edit makes their identity ambig
  await reader.load(target,true);
  expect(paint()).toContain('Hidden body');
 });
+
+test('Preview keeps renderer installation stable across reflow and folds, then reloads it with new content',async()=>{
+ const {mkdtempSync,writeFileSync,rmSync}=await import('node:fs');
+ const {tmpdir}=await import('node:os');const {join,resolve}=await import('node:path');
+ const {initTheme}=await import('@earendil-works/pi-coding-agent');initTheme(undefined,false);
+ const {documentPreviewLines,documentPreviewLinks}=await import('../src/document-preview-renderer');
+ const {stripTerminalSequences}=await import('@earendil-works/pi-tui');
+ const directory=mkdtempSync(join(tmpdir(),'preview-renderers-')),registry=join(directory,'registry.json');
+ const prior=process.env.OUTLINER_DOCUMENT_RENDERERS;process.env.OUTLINER_DOCUMENT_RENDERERS=registry;
+ const install=(enabled:boolean)=>writeFileSync(registry,JSON.stringify({version:1,renderers:{status:{manifest:resolve('extensions/status-summary/manifest.json'),enabled}}}));
+ const text='## Summary\n\n```component:status\nWaiting :: 4\nDone :: 5\n```\n\n> [!note] Counts\n> ```component:status\n> Nested :: 6\n> ```';
+ const reader=new DocumentPreview({async request<T>():Promise<T>{throw Error('Presentation must not call the service');}},()=>{});
+ const load=()=>reader.loadText({kind:'block',blockId:'summary'},'Summary',Promise.resolve(text));
+ const paint=(width:number)=>documentPreviewLines(reader.state!.document,width).map(stripTerminalSequences).join('\n');
+ try {
+  install(true);await load();expect(paint(80)).toContain('Waiting: 4 · Done: 5');expect(paint(80)).toContain('Nested: 6');
+  install(false);
+  expect(paint(22)).toContain('Waiting: 4');expect(paint(22)).toContain('Nested: 6');expect(paint(22)).not.toContain('disabled');
+  const fold=documentPreviewLinks(reader.state!.document,22).find(link=>link.uri.includes('document-toggle'))!;
+  await reader.action('preview.link:'+encodeURIComponent(fold.uri),async()=>{throw Error('Fold must stay local');});
+  expect(paint(22)).not.toContain('Waiting: 4');
+  await reader.action('preview.link:'+encodeURIComponent(fold.uri),async()=>{throw Error('Fold must stay local');});
+  expect(paint(80)).toContain('Waiting: 4 · Done: 5');expect(paint(80)).not.toContain('disabled');
+  await load();expect(paint(80)).toContain('renderer is disabled');expect(paint(80)).toContain('Waiting :: 4');
+  install(true);await load();expect(paint(80)).toContain('Waiting: 4 · Done: 5');
+  await reader.loadText({kind:'block',blockId:'summary'},'Summary',Promise.resolve(text.replace('Done :: 5','Done :: 7')));
+  expect(paint(80)).toContain('Done: 7');expect(paint(80)).not.toContain('Done: 5');
+ } finally {if(prior===undefined)delete process.env.OUTLINER_DOCUMENT_RENDERERS;else process.env.OUTLINER_DOCUMENT_RENDERERS=prior;rmSync(directory,{recursive:true,force:true});}
+});

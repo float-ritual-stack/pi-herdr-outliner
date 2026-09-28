@@ -1,3 +1,4 @@
+import type {DetailReadPreviewDocument} from './detail-pi-preview';
 import {getMarkdownTheme} from "@earendil-works/pi-coding-agent";
 import {renderDetailReadPreview} from "./detail-pi-preview";
 import {measureRenderedLinks, withInternalLinks} from "./rendered-links";
@@ -300,6 +301,9 @@ export interface DetailRenderOptions {
   chooserHelpText?: string;
 }
 
+// Keep the read document alive across ANSI redraws, just as Preview does.
+const ansiReadDocuments = new WeakMap<object,DetailReadPreviewDocument>();
+
 /** Ordinary ANSI reader rows. Appended comment evidence has no source position. */
 export function buildDetailAnsiPreview(
   state: Readonly<DetailState>,
@@ -309,12 +313,16 @@ export function buildDetailAnsiPreview(
   let sourceLines = state.resolvedSelectedText.split(/\r?\n/);
   if (state.context.selected && state.readStatus === "ready" && state.projectedSelectedText) {
     const previewRegions = {...state.previewRegions};
-    const rendered = withInternalLinks(() => renderDetailReadPreview({
+    const current:DetailReadPreviewDocument = {
       canonicalText: state.context.selected!.text,
       sourceBlock: state.context.selected!, resolvedText: state.resolvedSelectedText,
       projectedText: state.projectedSelectedText, embedRanges: state.embedRanges,
       workIdPrefix: state.workIdPrefix, previewRegions,
-    }, width, getMarkdownTheme(), undefined, true, state.previewSourceLine));
+    };
+    let document=ansiReadDocuments.get(state.context.selected);
+    if(document)Object.assign(document,current);
+    else {document=current;ansiReadDocuments.set(state.context.selected,document);}
+    const rendered = withInternalLinks(() => renderDetailReadPreview(document!, width, getMarkdownTheme(), undefined, true, state.previewSourceLine));
     const links = measureRenderedLinks(rendered.lines);
     const regions: PreviewRegion[] = [];
     const rows = new Map<string, number>();

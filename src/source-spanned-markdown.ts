@@ -1,3 +1,4 @@
+import {DocumentRendererCatalog} from './document-components';
 import {AttributedMarkdown} from './attributed-markdown';
 import {generatedDocument, sliceDocument, type MappedDocument, type DocumentOrigin} from './document-provenance';
 import {DocumentFrame,paintDocumentRows,type DocumentGlyph} from './document-frame';
@@ -449,6 +450,7 @@ function traverseCalloutRows(
 }
 
 export class SourceSpannedMarkdown implements Component {
+  private renderers = new DocumentRendererCatalog();
   private attributed: AttributedMarkdown | null = null;
   private attributedSegments: {renderer:AttributedMarkdown;decorated:boolean;blank:boolean}[] | null = null;
   renderedFrame: DocumentFrame | null = null;
@@ -481,7 +483,9 @@ export class SourceSpannedMarkdown implements Component {
     callouts: readonly DetailCalloutRegion[] = [],
     folds: readonly DocumentFold[] = [],
     checklists: readonly ChecklistControl[] = [],
+    renderers = new DocumentRendererCatalog(),
   ): void {
+    this.renderers = renderers;
     let document=typeof input==='string'?generatedDocument(input,'unobserved Markdown'):input;
     let text=document.text;
     this.attributed=null;
@@ -509,13 +513,14 @@ export class SourceSpannedMarkdown implements Component {
           : undefined,
         this.calloutTheme,
         this.trackLinks,
+        this.renderers,
       );
       this.segments = [];
       return;
     }
     this.calloutDocument = null;
     if(!folds.length&&!this.decorationEnabled) {
-      this.attributed=AttributedMarkdown.compile(document,this.theme,this.linksEnabled);
+      this.attributed=AttributedMarkdown.compile(document,this.theme,this.linksEnabled,'root',this.renderers);
     }
     const sourceSegments = this.decorationEnabled
       ? sourceSpannedMarkdownSegments(text, ranges)
@@ -530,7 +535,7 @@ export class SourceSpannedMarkdown implements Component {
       const mapped:{renderer:AttributedMarkdown;decorated:boolean;blank:boolean}[]=[];let cursor=0,complete=true;
       for(const [index,segment] of sourceSegments.entries()) {
         if(document.text.slice(cursor,cursor+segment.text.length)!==segment.text){complete=false;break;}
-        const renderer=AttributedMarkdown.compile(sliceDocument(document,cursor,cursor+segment.text.length),this.theme,this.linksEnabled,`segment:${index}`);
+        const renderer=AttributedMarkdown.compile(sliceDocument(document,cursor,cursor+segment.text.length),this.theme,this.linksEnabled,`segment:${index}`,this.renderers);
         cursor+=segment.text.length;
         if(!renderer){complete=false;break;}
         mapped.push({renderer,decorated:segment.decorated,blank:!segment.text.trim()});
@@ -685,7 +690,7 @@ export class SourceSpannedMarkdown implements Component {
     const renderer = new SourceSpannedMarkdown(this.theme, this.decorate, this.previewRegions, this.linksEnabled, this.calloutTheme, this.trackLinks);
     const checklists = this.checklists.filter(control => visible.has(control.sourceSpan!.startLine)).map(control => ({...control,
       sourceSpan: {...control.sourceSpan!, startLine: mapLine(control.sourceSpan!.startLine), endLine: mapLine(control.sourceSpan!.endLine)}}));
-    renderer.setContent(projection.document, this.ranges.map(range => ({startLine: mapLine(range.startLine), endLine: mapLine(range.endLine)})), this.decorationEnabled, callouts, [], checklists);
+    renderer.setContent(projection.document, this.ranges.map(range => ({startLine: mapLine(range.startLine), endLine: mapLine(range.endLine)})), this.decorationEnabled, callouts, [], checklists, this.renderers);
     return this.folded = {signature, projection, visible, renderer};
   }
 

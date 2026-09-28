@@ -2220,3 +2220,12 @@ places against the full branch order. Up/down moves one position in that full
 order, including hidden items. Neither operation changes canonical parents or
 another branch's ranks. **Advanced property filter** retains the workspace
 property-query interface as a separate View action.
+
+### Responsive status summaries
+
+The optional [status-summary renderer](extensions/status-summary/README.md)
+turns readable `component:status` fences into labelled counts that fit the pane.
+Install its manifest on the reader host; Detail, Tree Preview and Inbox Preview
+share its links, selection and comments. No app rebuild is required. Disabled or
+missing renderers retain the original source with an explanation. Reopen the
+note after changing the renderer configuration.

@@ -1,3 +1,4 @@
+import {DocumentRendererCatalog} from './document-components';
 import {resourceDocumentObservation} from './document-resources';
 import {passageDocumentRepresentation} from './annotation-passages';
 import {createTextQuoteAnchor} from './annotations';
@@ -364,6 +365,10 @@ function renderedAuthoredCallouts(
   }));
 }
 
+// The same preview object is laid out at many widths and disclosure states.
+// Keep installation decisions with its source, not with a transient layout.
+const previewRenderers = new WeakMap<DetailReadPreviewDocument,{text:string;catalog:DocumentRendererCatalog}>();
+
 export function renderDetailReadPreview(
   input: DetailReadPreviewDocument,
   width: number,
@@ -424,7 +429,12 @@ export function renderDetailReadPreview(
     linksEnabled,
     calloutTheme,
   );
-  markdown.setContent(document, embedRanges, true, callouts, folds, checklists);
+  let renderers=previewRenderers.get(input);
+  if(!renderers || renderers.text!==input.resolvedText){
+    renderers={text:input.resolvedText,catalog:new DocumentRendererCatalog()};
+    previewRenderers.set(input,renderers);
+  }
+  markdown.setContent(document, embedRanges, true, callouts, folds, checklists, renderers.catalog);
   const revealThread=revealAnnotationId?annotationState?.annotationThreads.find(thread=>thread.block.id===revealAnnotationId):undefined;
   const revealGroup=groups.find(group=>group.threads.includes(revealThread!));
   if(revealThread&&revealGroup?.placement==='inline')markdown.revealMatchingSource(annotationFrameMatcher(revealThread,true,annotationState?.historical||annotationState?.target?.kind==='resource',revealGroup.target));

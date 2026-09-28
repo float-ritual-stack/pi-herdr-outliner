@@ -1,4 +1,4 @@
-import {documentComponent} from './document-components';
+import {documentComponent, DocumentRendererCatalog} from './document-components';
 import {sourceTable,type TableNode} from './document-tables';
 import {Marked,type Token,type Tokens,type Links} from 'marked';
 import {decodeHTMLStrict} from 'entities';
@@ -164,7 +164,7 @@ function codeBody(source:MappedDocument,expected:string,indented:boolean):Mapped
   const body=stripLinePrefixes(sliceDocument(source,start,end),line=>Math.min(open[1]!.length,/^ */.exec(line)![0].length));
   return matchBody(body,expected);
 }
-function compileBlocks(document:MappedDocument,path='root',definitions?:Links):LayoutNode[]|null {
+function compileBlocks(document:MappedDocument,path:string,definitions:Links|undefined,catalog:DocumentRendererCatalog):LayoutNode[]|null {
   const lexer=new parser.Lexer(parser.defaults);
   if(definitions)lexer.tokens.links=definitions;
   const tokens=lexer.lex(document.text),nodes:LayoutNode[]=[];let cursor=0;
@@ -183,7 +183,7 @@ function compileBlocks(document:MappedDocument,path='root',definitions?:Links):L
     }
     if(token.type==='blockquote') {
       const body=matchBody(stripLinePrefixes(source,line=>/^ {0,3}> ?/.exec(line)?.[0].length??0),token.text);
-      const children=body&&compileBlocks(body,nodePath,tokens.links);if(!children)return null;
+      const children=body&&compileBlocks(body,nodePath,tokens.links,catalog);if(!children)return null;
       nodes.push({kind:'quote',children,blankAfter});continue;
     }
     if(token.type==='list') {
@@ -210,7 +210,7 @@ function compileBlocks(document:MappedDocument,path='root',definitions?:Links):L
           body=sliceDocument(body,checkbox[0].length);
         }
         const matched=matchBody(body,item.text);if(!matched)return null;
-        const children=compileBlocks(matched,`${nodePath}/item:${itemIndex}`,tokens.links);if(!children)return null;
+        const children=compileBlocks(matched,`${nodePath}/item:${itemIndex}`,tokens.links,catalog);if(!children)return null;
         items.push({marker,children});
       }
       if(source.text.slice(itemCursor).trim())return null;
@@ -218,7 +218,7 @@ function compileBlocks(document:MappedDocument,path='root',definitions?:Links):L
     }
     if(token.type==='code') {
       const body=codeBody(source,token.text,token.codeBlockStyle==='indented');if(!body)return null;
-      const component = documentComponent(token.lang ?? '', body, nodePath);
+      const component = documentComponent(token.lang ?? '', body, nodePath, catalog);
       if (component?.kind === 'labelled-values') {
         const entries = component.entries.map(entry => ({
           label: inline(entry.label, ['bold'], undefined, `${entry.id}/label`),
@@ -400,9 +400,9 @@ export class AttributedMarkdown implements Component {
   private constructor(private readonly nodes:readonly LayoutNode[],private readonly theme:MarkdownTheme,private readonly linksEnabled:boolean){}
   // Raw and code/HTML slices reach glyphs verbatim, so terminal controls are
   // stripped here rather than trusting every caller to sanitize first.
-  static compile(document:MappedDocument,theme:MarkdownTheme,linksEnabled:boolean,path='root'):AttributedMarkdown|null {
+  static compile(document:MappedDocument,theme:MarkdownTheme,linksEnabled:boolean,path='root',catalog=new DocumentRendererCatalog()):AttributedMarkdown|null {
     document=sanitizeReaderDocument(document);
-    const nodes=document.text.trim()?compileBlocks(normalized(document),path):[];
+    const nodes=document.text.trim()?compileBlocks(normalized(document),path,undefined,catalog):[];
     return nodes?new AttributedMarkdown(nodes,theme,linksEnabled):null;
   }
   static compileInline(document:MappedDocument,theme:MarkdownTheme,linksEnabled:boolean):AttributedMarkdown|null {
