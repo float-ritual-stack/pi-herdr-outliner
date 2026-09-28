@@ -481,11 +481,45 @@ test('Preview hides legacy and short generated checklist anchors while addressin
   expect(paint(reader)).toContain('Water tomatoes');
   expect(paint(reader)).not.toContain('^task-');
   expect(paint(reader)).not.toContain('^t-');
-  const fragment=new DocumentPreview(client,()=>{});
-  await fragment.load({kind:'block',blockId:plan.id,fragmentId:legacy});fragment.focus();
-  expect(tasks(fragment)).toHaveLength(1);
-  expect(paint(fragment)).not.toContain('Weed beds');
-  expect(paint(fragment)).not.toContain('^task-');
-  await click(fragment,tasks(fragment)[0]!.uri);await fragment.action('preview.checklist.choose:done',noDetail);
+  // The Preview already showing the note narrows to the step (PIE-446).
+  await reader.load({kind:'block',blockId:plan.id,fragmentId:legacy});
+  expect(tasks(reader)).toHaveLength(1);
+  expect(paint(reader)).not.toContain('Weed beds');
+  expect(paint(reader)).not.toContain('^task-');
+  await click(reader,tasks(reader)[0]!.uri);await reader.action('preview.checklist.choose:done',noDetail);
   expect((await client.request<Block>({action:'get',blockId:plan.id})).text).toContain(`- [x] Water tomatoes ^${legacy}`);
+  expect(paint(reader)).not.toContain('Weed beds');
+}));
+
+// PIE-446: reloading the note already on screen with a step anchor narrows to that
+// step, moves with a different anchor, and widens again without one. Other anchors
+// (headings, paragraphs, plain list items) still reveal in context; see
+// document-preview.test.ts 'refresh retains local folds'.
+test('Preview showing a note narrows, moves and widens with its step anchors',async()=>fixture(async client=>{
+  const plan=await client.request<Block>({action:'create',text:'# Garden\n\n- [ ] Water tomatoes ^t-1a2b3c\n- [ ] Weed beds ^t-4d5e6f\n\nNotes ^notes'});
+  const reader=new DocumentPreview(client,()=>{});
+  const target=(fragmentId?:string)=>({kind:'block' as const,blockId:plan.id,...fragmentId?{fragmentId}:{}});
+  await reader.load(target());reader.focus();
+  expect(tasks(reader)).toHaveLength(2);
+  await reader.load(target('t-1a2b3c'));
+  expect(tasks(reader)).toHaveLength(1);
+  expect(paint(reader)).toContain('Water tomatoes');
+  expect(paint(reader)).not.toContain('Weed beds');
+  await reader.load(target('t-4d5e6f'));
+  expect(tasks(reader)).toHaveLength(1);
+  expect(paint(reader)).toContain('Weed beds');
+  expect(paint(reader)).not.toContain('Water tomatoes');
+  await reader.load(target());
+  expect(tasks(reader)).toHaveLength(2);
+  expect(paint(reader)).toContain('Notes');
+  // A step link followed inside the Preview narrows the same way.
+  await click(reader,`pi-outliner://block/${plan.id}?fragment=t-4d5e6f`);
+  expect(reader.state!.target).toEqual(target('t-4d5e6f'));
+  expect(tasks(reader)).toHaveLength(1);
+  expect(paint(reader)).not.toContain('Water tomatoes');
+  // A non-step anchor in the shown note still reveals in the whole note.
+  await reader.load(target());
+  await click(reader,`pi-outliner://block/${plan.id}?fragment=notes`);
+  expect(tasks(reader)).toHaveLength(2);
+  expect(paint(reader)).toContain('Notes');
 }));

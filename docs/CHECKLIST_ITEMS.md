@@ -193,7 +193,9 @@ assigned item address. Undo checks item evidence too: a subsequently rewritten
 step needs a fresh decision, rather than restoring old words.
 
 Copy step link explicitly assigns an address if needed and copies the fragment
-reference. Ordinary rendering, including hidden/folded content, never writes.
+reference. Following a step link narrows Preview to that step, even when Preview
+already shows the whole note; other fragments of the shown note are revealed in
+place. Ordinary rendering, including hidden/folded content, never writes.
 Code examples and legends have no task controls. List disclosures remain
 separate controls; folding children leaves the parent checkbox usable. Status
 changes preserve that local fold, including the first change that assigns an

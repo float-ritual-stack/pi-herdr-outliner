@@ -17,6 +17,7 @@ import {blockDisplayTitle} from './references';
 import {parseOutlinerLinkUri,followResourceOccurrence} from './outliner-links';
 import {isAuthoredFileOccurrence} from './resource-references';
 import {resolveFragmentSlice} from './fragments';
+import {checklistItems} from './checklist-items';
 import type {TerminalKey} from './terminal';
 import type {Block, AnnotationThread, ResolvedBlockReferences, PageAddressResolution, OutlinerNavigationTarget} from './types';
 import type {ResourceDescription} from './resources';
@@ -454,8 +455,9 @@ export class DocumentPreview {
     if(picker)refresh=true;
     const generation = ++this.generation;
     const previousDocument = this.value?.document;
-    const revealInDocument = target.kind === 'block' && !!target.fragmentId && previousDocument?.sourceBlock?.id === target.blockId;
-    const previous = (revealInDocument || refresh && JSON.stringify(this.value?.target) === JSON.stringify(target)) ? previousDocument?.previewRegions : undefined;
+    // A fragment in the note already on screen is revealed in context, except a
+    // checklist step, which narrows like a fresh Preview (PIE-446).
+    let revealInDocument = false;
     let revealSourceLine:number|undefined;
     if(!refresh&&!navigating){this.history=[];this.future=[];}
     let title = target.kind === 'block' ? target.blockId : target.resourceId;
@@ -474,6 +476,8 @@ export class DocumentPreview {
         if(target.fragmentId){
           const fragment=resolveFragmentSlice(block.text,target.fragmentId);
           if(fragment.status!=='resolved')throw Error(`Fragment ${fragment.status}: ${target.fragmentId}`);
+          revealInDocument=previousDocument?.sourceBlock?.id===block.id&&
+            !checklistItems(block.text).some(item=>item.itemId===target.fragmentId);
           if (revealInDocument) {
             document=await loadDetailReadPreview(this.client,block);
             if (!refresh) revealSourceLine=fragment.slice.anchor.lineIndex;
@@ -517,6 +521,7 @@ export class DocumentPreview {
       }
       // Reconcile the saved choices against the new document at its next render.
       // Anonymous identities change on edits; explicit stable IDs may survive.
+      const previous = (revealInDocument || refresh && sameTarget) ? previousDocument?.previewRegions : undefined;
       if (previous) document.previewRegions = {regions:[],focusedRegionId:previous.focusedRegionId,disclosureOverrides:new Map(previous.disclosureOverrides)};
       if(revealSourceLine!==undefined && previousDocument) offset=revealDocumentPreviewSourceLine(document,revealSourceLine,previousDocument);
       const currentPicker=picker ? this.value?.checklistPicker : undefined;
