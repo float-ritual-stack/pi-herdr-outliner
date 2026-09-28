@@ -327,13 +327,15 @@ export function buildDetailAnsiPreview(
     const regions: PreviewRegion[] = [];
     const rows = new Map<string, number>();
     const columns = new Map<string, {column: number; width: number}>();
+    const projectedResources = new Set(state.embedRanges.flatMap(range =>
+      range.resource?.resourceId ? [outlinerLinkUri("resource", range.resource.resourceId)] : []));
     for (const link of links) {
       const action = parsePreviewRegionActionUri(link.uri);
       const existing = action && "regionId" in action
         ? previewRegions.regions.find(region => region.id === action.regionId) : undefined;
       const id = existing?.id ?? `ansi-link:${link.row}:${link.column}:${link.uri}`;
       if (!rows.has(id)) {
-        regions.push(existing ?? {id,kind:"body-link",sourceSpan:null,parentId:null,childIds:[],
+        regions.push(existing ?? {id,kind:projectedResources.has(link.uri) ? "resource" : "body-link",sourceSpan:null,parentId:null,childIds:[],
           focusable:true,disclosure:null,activation:action ?? {type:"link.open",uri:link.uri}});
         rows.set(id, link.row);
         columns.set(id, {column: link.column, width: link.width});

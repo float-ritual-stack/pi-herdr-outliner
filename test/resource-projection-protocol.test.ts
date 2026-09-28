@@ -9,6 +9,7 @@ import type { RemoteEntityProviderClient, RemoteEntityResource, RemoteEntitySour
 import type { ResourceProjection, ResourceProjectionReadResult } from "../src/resource-projection";
 import { OutlinerServer } from "../src/server";
 import { OutlinerStore } from "../src/store";
+import { readResourceProjections, type ResourceProjectionDataSource } from "../src/resource-projection";
 import type { OutlinerServiceStatus, RemoteEntityDocument, ResourceSource } from "../src/types";
 
 // Fictional project and tickets. Nothing here contacts a provider.
@@ -36,7 +37,7 @@ class TicketFixture implements RemoteEntityProviderClient {
     const markdown = `# Rollout checklist\n\nDetails for ${key}.`;
     return {
       title: "Rollout checklist",
-      metadata: { key, type: "Task", status: "In progress", assignee: "A. Person", labels: ["rollout", "vendor"] },
+      metadata: { key, type: "Task", status: "In progress", assignee: "A. Person", labels: ["rollout", "vendor"], reporter: "B. Person" },
       markdown,
       externalUrl: `https://issues.example.test/browse/${key}`,
       sourceSnapshot: {
@@ -69,7 +70,7 @@ class TicketFixture implements RemoteEntityProviderClient {
 }
 
 async function start() {
-  const directory = mkdtempSync(join(tmpdir(), "outliner-ticket-projection-"));
+  const directory = mkdtempSync(join(tmpdir(), "outliner-resource-projection-"));
   const provider = new TicketFixture();
   const store = new OutlinerStore(join(directory, "outliner.sqlite"), { remoteEntityClient: provider });
   const socket = join(directory, "outliner.sock");
@@ -138,7 +139,10 @@ test("the service advertises resources.projection and reads stored snapshots wit
     { line: 10, status: "unavailable", key: "OTHER-1", step: "explicit" },
   ]);
   const [first, stale, notFetched, unregistered, ambiguous, noSource] = result.projections as ResourceProjection[];
+  // Only the provider's allowed fields are shown, in its order.
+  expect(first!.fields.map((field) => field.label)).toEqual(["Status", "Assignee", "Type", "Labels"]);
   expect(first).toMatchObject({
+    label: "Jira",
     anchor: { kind: "directive" },
     options: { comments: 5, unknown: [] },
     resourceId: ready,
@@ -171,7 +175,7 @@ test("no key in context is reported, and the workboard prefix never resolves as 
   const child = store.create("Notes\njira::", parent.id);
   const result = await read(client, child.id);
   expect(result.projections).toMatchObject([{ status: "no-key", anchor: { line: 1 } }]);
-  expect(result.projections[0]!.reason).toContain("No ticket key");
+  expect(result.projections[0]!.reason).toContain("No Jira key");
 });
 
 test("a requested line outside the block is rejected with a clear error", async () => {
@@ -219,17 +223,17 @@ test("Detail renders a projection from a live service and falls back silently on
   const id = register("ACME-50");
   await store.resources.refresh(id, true);
   const note = store.create("Vendor call ACME-50\n- jira::\nAfter");
-  const now = Date.parse("2026-09-20T10:12:00.000Z");
-  const projected = await projectDetailRead(client, note.text, { hostBlockId: note.id, hostRevision: note.revision, now });
+  const projected = await projectDetailRead(client, note.text, { hostBlockId: note.id, hostRevision: note.revision });
   const lines = projected.text.split("\n");
   expect(lines[0]).toBe("Vendor call ACME-50");
   expect(lines[1]).toBe("- jira::");
   expect(lines[2]).toContain(`- Jira [ACME-50](pi-outliner://resource/${id}) · Rollout checklist`);
   expect(lines[3]).toContain("Status: In progress · Assignee: A. Person");
-  expect(lines[4]).toContain("(12 min ago)");
+  expect(lines[4]).toMatch(/^  fetched \d{4}-\d\d-\d\d \d\d:\d\d$/);
   expect(lines[5]).toBe("");
   expect(lines[6]).toBe("After");
-  expect(projected.embedRanges).toEqual([{ startLine: 2, endLine: 4, inserted: { afterSourceLine: 1, lineCount: 4 } }]);
+  expect(projected.embedRanges).toEqual([{ startLine: 2, endLine: 4, inserted: { afterSourceLine: 1, lineCount: 4 },
+    resource: { resourceId: id, fetchedAt: "2026-09-20T10:00:00.000Z", fetchedLine: 2 } }]);
   expect(projected.resourceProjections?.[0]?.resourceId).toBe(id);
 
   // An older service lacks the capability: no read is sent and the note renders as authored.
@@ -241,8 +245,60 @@ test("Detail renders a projection from a live service and falls back silently on
       throw new Error(`Unknown action: ${input.action}`);
     },
   };
-  const fallback = await projectDetailRead(older, note.text, { hostBlockId: note.id, hostRevision: note.revision, now });
+  const fallback = await projectDetailRead(older, note.text, { hostBlockId: note.id, hostRevision: note.revision });
   expect(fallback.text).toBe(note.text);
   expect(fallback.embedRanges).toEqual([]);
   expect(calls).toEqual(["ping"]);
+});
+
+function fakeSource(text: string, ancestors: { id: string; text: string }[], describe: (id: string) => never | unknown = () => {
+  throw new Error("Corrupt stored snapshot");
+}): ResourceProjectionDataSource & { lookups: number } {
+  const source = {
+    lookups: 0,
+    blockContext: () => ({
+      selected: { id: "note", text, revision: 1, parentId: null, position: 0, author: "user" as const,
+        createdAt: "2026-09-20T00:00:00.000Z", updatedAt: "2026-09-20T00:00:00.000Z", properties: [] },
+      // Root first, as the store returns them.
+      ancestors: ancestors.map((ancestor) => ({ ...ancestor, revision: 1, parentId: null, position: 0, author: "user" as const,
+        createdAt: "2026-09-20T00:00:00.000Z", updatedAt: "2026-09-20T00:00:00.000Z", properties: [] })),
+    }),
+    resources: {
+      listSources: () => [{ id: "tickets", provider: "jira", name: "Tickets",
+        boundary: { origin: "https://issues.example.test", project: "ACME" }, policy: { deniedCapabilities: [] } }] as never,
+      resolveAuthoredReference: (reference: { key: string }) => {
+        source.lookups += 1;
+        return reference.key === "ACME-1"
+          ? { kind: "ready" as const, resourceId: "11111111-1111-4111-8111-111111111111" }
+          : { kind: "unregistered" as const, reason: "not registered" };
+      },
+      describe: describe as never,
+    },
+  };
+  return source;
+}
+
+test("one unreadable stored copy makes only its own projection unavailable", () => {
+  const result = readResourceProjections(fakeSource("Vendor call\njira:: ACME-1\njira:: ACME-2", []), { blockId: "note" });
+  expect(result.projections.map(({ key, status, reason }) => ({ key, status, reason }))).toEqual([
+    { key: "ACME-1", status: "unavailable", reason: "Stored copy unreadable" },
+    { key: "ACME-2", status: "not-registered", reason: expect.stringContaining("not registered yet") },
+  ]);
+});
+
+test("a large note with deep, large ancestors is read within a bounded time", () => {
+  // 3,000 provider lines (only 16 are resolved) under 50 ancestors of about 55 KB of keys, properties and tags.
+  const text = ["Subject", ...Array.from({ length: 3000 }, () => "jira::")].join("\n");
+  const ancestors = Array.from({ length: 50 }, (_, index) => ({
+    id: `ancestor-${index}`,
+    text: `Ancestor ${index}\n${"body ACME-5 [status::open] #tag note\n".repeat(1500)}`,
+  }));
+  const source = fakeSource(text, ancestors);
+  readResourceProjections(source, { blockId: "note" });
+  const started = performance.now();
+  const result = readResourceProjections(source, { blockId: "note" });
+  const elapsed = performance.now() - started;
+  expect(result.projections).toHaveLength(16);
+  expect(result.projections.every((projection) => projection.status === "no-key")).toBe(true);
+  expect(elapsed).toBeLessThan(200);
 });

@@ -123,3 +123,27 @@ test("the resolver is provider-agnostic: a matcher supplies the key grammar", ()
   expect(resolveContextKey({ block: { id: "b", text: "Fix the crash #482\ngh::" }, line: 1, ancestors: [], matcher: issues }))
     .toMatchObject({ kind: "resolved", key: "#482", site: { step: "subject-line" } });
 });
+
+test("the walk leaves a section through its heading rather than entering an earlier section", () => {
+  const sections = ["Subject", "Section A", "  item ACME-2", "Section B", "  jira::"].join("\n");
+  expect(resolve(sections, 4)).toEqual({ kind: "none" });
+  // Siblings at the same indent, and items in the same section, still resolve.
+  expect(resolve(["Subject", "Section B", "  item ACME-3", "  jira::"].join("\n"), 3))
+    .toMatchObject({ key: "ACME-3", site: { step: "preceding-line", line: 2 } });
+  expect(resolve(["Subject", "Section ACME-4", "  notes", "  jira::"].join("\n"), 3))
+    .toMatchObject({ key: "ACME-4", site: { step: "preceding-line", line: 1 } });
+});
+
+test("literal regions hide keys, while indented lines are prose", () => {
+  expect(resolve(["Subject", "<!-- literal -->", "ACME-9 pasted", "<!-- /literal -->", "jira::"].join("\n"), 4)).toEqual({ kind: "none" });
+  expect(resolve(["Subject", "```", "ACME-9", "```", "jira::"].join("\n"), 4)).toEqual({ kind: "none" });
+  expect(resolve(["Subject", "", "    ACME-7 indented thought", "    jira::"].join("\n"), 3))
+    .toMatchObject({ key: "ACME-7", site: { step: "preceding-line" } });
+  expect(resourceDirectiveOccurrences(["S", "<!-- literal -->", "jira::", "<!-- /literal -->"].join("\n"))).toEqual([]);
+});
+
+test("ancestors are read through their preamble only", () => {
+  const preamble = { id: "page", text: "Parent page\n[jira::ACME-8] [owner::me]\n\nbody mentions ACME-99" };
+  expect(resolve("Child\njira::", 1, [preamble])).toMatchObject({ key: "ACME-8", site: { step: "ancestor-property" } });
+  expect(resolve("Child\njira::", 1, [{ id: "body", text: "Parent\n\nbody mentions ACME-99 [jira::ACME-98]" }])).toEqual({ kind: "none" });
+});

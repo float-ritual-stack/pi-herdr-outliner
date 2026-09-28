@@ -3865,3 +3865,24 @@ test('legacy exact comments follow the visible quote through wrapping and leave 
   expect(hiddenLines.join('\n')).toContain('Unpositioned comments (1)');
   expect(hiddenLines.find(line=>line.trim()==='Label')).not.toStartWith('+ ');
 });
+
+test("a resource projection's link is a focusable resource region, and its age is painted, not projected", () => {
+ const caps=getCapabilities();setCapabilities({...caps,hyperlinks:false});
+ try{
+  const resourceId="11111111-1111-4111-8111-111111111111";
+  const fetchedAt=new Date(Date.now()-3*60*60_000).toISOString();
+  const raw=["Vendor call ACME-1","jira::",`- Jira [ACME-1](pi-outliner://resource/${resourceId}) · Rollout checklist`,"  Status: In progress","  fetched 2026-09-20 10:00","","After"].join("\n");
+  const detail=state(raw,raw);
+  detail.embedRanges=[{startLine:2,endLine:4,inserted:{afterSourceLine:1,lineCount:4},resource:{resourceId,fetchedAt,fetchedLine:2}}];
+  const layout=expandedPreview(detail,plainMarkdownTheme,false);
+  layout.syncState(80);renderLayoutFrame(layout,80,20,()=>{});
+  const region=detail.previewRegions.regions.find(r=>r.kind==='resource')!;
+  expect(region).toBeDefined();
+  expect(region.focusable).toBe(true);
+  expect(region.activation).toEqual({type:'link.open',uri:`pi-outliner://resource/${resourceId}`});
+  expect(detail.previewRegions.regions.some(r=>r.kind==='body-link'&&r.activation?.type==='link.open'&&r.activation.uri.includes(resourceId))).toBe(false);
+  const lines=renderLayoutFrame(layout,80,20,()=>{}).lines.map(stripTerminalSequences);
+  expect(lines.some(line=>line.includes("fetched 2026-09-20 10:00 (3 h ago)"))).toBe(true);
+  expect(detail.projectedSelectedText).not.toContain("ago");
+ }finally{setCapabilities(caps);}
+});

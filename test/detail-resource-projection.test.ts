@@ -9,11 +9,10 @@ import { sanitizeDynamicText } from "../src/terminal";
 import { OUTLINER_PROTOCOL_VERSION, type Block } from "../src/types";
 
 // Fictional tickets in project ACME.
-const now = Date.parse("2026-09-20T12:00:00.000Z");
 
 function ticket(overrides: Partial<ResourceProjection> & Pick<ResourceProjection, "anchor">): ResourceProjection {
   return {
-    provider: "jira", propertyKey: "jira", options: { unknown: [] }, status: "ready",
+    provider: "jira", label: "Jira", propertyKey: "jira", options: { unknown: [] }, status: "ready",
     key: "ACME-1", resourceId: "11111111-1111-4111-8111-111111111111", summary: "Rollout checklist",
     fields: [{ label: "Status", value: "In progress" }], fetchedAt: "2026-09-20T11:00:00.000Z",
     ...overrides,
@@ -50,19 +49,18 @@ test("a projection before an embed keeps authored lines mapped through both", as
   const text = "Subject ACME-1\njira::\n!((embedded-target-1))\nTail";
   const projected = await projectDetailRead(
     requester([ticket({ anchor: { kind: "directive", line: 1, start: 15, end: 21 } })], [embedded]),
-    text, { hostBlockId: "host-block-1", hostRevision: 1, now },
+    text, { hostBlockId: "host-block-1", hostRevision: 1 },
   );
   const lines = projected.text.split("\n");
   expect(lines.slice(0, 2)).toEqual(["Subject ACME-1", "jira::"]);
   expect(lines[2]).toContain("- Jira [ACME-1]");
   expect(lines[3]).toBe("  Status: In progress");
-  expect(lines[4]).toStartWith("  fetched ");
-  expect(lines[4]).toContain("(1 h ago)");
+  expect(lines[4]).toMatch(/^  fetched \d{4}-\d\d-\d\d \d\d:\d\d$/);
   expect(lines[5]).toBe("");
   expect(lines[6]).toBe("Embedded block: ((embedded-target-1))");
   const embed = projected.embedRanges.find(range => !range.inserted)!;
   const inserted = projected.embedRanges.find(range => range.inserted)!;
-  expect(inserted).toEqual({ startLine: 2, endLine: 4, inserted: { afterSourceLine: 1, lineCount: 4 } });
+  expect(inserted).toMatchObject({ startLine: 2, endLine: 4, inserted: { afterSourceLine: 1, lineCount: 4 } });
   expect(embed.startLine).toBe(6);
   // Authored line 2 is the embed token; authored line 3 follows the expanded embed.
   expect(projectedSourceLine(text, projected.embedRanges, 1)).toBe(1);
@@ -74,7 +72,7 @@ test("a ticket page shows the ticket under its subject, above local notes, with 
   const text = "Rollout ticket [jira::ACME-2]\n[owner::me]\n\nLocal notes";
   const projected = await projectDetailRead(
     requester([ticket({ key: "ACME-2", anchor: { kind: "page", line: 1, start: 30, end: 41 } })]),
-    text, { hostBlockId: "page-block-1", hostRevision: 1, now },
+    text, { hostBlockId: "page-block-1", hostRevision: 1 },
   );
   // Generated text adds no property tokens to the note.
   expect(parsePropertyRecords(projected.text).map(record => record.key)).toEqual(["jira", "owner"]);
@@ -95,24 +93,57 @@ test("each status renders its reason, and generated text cannot become syntax", 
   expect(resourceProjectionLines(ticket({
     anchor, status: "not-registered", resourceId: undefined, key: "ACME-3", summary: undefined, fields: [],
     reason: "ACME-3 is not registered yet. Open this block's authored links and press Enter on ACME-3",
-  }), now)).toEqual([
+  }))).toEqual([
     "- Jira ACME-3 · not registered",
     "  ACME-3 is not registered yet. Open this block's authored links and press Enter on ACME-3",
   ]);
   expect(resourceProjectionLines(ticket({
     anchor, status: "ambiguous", key: undefined, resourceId: undefined, candidates: ["ACME-4", "ACME-5"], reason: "2 tickets", fields: [],
-  }), now)[0]).toBe("- Jira · ambiguous: ACME-4, ACME-5");
-  expect(resourceProjectionLines(ticket({ anchor, status: "no-key", key: undefined, resourceId: undefined, reason: "No key", fields: [] }), now))
-    .toEqual(["- Jira · no ticket key found", "  No key"]);
-  const compact = resourceProjectionLines(ticket({ anchor, options: { compact: true, comments: 5, unknown: ["--wat"] } }), now);
+  }))[0]).toBe("- Jira · ambiguous: ACME-4, ACME-5");
+  expect(resourceProjectionLines(ticket({ anchor, status: "no-key", key: undefined, resourceId: undefined, reason: "No key", fields: [] })))
+    .toEqual(["- Jira · no key found", "  No key"]);
+  const compact = resourceProjectionLines(ticket({ anchor, options: { compact: true, comments: 5, unknown: ["--wat"] } }));
   expect(compact).toHaveLength(3);
   expect(compact[0]).toContain("· fetched ");
   expect(compact[1]).toContain("Comments are not stored yet");
   expect(compact[2]).toBe("  unknown option --wat");
-  const stale = resourceProjectionLines(ticket({ anchor, status: "stale", reason: "Showing the stored copy; the last refresh failed" }), now);
+  const stale = resourceProjectionLines(ticket({ anchor, status: "stale", reason: "Showing the stored copy; the last refresh failed" }));
   expect(stale.at(-1)).toContain("last refresh failed");
   // A hostile summary produces no property, hashtag or block reference.
-  const hostile = resourceProjectionLines(ticket({ anchor, summary: "[status::done] #urgent ((abcdefgh-1234))" }), now).join("\n");
+  const hostile = resourceProjectionLines(ticket({ anchor, summary: "[status::done] #urgent ((abcdefgh-1234))" })).join("\n");
   expect(parsePropertyRecords(hostile)).toEqual([]);
   expect(hostile).not.toContain("((");
+});
+
+test("a failing projection read leaves the note as authored, and notes without provider lines never ask", async () => {
+  const text = "Subject ACME-1\njira::\nTail";
+  const calls: string[] = [];
+  const failing = (failOn: string) => ({
+    async request<T>(input: RequestInput): Promise<T> {
+      calls.push(input.action);
+      if (input.action === failOn) throw new Error(`${failOn} failed`);
+      if (input.action === "ping") {
+        return { status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION, capabilities: ["resources.projection"] } as T;
+      }
+      throw new Error(`Unexpected action: ${input.action}`);
+    },
+  });
+  for (const failOn of ["ping", "resources.projection.read"]) {
+    const projected = await projectDetailRead(failing(failOn), text, { hostBlockId: `host-${failOn}`, hostRevision: 1 });
+    expect(projected.text).toBe(text);
+    expect(projected.embedRanges).toEqual([]);
+  }
+  calls.length = 0;
+  const plain = await projectDetailRead(failing("ping"), "Plain note ACME-1", { hostBlockId: "host-plain", hostRevision: 1 });
+  expect(plain.text).toBe("Plain note ACME-1");
+  expect(calls).toEqual([]);
+});
+
+test("a status this client does not know renders generically with its reason", () => {
+  const lines = resourceProjectionLines({ ...ticket({ anchor: { kind: "directive", line: 0, start: 0, end: 6 } }),
+    status: "resolving" as ResourceProjection["status"], summary: undefined, reason: "Registering ACME-1" });
+  expect(lines).toEqual([
+    "- Jira [ACME-1](pi-outliner://resource/11111111-1111-4111-8111-111111111111) · resolving",
+    "  Registering ACME-1",
+  ]);
 });

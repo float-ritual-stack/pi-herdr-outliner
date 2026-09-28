@@ -500,16 +500,19 @@ Click a resolved block row's disclosure triangle or press Right to inspect its o
   - `[label](pi-outliner://resource/<resource-uuid>)` remains the canonical
     syntax for an already cataloged Resource.
 
-  A `jira::` line shows the ticket's stored details under it in Detail. With
-  no key after `::`, the ticket is the nearest one in context: a key on the
-  line, the nearest line above it, the block's own `[jira::…]` property, the
-  block's first line, then its ancestors. Two different keys at the nearest
-  level are reported rather than guessed. The floatty form `- jira::` works
+  A `jira::` line shows the ticket's stored details under it in Detail (a
+  *resource projection*; Jira tickets are the first kind). With no key after
+  `::`, the ticket is the nearest one in context: a key on the line, the nearest
+  line above it within its section, the block's own `[jira::…]` property, the
+  block's first line, then its ancestors. Keys in code or `<!-- literal -->`
+  regions do not count. Two different keys at the nearest level are reported
+  rather than guessed. The floatty form `- jira::` works
   too. `--compact` shows one line. `--comments` and `--full` are accepted for
   later slices: comments are not stored yet, and the description stays in the
   opened Resource. A block with a `[jira::KEY]`
   property shows its ticket at the top of the body. The region is read-only
-  and shows when the details were fetched. It never registers or fetches: an
+  and shows when the details were fetched; Tab focuses its key and Enter (or a
+  click) opens the Resource. Backlink Peek and Goto previews show it too. It never registers or fetches: an
   unregistered ticket shows how to register it, and `r` in the opened Resource
   still refreshes explicitly. `bun run cli ticket <block-uuid>` returns the same
   projection to agents.

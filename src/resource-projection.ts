@@ -1,15 +1,16 @@
 import {
-  blockPropertyKeys,
-  resolveContextKey,
+  createContextResolver,
   subjectLineIndex,
   type ContextBlock,
   type ContextKeyMatcher,
+  type ContextResolution,
   type ContextResolutionStep,
 } from "./context-resolution";
 import { parsePropertyRecords } from "./properties";
 import {
   providerKeyOccurrences,
   resourceDirectiveOccurrences,
+  resourceDirectiveProvider,
   RESOURCE_DIRECTIVE_PROVIDERS,
   type ResourceDirectiveOptions,
   type ResourceDirectiveProvider,
@@ -19,10 +20,12 @@ import type { ResourceDescription, ResourceSource } from "./resources";
 import type { Block } from "./types";
 
 /**
- * `resources.projection.read`: a ticket's stored details for a provider line
- * (`jira::`) or a ticket page, found from context. It reads only what the
- * catalog already stores. It never registers, refreshes or contacts a
- * provider; only an explicit refresh fetches.
+ * `resources.projection.read`: a resource projection is a Resource's stored
+ * details shown where a provider line (`jira::`) or a block's own provider
+ * property names it, with the key found from context. A Jira ticket is the
+ * first kind. It reads only what the catalog already stores. It never
+ * registers, refreshes or contacts a provider; only an explicit refresh
+ * fetches.
  */
 
 export type ResourceProjectionStatus =
@@ -56,8 +59,11 @@ export interface ResourceProjectionField {
 export interface ResourceProjection {
   readonly anchor: ResourceProjectionAnchor;
   readonly provider: ResourceDirectiveProvider["provider"];
+  /** How readers name this kind of resource, e.g. "Jira". */
+  readonly label: string;
   readonly propertyKey: string;
   readonly options: ResourceDirectiveOptions;
+  /** Clients render a status they do not know generically, with its reason. */
   readonly status: ResourceProjectionStatus;
   /** Why the status is not `ready`, in words for the reader. */
   readonly reason?: string;
@@ -72,7 +78,7 @@ export interface ResourceProjection {
   readonly resourceId?: string;
   readonly sourceId?: string;
   readonly summary?: string;
-  /** Snapshot metadata in provider order, status and assignee first. */
+  /** Snapshot metadata the provider allows, in the provider's order. */
   readonly fields: readonly ResourceProjectionField[];
   readonly updatedAt?: string;
   readonly fetchedAt?: string;
@@ -104,7 +110,6 @@ const MAX_PROJECTIONS = 16;
 const MAX_FIELDS = 8;
 const MAX_FIELD_UNITS = 160;
 const MAX_TEXT_UNITS = 65_536;
-const LEADING_FIELDS = ["status", "assignee"];
 
 function bounded(value: string): string {
   const single = value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
@@ -116,32 +121,24 @@ function label(key: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-function projectionFields(metadata: Readonly<Record<string, string | readonly string[] | null>>): ResourceProjectionField[] {
-  const entries = Object.entries(metadata).filter(([key]) => key !== "key");
-  entries.sort(([left], [right]) => {
-    const rank = (key: string) => {
-      const index = LEADING_FIELDS.indexOf(key.toLowerCase());
-      return index < 0 ? LEADING_FIELDS.length : index;
-    };
-    return rank(left) - rank(right);
-  });
-  return entries.flatMap(([key, value]) => {
+function projectionFields(
+  provider: ResourceDirectiveProvider,
+  metadata: Readonly<Record<string, string | readonly string[] | null>>,
+): ResourceProjectionField[] {
+  const values = new Map(Object.entries(metadata).map(([key, value]) => [key.toLowerCase(), value]));
+  return provider.fields.flatMap((key) => {
+    const value = values.get(key);
     const text = Array.isArray(value) ? value.join(", ") : typeof value === "string" ? value : "";
     return text.trim() ? [{ label: label(key), value: bounded(text) }] : [];
   }).slice(0, MAX_FIELDS);
 }
 
-/** Keys count in context only when a Source of this provider claims their project. */
+/** Keys count in context only when a Source of this provider claims them. */
 function contextMatcher(provider: ResourceDirectiveProvider, sources: readonly ResourceSource[]): ContextKeyMatcher {
-  const projects = sources.flatMap((source) =>
-    source.provider === provider.provider && "project" in source.boundary
-      ? [`${String(source.boundary.project)}-`]
-      : []
-  );
   return {
     propertyKey: provider.propertyKey,
     keysIn: (text) => providerKeyOccurrences(provider, text)
-      .filter((occurrence) => projects.some((prefix) => occurrence.key.startsWith(prefix))),
+      .filter((occurrence) => sources.some((source) => provider.claims(source, occurrence.key))),
     keyFromProperty: (value) => {
       const key = value.trim().toUpperCase();
       return provider.keyPattern.test(key) ? key : null;
@@ -178,10 +175,31 @@ function lineRange(text: string, line: number): { start: number; end: number } {
   return { start, end };
 }
 
-type Base = Pick<ResourceProjection, "anchor" | "provider" | "propertyKey" | "options">;
+type Base = Pick<ResourceProjection, "anchor" | "provider" | "label" | "propertyKey" | "options">;
 
+function baseFor(provider: ResourceDirectiveProvider, anchor: ResourceProjectionAnchor, options: ResourceDirectiveOptions): Base {
+  return { anchor, provider: provider.provider, label: provider.label, propertyKey: provider.propertyKey, options };
+}
+
+/** One unreadable stored copy makes its own projection unavailable, not the whole read. */
 function keyedProjection(
   source: ResourceProjectionDataSource,
+  provider: ResourceDirectiveProvider,
+  base: Base,
+  key: string,
+  resolvedFrom: ResourceProjection["resolvedFrom"],
+): ResourceProjection {
+  try {
+    return storedProjection(source, provider, base, key, resolvedFrom);
+  } catch {
+    return { ...base, key, ...(resolvedFrom ? { resolvedFrom } : {}), fields: [],
+      status: "unavailable", reason: "Stored copy unreadable" };
+  }
+}
+
+function storedProjection(
+  source: ResourceProjectionDataSource,
+  provider: ResourceDirectiveProvider,
   base: Base,
   key: string,
   resolvedFrom: ResourceProjection["resolvedFrom"],
@@ -229,7 +247,7 @@ function keyedProjection(
       : {}),
     key: document.sourceSnapshot.locator,
     summary: bounded(document.title),
-    fields: projectionFields(document.metadata),
+    fields: projectionFields(provider, document.metadata),
     ...(updatedAt ? { updatedAt } : {}),
     fetchedAt: document.sourceSnapshot.fetchedAt,
     externalUrl: document.externalUrl,
@@ -251,87 +269,54 @@ export function readResourceProjections(
   }
 
   const sources = source.resources.listSources();
-  const matchers = new Map(RESOURCE_DIRECTIVE_PROVIDERS.map((provider) =>
-    [provider.propertyKey, contextMatcher(provider, sources)] as const));
   const self: ContextBlock = { id: block.id, text: block.text };
   const ancestors: ContextBlock[] = [...context.ancestors].reverse()
     .map((ancestor) => ({ id: ancestor.id, text: ancestor.text }));
+  // One resolver per provider parses this block once, however many lines it resolves.
+  const resolvers = new Map(RESOURCE_DIRECTIVE_PROVIDERS.map((provider) =>
+    [provider.propertyKey, createContextResolver({ block: self, ancestors, matcher: contextMatcher(provider, sources) })] as const));
   // Only the first MAX_PROJECTIONS provider lines are resolved; the rest would be dropped anyway.
   const directives = resourceDirectiveOccurrences(block.text)
     .filter((directive) => request.line === undefined || directive.line === request.line)
     .slice(0, MAX_PROJECTIONS);
   const projections: ResourceProjection[] = [];
   const directiveKeys = new Set<string>();
-
-  for (const directive of directives) {
-    const provider = RESOURCE_DIRECTIVE_PROVIDERS.find((candidate) => candidate.propertyKey === directive.propertyKey)!;
-    const base: Base = {
-      anchor: { kind: "directive", line: directive.line, start: directive.start, end: directive.end },
-      provider: provider.provider,
-      propertyKey: provider.propertyKey,
-      options: directive.options,
-    };
-    const resolution = resolveContextKey({
-      block: self,
-      line: directive.line,
-      ancestors,
-      matcher: matchers.get(provider.propertyKey)!,
-      ...(directive.explicitKey ? { explicitKey: directive.explicitKey } : {}),
-    });
-    if (resolution.kind === "none") {
-      projections.push({
-        ...base,
-        status: "no-key",
-        reason: "No ticket key on this line, above it, in this block or in its ancestors. Write the key after jira::",
-        fields: [],
-      });
-      continue;
+  const contextual = (provider: ResourceDirectiveProvider, base: Base, resolution: ContextResolution): ResourceProjection => {
+    if (resolution.kind === "resolved") {
+      directiveKeys.add(resolution.key);
+      return keyedProjection(source, provider, base, resolution.key, resolution.site);
     }
     if (resolution.kind === "ambiguous") {
-      projections.push({
-        ...base,
-        status: "ambiguous",
-        candidates: resolution.keys,
-        resolvedFrom: resolution.site,
-        reason: `${resolution.keys.length} tickets at the nearest level: ${resolution.keys.join(", ")}. Write the key after jira::`,
-        fields: [],
-      });
-      continue;
+      return { ...base, status: "ambiguous", candidates: resolution.keys, resolvedFrom: resolution.site, fields: [],
+        reason: `${resolution.keys.length} ${provider.label} keys at the nearest level: ${resolution.keys.join(", ")}. Write the key after ${provider.propertyKey}::` };
     }
-    directiveKeys.add(resolution.key);
-    projections.push(keyedProjection(source, base, resolution.key, resolution.site));
+    return { ...base, status: "no-key", fields: [],
+      reason: `No ${provider.label} key on this line, above it, in this block or in its ancestors. Write the key after ${provider.propertyKey}::` };
+  };
+
+  for (const directive of directives) {
+    if (projections.length >= MAX_PROJECTIONS) break;
+    const provider = resourceDirectiveProvider(directive.propertyKey)!;
+    const base = baseFor(provider, { kind: "directive", line: directive.line, start: directive.start, end: directive.end }, directive.options);
+    projections.push(contextual(provider, base, resolvers.get(provider.propertyKey)!.resolve(directive.line, directive.explicitKey)));
   }
 
   if (request.line === undefined) {
-    // A ticket page shows its ticket at the top of the body, unless a provider
-    // line in the page already shows that ticket where the author placed it.
+    // A page shows its resource at the top of the body, unless a provider line
+    // in the page already shows that resource where the author placed it.
+    const line = pageAnchorLine(block.text);
     for (const provider of RESOURCE_DIRECTIVE_PROVIDERS) {
-      const matcher = matchers.get(provider.propertyKey)!;
-      const line = pageAnchorLine(block.text);
-      for (const key of blockPropertyKeys(block.text, matcher)) {
-        if (directiveKeys.has(key)) continue;
-        projections.push(keyedProjection(source, {
-          anchor: { kind: "page", line, ...lineRange(block.text, line) },
-          provider: provider.provider,
-          propertyKey: provider.propertyKey,
-          options: { unknown: [] },
-        }, key, { step: "block-property", blockId: block.id, line }));
+      for (const key of resolvers.get(provider.propertyKey)!.ownPropertyKeys()) {
+        if (directiveKeys.has(key) || projections.length >= MAX_PROJECTIONS) continue;
+        projections.push(keyedProjection(source, provider,
+          baseFor(provider, { kind: "page", line, ...lineRange(block.text, line) }, { unknown: [] }),
+          key, { step: "block-property", blockId: block.id, line }));
       }
     }
   } else if (directives.length === 0) {
     const provider = RESOURCE_DIRECTIVE_PROVIDERS[0]!;
-    const base: Base = {
-      anchor: { kind: "line", line: request.line, ...lineRange(block.text, request.line) },
-      provider: provider.provider,
-      propertyKey: provider.propertyKey,
-      options: { unknown: [] },
-    };
-    const resolution = resolveContextKey({ block: self, line: request.line, ancestors, matcher: matchers.get(provider.propertyKey)! });
-    if (resolution.kind === "resolved") projections.push(keyedProjection(source, base, resolution.key, resolution.site));
-    else if (resolution.kind === "ambiguous") {
-      projections.push({ ...base, status: "ambiguous", candidates: resolution.keys, resolvedFrom: resolution.site,
-        reason: `${resolution.keys.length} tickets at the nearest level: ${resolution.keys.join(", ")}`, fields: [] });
-    } else projections.push({ ...base, status: "no-key", reason: "No ticket key on this line or in its context", fields: [] });
+    const base = baseFor(provider, { kind: "line", line: request.line, ...lineRange(block.text, request.line) }, { unknown: [] });
+    projections.push(contextual(provider, base, resolvers.get(provider.propertyKey)!.resolve(request.line)));
   }
   return result(projections.sort((left, right) => left.anchor.line - right.anchor.line));
 }

@@ -607,7 +607,7 @@ Do not leave older editors running across this upgrade.
 - bounded search: `blocks.query` (optional `fields` projection), `tree.query`, `tree.focus`
 - saved-view evaluation: `views.read`
 - resource identity and documents: `resource-sources.create | list | get` and `resources.intern | intern-filesystem | get | relocate | describe | open | refresh`
-- ticket projections (capability `resources.projection`): `resources.projection.read` returns stored details for a block's provider lines and ticket-page property; it never registers, refreshes or contacts a provider
+- resource projections (capability `resources.projection`): `resources.projection.read` returns stored details for a block's provider lines and ticket-page property; it never registers, refreshes or contacts a provider
 - resource retention: `resources.retention.get | configure | inspect | pin | unpin | reference | unreference` and explicit `resources.collect` eviction/purge passes
 - computed producers: `computed.invocations.create`, `computed.invocations.revise`, `computed.handlers.resolve`, `computed.executions.list`, and async `computed.execute`
 - browsing contexts and Tree previews: `browsing-context.get`, `browsing-context.publish`
@@ -1008,30 +1008,50 @@ deleted source inclusion is explicit. `references.backlinks` is the current
 delivery seam; a later typed block-set source must call this same primitive
 rather than implement a second resolver.
 
+A **resource projection** is a Resource's stored details shown where a note
+names it: under a provider line, or at the top of a block whose own provider
+property names it. A Jira ticket under a `jira::` line is the first kind.
+
 [`context-resolution.ts`](../src/context-resolution.ts) is the first slice of
 PIE-408's context-scoped resolution: "the nearest key" for a line of a block.
 It walks nearest first (explicit key, the line, the nearest earlier line at the
 same or a shallower indent, the block's own property, its subject line, then
 ancestors) and stops at the first level with a key; two different keys at that
-level are reported as ambiguous. It is provider-agnostic: a matcher supplies
-the property key, the key grammar and any claim filter. PIE-445's ticket
-projections are its first caller; PIE-408's soft links must reuse it rather than
-add a second resolver.
+level are reported as ambiguous. Each earlier line it passes narrows the indent,
+so the walk leaves a section through its heading instead of entering an earlier
+section's items. Keys inside code spans, fences and `<!-- literal -->` regions do
+not count (the property parser's literal ranges); indented lines are prose.
+It is provider-agnostic: a matcher supplies the property key, the key grammar
+and the claim filter. A resolver parses its block once per read and reads each
+ancestor only through its subject line and preamble. Resource projections are
+its first caller; PIE-408's soft links must reuse it rather than add a second
+resolver. Its current shape is narrower than soft links will need: it resolves
+a **line, not an offset**, and reads **only block-scope properties**, not line or
+inline ones. Reshape it (offsets, line/inline properties) when soft links arrive.
 
 Provider lines (`jira::`, `jira:: --comments`, floatty's `- jira:: --comments`,
 `jira:: KEY --full`) are recognized by `parsePropertyDirectiveLines` in
-[`properties.ts`](../src/properties.ts) for provider keys only, from the table in
-[`resource-references.ts`](../src/resource-references.ts). General property
-parsing is unchanged: an empty `status::` and a bulleted `- status:: done` stay
-prose, and the parser version does not change. A preamble `jira:: KEY` remains
-the block's own property (a ticket page).
+[`properties.ts`](../src/properties.ts) for provider keys only, from
+`RESOURCE_DIRECTIVE_PROVIDERS` in
+[`resource-references.ts`](../src/resource-references.ts). Each entry supplies
+the property key, a reader label, the key grammar, a Source claim function and
+the snapshot fields a projection may show; slice 5 of PIE-445 derives the table
+from the extension registry. General property parsing is unchanged: an empty
+`status::` and a bulleted `- status:: done` stay prose, and the parser version
+does not change. A preamble `jira:: KEY` remains the block's own property.
 [`resource-projection.ts`](../src/resource-projection.ts) serves
 `resources.projection.read` from the catalog's stored snapshots: `ready`,
 `stale` (the last refresh failed), `not-fetched`, `not-registered`,
-`ambiguous`, `no-key` or `unavailable`, each with a reason. Detail inserts the
-projection as a generated, read-only region after its anchor line; a ticket
-page's projection follows its subject and preamble, unless a provider line in
-the page already shows that ticket.
+`ambiguous`, `no-key` or `unavailable` (including "stored copy unreadable" for
+one bad snapshot), each with a reason; clients render a status they do not know
+generically. Detail inserts each projection as a generated, read-only region
+after its anchor line; a page's projection follows its subject and preamble,
+unless a provider line in the page already shows that Resource. The region's
+key is a `resource` preview region: Tab focuses it, Enter or a click opens the
+Resource. The reader paints the fetched time's relative age at render time, so
+projected text stays stable across re-reads. Every surface that projects
+through `projectDetailRead` (Detail, Backlink Peek, Goto previews) shows them;
+any failure leaves the note as authored.
 
 Work-ID allocation is workspace-scoped and transactional. A one-time v9 migration adopts a clean existing reservation prefix; an empty or ambiguous legacy workspace requires explicit `work-ids.configure`, and later manual values never auto-configure on restart. Prefix configuration can be corrected until the chosen prefix owns an immutable reservation. The allocator tracks the next number monotonically and formats a minimum three-digit suffix. Allocation uses optimistic block concurrency, appends canonical text, rebuilds the property/address indexes, and reserves the ID with its owning UUID in one transaction. Canonical manual declarations for the configured prefix pass through the same ownership, sequence, and never-reuse enforcement. Malformed, noncanonical, duplicate legacy, and out-of-prefix values remain indexed inert metadata rather than blocking startup or text saves. Existing valid legacy Work-ID addresses for other prefixes are retained, but bare Work-ID linking and new allocation are scoped to the configured prefix.
 
@@ -1453,7 +1473,7 @@ src/virtual-branches.ts       projection configuration and rows
 src/detail-main.ts            Detail implementation selector
 src/outliner-links.ts          private URI codec and safe Tree/Markdown link generation
 src/context-resolution.ts     context-scoped "nearest key" resolution (PIE-408, first slice)
-src/resource-projection.ts    stored ticket details for provider lines (`resources.projection.read`)
+src/resource-projection.ts    resource projections: stored details for provider lines (`resources.projection.read`)
 src/herdr-link-open.ts         Herdr link-handler action using shared goto/reveal
 src/herdr-comment-selection.ts native rendered-selection validation and exact-Detail dispatch
 src/detail-controller.ts      Detail behavior and effects

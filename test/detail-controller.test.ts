@@ -6182,19 +6182,37 @@ describe("faceted backlinks in Detail", () => {
   });
 });
 
-describe("ticket projections in Detail", () => {
+describe("resource projections in Detail", () => {
+  test("a projection without a Resource (no key, ambiguous, not registered) repaints on any catalog change", async () => {
+    for (const status of ["no-key", "ambiguous", "not-registered"] as const) {
+      const selected = makeBlock({ text: "Vendor call\n- jira::" });
+      const harness = createHarness(selected, null, undefined, async (text) => ({
+        text, provenance: generatedDocument(text, "test resource projection"), embeds: [], embedRanges: [],
+        resourceProjections: [{ anchor: { kind: "directive" as const, line: 1, start: 12, end: 20 }, provider: "jira" as const,
+          label: "Jira", propertyKey: "jira", options: { unknown: [] }, status, fields: [] }],
+      }));
+      await harness.controller.initialize();
+      await Promise.resolve();
+      const reads = harness.calls.projectedReads.length;
+      // A new Source can make a key claimable; a new Resource can register it.
+      await harness.controller.onServiceEvent({ ...event("resource-catalog"), sourceId: "source-new" }, viewport);
+      await Promise.resolve();
+      expect(harness.calls.projectedReads.length).toBeGreaterThan(reads);
+    }
+  });
+
   test("a resource change to a projected ticket repaints the note; unrelated changes do not", async () => {
     const selected = makeBlock({ text: "Vendor call ACME-60\n- jira::" });
     let summary = "Before refresh";
     const projection = () => ({
       anchor: { kind: "directive" as const, line: 1, start: 22, end: 28 },
-      provider: "jira" as const, propertyKey: "jira", options: { unknown: [] },
+      provider: "jira" as const, label: "Jira", propertyKey: "jira", options: { unknown: [] },
       status: "ready" as const, key: "ACME-60", resourceId: "resource-60", sourceId: "source-tickets",
       summary, fields: [],
     });
     const harness = createHarness(selected, null, undefined, async (text) => {
       const projected = `${text}\n- Jira ACME-60 · ${summary}`;
-      return { text: projected, provenance: generatedDocument(projected, "test ticket projection"), embeds: [],
+      return { text: projected, provenance: generatedDocument(projected, "test resource projection"), embeds: [],
         embedRanges: [{ startLine: 2, endLine: 2, inserted: { afterSourceLine: 1, lineCount: 1 } }],
         resourceProjections: [projection()] };
     });

@@ -6,7 +6,7 @@ import {DocumentFrame,type DocumentCell,type DocumentSelection} from './document
 import {annotationFrameCells,annotationFrameMatcher,annotationTargetMatcher} from './annotation-frame';
 import type {TuiCopySelection} from '@earendil-works/pi-tui/dist/tui-alt-screen';
 import {presentReaderHeadings, sanitizeReaderDocument} from './document-presentation';
-import {concatDocuments, documentProvenanceKey, generatedDocument, observeDocument, sourceDocument, type MappedDocument, type ObservedDocument} from './document-provenance';
+import {concatDocuments, documentProvenanceKey, generatedDocument, observeDocument, sliceDocument, sourceDocument, type MappedDocument, type ObservedDocument} from './document-provenance';
 import type {ReaderDensity} from "./reader-chrome";
 import {checklistFoldIdentities, checklistControls, embeddedChecklistControls, type ChecklistControl} from "./checklist-controls";
 import { parsePropertyRecords } from "./properties";
@@ -38,7 +38,7 @@ import {
   type DetailCalloutRegion,
 } from "./detail-callouts";
 import type { DetailCalloutTheme } from "./detail-callout-theme";
-import { detailEmbedIds } from "./detail-embeds";
+import { detailEmbedIds, relativeAge } from "./detail-embeds";
 import { linkOutlinerDocument, linkOutlinerMarkdown, outlinerLinkUri, resourceOccurrenceLink, resourceOccurrenceLinks } from "./outliner-links";
 import {
   backlinkGroupRegionId,
@@ -113,6 +113,35 @@ function embedSourceLines(text: string): number[] {
     cursor = start + id.length + 3;
   }
   return lines;
+}
+
+function projectionAge(range: DetailState["embedRanges"][number], now: number): string {
+  const resource = range.resource;
+  return resource?.fetchedAt && resource.fetchedLine !== undefined ? relativeAge(resource.fetchedAt, now) : "";
+}
+
+/**
+ * Paints each resource projection's age after its fetched time. The age is
+ * never part of projected text, so re-reads compare equal and folds keep
+ * their identity; only the rendered document changes as time passes.
+ */
+function withProjectionAges(document: MappedDocument, ranges: DetailState["embedRanges"], now: number): MappedDocument {
+  const targets = ranges.flatMap(range => {
+    const age = projectionAge(range, now);
+    return age ? [{ line: range.startLine + range.resource!.fetchedLine!, age }] : [];
+  }).sort((left, right) => right.line - left.line);
+  if (!targets.length) return document;
+  const starts = sourceLineStarts(document.text);
+  let aged = document;
+  for (const { line, age } of targets) {
+    const start = starts[line];
+    if (start === undefined) continue;
+    const newline = document.text.indexOf("\n", start);
+    let end = newline < 0 ? document.text.length : newline;
+    if (end > start && document.text[end - 1] === "\r") end -= 1;
+    aged = concatDocuments([sliceDocument(aged, 0, end), generatedDocument(` (${age})`, "resource projection age"), sliceDocument(aged, end)]);
+  }
+  return aged;
 }
 
 export function projectedSourceLine(
@@ -409,13 +438,13 @@ export function renderDetailReadPreview(
       ? lineAfterMetadataRemoval(input.projectedText, projectedLine)
       : projectedLine;
   };
-  const document = renderPreviewDocument(
+  const document = withProjectionAges(renderPreviewDocument(
     source,
     projectedText,
     linksEnabled,
     input.workIdPrefix,
     input.sourceBlock?resourceOccurrenceLinks(input.sourceBlock,projectedText,renderedLineForAuthoredLine):new Map(),
-  );
+  ), embedRanges, Date.now());
   const documentText = document.text;
   const callouts = renderedAuthoredCallouts(
     parseDetailCallouts(input.canonicalText, calloutTheme),
@@ -1836,8 +1865,9 @@ export class DetailPiPreviewLayout extends VStack {
       ? 0
       : renderedLineForAuthoredLine(this.state.attentionRevealSourceLine);
 
+    const now = Date.now();
     const embedPresentation = `${this.state.embedBackgroundEnabled}:${
-      embedRanges.map((range) => `${range.startLine}-${range.endLine}:${range.source?.block.id}:${range.source?.block.revision}:${range.sources?.map(source=>`${source.block.id}:${source.block.revision}:${source.contentStartLine}`).join(';')}`).join(",")
+      embedRanges.map((range) => `${range.startLine}-${range.endLine}:${projectionAge(range, now)}:${range.source?.block.id}:${range.source?.block.revision}:${range.sources?.map(source=>`${source.block.id}:${source.block.revision}:${source.contentStartLine}`).join(';')}`).join(",")
     }`;
     const previousAuthoredCallouts = this.authoredCallouts;
     const authoredCallouts = previousAuthoredCallouts?.source === authoredCalloutSource
@@ -1889,10 +1919,11 @@ export class DetailPiPreviewLayout extends VStack {
               : new Map(),
           )
         : presentReaderHeadings(sanitizeReaderDocument(documentSource));
+      const agedDocument = withProjectionAges(document, embedRanges, now);
       const renderedDocument = this.draftProjectionError
-        ? concatDocuments([document,generatedDocument(`\n\n> Draft preview error: ${
+        ? concatDocuments([agedDocument,generatedDocument(`\n\n> Draft preview error: ${
           sanitizeMarkdownDocument(this.draftProjectionError).replace(/\r?\n/g, " ")
-        }`, 'draft preview failure')]) : document;
+        }`, 'draft preview failure')]) : agedDocument;
       const renderedText = renderedDocument.text;
       this.renderedCalloutRegions = renderedAuthoredCallouts(
         authoredCallouts.regions,
@@ -2027,6 +2058,7 @@ export class DetailPiPreviewLayout extends VStack {
     // Measure comment panels with OSC 8 geometry, as the document's own links are.
     const annotated=withInternalLinks(()=>this.annotationPreview.renderArrangement(contentWidth,true));
     const calloutRows=new Map<string,number>();
+    const projectedResources=new Set(this.state.embedRanges.flatMap(range=>range.resource?.resourceId?[outlinerLinkUri("resource",range.resource.resourceId)]:[]));
     for(const link of this.markdown.renderedLinks){
       if(link.uri.startsWith("pi-outliner-detail:")){
         const action=parsePreviewRegionActionUri(link.uri);
@@ -2043,8 +2075,10 @@ export class DetailPiPreviewLayout extends VStack {
         }
       }
       if(!/^(pi-outliner:|https?:)/.test(link.uri))continue;
-      const id=`body-link:${link.occurrenceId??`${link.uri}:${link.row}:${link.column}`}`;
-      if(!this.bodyLinks.has(id))this.bodyRegions.push({id,kind:"body-link",sourceSpan:null,parentId:null,childIds:[],focusable:true,disclosure:null,activation:{type:"link.open",uri:link.uri}});
+      // A resource projection's link is its region: Tab focuses it and Enter opens the Resource.
+      const resource=projectedResources.has(link.uri);
+      const id=`${resource?"resource":"body-link"}:${link.occurrenceId??`${link.uri}:${link.row}:${link.column}`}`;
+      if(!this.bodyLinks.has(id))this.bodyRegions.push({id,kind:resource?"resource":"body-link",sourceSpan:null,parentId:null,childIds:[],focusable:true,disclosure:null,activation:{type:"link.open",uri:link.uri}});
       const spans=this.bodyLinks.get(id)??[];
       spans.push({...link,row:annotated.mapMarkdownRow(link.row),column:link.column+contentWidth-annotated.contentWidth});
       this.bodyLinks.set(id,spans);
@@ -2081,7 +2115,7 @@ export class DetailPiPreviewLayout extends VStack {
       const calloutRow=calloutRows.get(region.id);
       return calloutRow!==undefined?arrangement.mapAuthoredRow(calloutRow):0;
     };
-    const ordered=[...regions.filter(region=>region.kind!=="body-link" && (region.kind !== "checklist" || this.bodyLinks.has(region.id))),...this.bodyRegions]
+    const ordered=[...regions.filter(region=>region.kind!=="body-link" && region.kind!=="resource" && (region.kind !== "checklist" || this.bodyLinks.has(region.id))),...this.bodyRegions]
       .map(region=>({region,row:row(region)})).sort((a,b)=>a.row-b.row).map(entry=>entry.region);
     if(this.options.setRegions)this.options.setRegions(ordered);
     else reconcilePreviewRegions(this.state.previewRegions,ordered, this.state.document.kind === 'loading' || (this.state.document.kind === 'ready' && this.state.readStatus === 'pending'));
@@ -2136,7 +2170,8 @@ export class DetailPiPreviewLayout extends VStack {
       case "checklist":
       case "document-fold":
       case "callout":
-      case "body-link": this.pendingBodyFocusScroll = true; break;
+      case "body-link":
+      case "resource": this.pendingBodyFocusScroll = true; break;
       case "property-entry":
       case "property-inspector": this.pendingPropertySelectionScroll = true; break;
       case "annotation":

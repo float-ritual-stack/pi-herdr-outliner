@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { protectedCodeRanges } from "./markdown-code-ranges";
-import { parsePropertyDirectiveLines, parsePropertyRecords } from "./properties";
+import { parsePropertyDirectiveLines, parsePropertyRecords, scanPropertyLiteralRanges } from "./properties";
+import type { ResourceSource } from "./resources";
 
 export type AuthoredResourceReference =
   | { readonly kind: "resource"; readonly resourceId: string }
@@ -93,17 +93,26 @@ export function authoredResourceReferenceKey(reference: AuthoredResourceReferenc
 export interface ResourceDirectiveProvider {
   readonly provider: "jira";
   readonly propertyKey: string;
+  /** How readers name one of these resources, e.g. "Jira". */
+  readonly label: string;
   /** One whole key, anchored. */
   readonly keyPattern: RegExp;
   /** The same grammar unanchored, with the boundaries a key needs in prose. */
   readonly keyInProsePattern: RegExp;
+  /** Whether a configured Source of this provider owns the key. */
+  claims(source: ResourceSource, key: string): boolean;
+  /** Snapshot metadata a projection may show, in display order. Others stay in the Resource. */
+  readonly fields: readonly string[];
 }
 
 export const RESOURCE_DIRECTIVE_PROVIDERS: readonly ResourceDirectiveProvider[] = [{
   provider: "jira",
   propertyKey: "jira",
+  label: "Jira",
   keyPattern: JIRA_KEY_PATTERN,
   keyInProsePattern: /(?<![\p{L}\p{N}_-])[A-Z][A-Z0-9_]*-[1-9][0-9]*(?![\p{L}\p{N}_-])/gu,
+  claims: (source, key) => source.provider === "jira" && key.startsWith(`${source.boundary.project}-`),
+  fields: ["status", "assignee", "type", "priority", "labels"],
 }];
 
 const DIRECTIVE_KEYS: ReadonlySet<string> = new Set(
@@ -215,12 +224,17 @@ export interface ProviderKeyOccurrence {
   readonly end: number;
 }
 
-/** Key-shaped tokens in prose, outside code. Callers apply their own claim filter. */
+/**
+ * Key-shaped tokens in prose, outside the ranges the property parser treats as
+ * literal: code spans, fences and `<!-- literal -->` regions. Indented lines
+ * are prose here (authors indent notes heavily). Callers apply their own claim
+ * filter.
+ */
 export function providerKeyOccurrences(
   provider: ResourceDirectiveProvider,
   text: string,
 ): ProviderKeyOccurrence[] {
-  const code = protectedCodeRanges(text);
+  const code = scanPropertyLiteralRanges(text);
   return [...text.matchAll(new RegExp(provider.keyInProsePattern.source, provider.keyInProsePattern.flags))]
     .filter((match) => !code.some((range) => range.start < match.index + match[0].length && match.index < range.end))
     .map((match) => ({ key: match[0], start: match.index, end: match.index + match[0].length }));

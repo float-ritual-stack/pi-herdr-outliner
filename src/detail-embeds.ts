@@ -70,11 +70,13 @@ export interface DetailEmbedRange {
   source?: DetailEmbedSource;
   sources?: DetailEmbedSource[];
   /**
-   * A generated region inserted after an authored line (a ticket projection)
+   * A generated region inserted after an authored line (a resource projection)
    * rather than replacing an embed token. `lineCount` includes any separator
    * line after `endLine`, so authored-line mapping stays exact.
    */
   inserted?: { afterSourceLine: number; lineCount: number };
+  /** A resource projection's region: its focus target and the line the reader paints its age after. */
+  resource?: { resourceId?: string; fetchedAt?: string; fetchedLine?: number };
 }
 
 export interface DetailReadProjection {
@@ -82,7 +84,7 @@ export interface DetailReadProjection {
   provenance: MappedDocument;
   embeds: DetailEmbedState[];
   embedRanges: DetailEmbedRange[];
-  /** Ticket projections shown in this read, for change matching. Absent when none were read. */
+  /** Resource projections shown in this read, for change matching. Absent when none were read. */
   resourceProjections?: readonly ResourceProjection[];
 }
 
@@ -440,8 +442,6 @@ async function projectEmbed(
   }
 }
 
-const PROVIDER_LABELS: Readonly<Record<string, string>> = { jira: "Jira" };
-
 /** Generated text that no parser reads as a property, hashtag, reference or Markdown control. */
 function generatedInline(value: string): string {
   return value
@@ -452,7 +452,8 @@ function generatedInline(value: string): string {
     .trim();
 }
 
-function relativeAge(fromIso: string, now: number): string {
+/** "12 min ago": painted by the reader, never stored in projected text. */
+export function relativeAge(fromIso: string, now: number): string {
   const elapsed = now - Date.parse(fromIso);
   if (!Number.isFinite(elapsed)) return "";
   const minutes = Math.max(0, Math.floor(elapsed / 60_000));
@@ -470,49 +471,67 @@ function localTime(iso: string): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+const STATUS_LABELS: Readonly<Record<string, string>> = {
+  "not-fetched": "not fetched yet",
+  "not-registered": "not registered",
+  "no-key": "no key found",
+  unavailable: "unavailable",
+};
+
+export interface ResourceProjectionLayout {
+  lines: string[];
+  /** The line, within `lines`, that ends with the fetched time; the reader paints the age after it. */
+  fetchedLine?: number;
+}
+
 /**
- * The read-only lines Detail shows for one ticket projection. The service
- * decides the status and wording of reasons; Detail only lays them out.
+ * The read-only lines Detail shows for one resource projection. The service
+ * decides the status, label and reason wording; Detail only lays them out. A
+ * status this client does not know renders generically with its reason.
  */
-export function resourceProjectionLines(projection: ResourceProjection, now: number): string[] {
-  const provider = PROVIDER_LABELS[projection.provider] ?? projection.provider;
+export function resourceProjectionLayout(projection: ResourceProjection): ResourceProjectionLayout {
   const key = projection.key ? generatedInline(projection.key) : "";
   const head = projection.resourceId && key
     ? `[${key}](${outlinerLinkUri("resource", projection.resourceId)})`
     : key;
-  const title = [provider, head].filter(Boolean).join(" ");
+  const title = [generatedInline(projection.label ?? projection.provider), head].filter(Boolean).join(" ");
   const reason = projection.reason ? generatedInline(projection.reason) : "";
   const lines: string[] = [];
-  if (projection.status === "ready" || projection.status === "stale") {
-    const fetched = projection.fetchedAt
-      ? `fetched ${localTime(projection.fetchedAt)} (${relativeAge(projection.fetchedAt, now)})`
-      : "";
-    lines.push(`- ${title} · ${generatedInline(projection.summary ?? "")}${projection.options.compact && fetched ? ` · ${fetched}` : ""}`);
+  let fetchedLine: number | undefined;
+  if ((projection.status === "ready" || projection.status === "stale") && projection.summary !== undefined) {
+    const fetched = projection.fetchedAt ? `fetched ${localTime(projection.fetchedAt)}` : "";
+    lines.push(`- ${title} · ${generatedInline(projection.summary)}${projection.options.compact && fetched ? ` · ${fetched}` : ""}`);
+    if (projection.options.compact && fetched) fetchedLine = 0;
     if (!projection.options.compact) {
       const fields = projection.fields.map(field => `${generatedInline(field.label)}: ${generatedInline(field.value)}`);
       if (projection.updatedAt) fields.push(`Updated: ${localTime(projection.updatedAt)}`);
       if (fields.length) lines.push(`  ${fields.join(" · ")}`);
-      if (fetched) lines.push(`  ${fetched}`);
+      if (fetched) { fetchedLine = lines.length; lines.push(`  ${fetched}`); }
     }
     if (projection.status === "stale" && reason) lines.push(`  ${reason}`);
   } else {
-    const label: Record<Exclude<ResourceProjection["status"], "ready" | "stale">, string> = {
-      "not-fetched": "not fetched yet",
-      "not-registered": "not registered",
-      ambiguous: `ambiguous: ${(projection.candidates ?? []).map(generatedInline).join(", ")}`,
-      "no-key": "no ticket key found",
-      unavailable: "unavailable",
-    };
-    lines.push(`- ${title} · ${label[projection.status]}`);
+    const status = projection.status === "ambiguous"
+      ? `ambiguous: ${(projection.candidates ?? []).map(generatedInline).join(", ")}`
+      : STATUS_LABELS[projection.status] ?? generatedInline(String(projection.status));
+    lines.push(`- ${title} · ${status}`);
     if (reason) lines.push(`  ${reason}`);
   }
   if (projection.options.comments !== undefined) {
     lines.push("  Comments are not stored yet; --comments shows them once the provider returns them.");
   }
   for (const option of projection.options.unknown) lines.push(`  unknown option ${generatedInline(option)}`);
-  return lines;
+  return { lines, ...(fetchedLine !== undefined ? { fetchedLine } : {}) };
 }
 
+export function resourceProjectionLines(projection: ResourceProjection): string[] {
+  return resourceProjectionLayout(projection).lines;
+}
+
+/**
+ * Resource projections for a Detail read. Any failure, including an older or
+ * unreachable service, leaves the note as authored: a note without provider
+ * lines never gains a failure path, and one with them degrades like an embed.
+ */
 async function readDetailResourceProjections(
   requester: DetailEmbedRequester,
   text: string,
@@ -520,12 +539,15 @@ async function readDetailResourceProjections(
   revision: number | undefined,
 ): Promise<readonly ResourceProjection[] | null> {
   if (!mayHaveResourceProjections(text)) return null;
-  // An older service has no projection read; Detail then shows the note as before.
-  if (await serviceIncompatibility(requester, "resources.projection")) return null;
-  const read = await requester.request<ResourceProjectionReadResult>({ action: "resources.projection.read", blockId });
-  // A newer revision arrives with its own change event and read.
-  if (revision !== undefined && read.revision !== revision) return null;
-  return read.projections;
+  try {
+    if (await serviceIncompatibility(requester, "resources.projection")) return null;
+    const read = await requester.request<ResourceProjectionReadResult>({ action: "resources.projection.read", blockId });
+    // A newer revision arrives with its own change event and read.
+    if (revision !== undefined && read.revision !== revision) return null;
+    return read.projections;
+  } catch {
+    return null;
+  }
 }
 
 interface ProjectedBase {
@@ -535,14 +557,14 @@ interface ProjectedBase {
 }
 
 /**
- * Inserts each projection after its anchor line. `embedSourceLines[i]` is the
- * authored line of `embedRanges[i]`, so anchors map through expanded embeds.
+ * Inserts each projection after its anchor line, one range per projection.
+ * `embedSourceLines[i]` is the authored line of `embedRanges[i]`, so anchors
+ * map through expanded embeds.
  */
 function insertResourceProjections(
   base: ProjectedBase,
   embedSourceLines: readonly number[],
   projections: readonly ResourceProjection[],
-  now: number,
 ): ProjectedBase {
   const byLine = new Map<number, ResourceProjection[]>();
   for (const projection of projections) {
@@ -568,14 +590,15 @@ function insertResourceProjections(
     const newline = text.indexOf("\n", lineStart);
     const lineEnd = newline < 0 ? text.length : newline > lineStart && text[newline - 1] === "\r" ? newline - 1 : newline;
     const indent = /^[ \t]*/.exec(text.slice(lineStart, lineEnd))![0];
-    const regionLines = group.flatMap(projection => resourceProjectionLines(projection, now)).map(line => indent + line);
+    const layouts = group.map(projection => ({ projection, layout: resourceProjectionLayout(projection) }));
+    const regionLines = layouts.flatMap(({ layout }) => layout.lines.map(line => indent + line));
     // A blank separator keeps the next authored line out of the generated list item.
     const separated = newline >= 0 && text.slice(newline + 1).split("\n", 1)[0]!.trim().length > 0;
     const inserted = `\n${regionLines.join("\n")}${separated ? "\n" : ""}`;
     const lineCount = regionLines.length + (separated ? 1 : 0);
     provenance = concatDocuments([
       sliceDocument(provenance, 0, lineEnd),
-      generatedDocument(inserted, "ticket projection"),
+      generatedDocument(inserted, "resource projection"),
       sliceDocument(provenance, lineEnd),
     ]);
     text = provenance.text;
@@ -584,8 +607,18 @@ function insertResourceProjections(
         ...(range.source ? { source: { ...range.source, contentStartLine: range.source.contentStartLine + lineCount } } : {}),
         ...(range.sources ? { sources: range.sources.map(source => ({ ...source, contentStartLine: source.contentStartLine + lineCount })) } : {}) }
       : range);
-    ranges.push({ startLine: outputLine + 1, endLine: outputLine + regionLines.length,
-      inserted: { afterSourceLine: sourceLine, lineCount } });
+    let next = outputLine + 1;
+    layouts.forEach(({ projection, layout }, index) => {
+      const last = index === layouts.length - 1;
+      ranges.push({ startLine: next, endLine: next + layout.lines.length - 1,
+        inserted: { afterSourceLine: sourceLine, lineCount: layout.lines.length + (last && separated ? 1 : 0) },
+        resource: {
+          ...(projection.resourceId ? { resourceId: projection.resourceId } : {}),
+          ...(projection.fetchedAt && layout.fetchedLine !== undefined
+            ? { fetchedAt: projection.fetchedAt, fetchedLine: layout.fetchedLine } : {}),
+        } });
+      next += layout.lines.length;
+    });
   }
   return { text, provenance, embedRanges: ranges.sort((left, right) => left.startLine - right.startLine) };
 }
@@ -597,7 +630,7 @@ export function detailEmbedIds(text: string): string[] {
 export async function projectDetailRead(
   requester: DetailEmbedRequester,
   text: string,
-  options: { hostBlockId?: string; hostRevision?: number; source?: MappedDocument; now?: number } = {},
+  options: { hostBlockId?: string; hostRevision?: number; source?: MappedDocument } = {},
 ): Promise<DetailReadProjection> {
   if (options.source && options.source.text !== text) throw new Error('Projection source must match its input text');
   const host = options.hostBlockId ? observeDocument({kind: 'block', blockId: options.hostBlockId}, text, options.hostRevision) : null;
@@ -606,14 +639,12 @@ export async function projectDetailRead(
   const pendingProjections = options.hostBlockId
     ? readDetailResourceProjections(requester, text, options.hostBlockId, options.hostRevision)
     : Promise.resolve(null);
-  // Awaited below; a failed read fails this projection like any other enrichment.
-  pendingProjections.catch(() => undefined);
   const matches = [...projectedSource.matchAll(DETAIL_EMBED_PATTERN)];
   if (matches.length === 0 && !isChecklistView(text)) {
     const projections = await pendingProjections;
     if (!projections?.length) return { text: projectedSource, provenance: source, embeds: [], embedRanges: [] };
     const inserted = insertResourceProjections({ text: projectedSource, provenance: source, embedRanges: [] }, [],
-      projections, options.now ?? Date.now());
+      projections);
     return { ...inserted, embeds: [], resourceProjections: projections };
   }
 
@@ -707,7 +738,7 @@ export async function projectDetailRead(
   const projections = await pendingProjections;
   if (projections?.length) {
     const inserted = insertResourceProjections({ text: output, provenance: concatDocuments(mappedParts), embedRanges },
-      embedSourceLines, projections, options.now ?? Date.now());
+      embedSourceLines, projections);
     output = inserted.text;
     mappedParts = [inserted.provenance];
     embedRanges = inserted.embedRanges;

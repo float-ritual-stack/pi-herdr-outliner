@@ -63,7 +63,7 @@ source evidence or distinguish authored glyphs from controls.
   hide, filter, group and order those sources.
 - `src/context-resolution.ts` owns context-scoped resolution ("the nearest key"
   for a line: the line, lines above, the block, ancestors). It is the first
-  slice of PIE-408; ticket projections and later soft links use it rather than
+  slice of PIE-408; resource projections and later soft links use it rather than
   resolving context themselves.
 - `pi-extension/index.ts` is a host adapter, not a second implementation of the service.
 - `src/work-tools.ts` owns agent workboard operations (create, stage/set, PR delivery,

@@ -3,7 +3,8 @@ import { parsePropertyRecords } from "./properties";
 /**
  * Context-scoped resolution: "the nearest X" for a position in a block.
  *
- * This is the first slice of PIE-408, built for PIE-445's `jira::` lines. It
+ * This is the first slice of PIE-408, built for PIE-445's resource
+ * projections (a Jira ticket under a `jira::` line is the first kind). It
  * knows nothing about providers: a matcher supplies the property key and the
  * key grammar (plus any claim filter, such as "a configured Source owns this
  * project"). PIE-408's soft links reuse this walk rather than adding a second
@@ -14,7 +15,9 @@ import { parsePropertyRecords } from "./properties";
  * 1. `explicit`: a key written in the directive's own value;
  * 2. `line`: a key elsewhere on the same line;
  * 3. `preceding-line`: the nearest earlier line of the same block, below the
- *    subject line, at the same or a shallower indent, that holds a key;
+ *    subject line, at the same or a shallower indent, that holds a key. Each
+ *    line passed narrows the indent, so the walk leaves a section through its
+ *    heading instead of entering an earlier section's items;
  * 4. `block-property`: the block's own block-scope property (a ticket page);
  * 5. `subject-line`: a key in the block's first non-blank line;
  * 6. `ancestor-property`, then `ancestor-subject`, for each ancestor, nearest
@@ -22,6 +25,9 @@ import { parsePropertyRecords } from "./properties";
  *
  * Two different keys at the step that matched are ambiguous: the walk reports
  * both and does not guess or skip to a farther step.
+ *
+ * Current shape, to revisit for PIE-408's soft links: it resolves a line, not
+ * an offset, and reads only block-scope properties (not line or inline ones).
  */
 
 export interface ContextKeyOccurrence {
@@ -108,8 +114,7 @@ function decide(keys: readonly string[], site: ContextResolutionSite): ContextRe
 }
 
 /** Distinct keys on each line of a block, in line order. */
-function keysByLine(text: string, matcher: ContextKeyMatcher): Map<number, string[]> {
-  const lines = textLines(text);
+function keysByLine(text: string, lines: readonly TextLine[], matcher: ContextKeyMatcher): Map<number, string[]> {
   const byLine = new Map<number, string[]>();
   let index = 0;
   for (const occurrence of [...matcher.keysIn(text)].sort((left, right) => left.start - right.start)) {
@@ -135,50 +140,114 @@ export function blockPropertyKeys(text: string, matcher: ContextKeyMatcher): str
     }));
 }
 
-export function resolveContextKey(input: ContextResolutionInput): ContextResolution {
+const PROPERTY_ONLY_LINE = /^[ \t]*(?:(?:\[[A-Za-z][A-Za-z0-9_.-]*::[^\]\r\n]+\][ \t]*)+|[A-Za-z][A-Za-z0-9_.-]*::.*)$/;
+
+/**
+ * The subject line and the preamble after it: where an ancestor's own
+ * property and subject live. A large ancestor is not parsed past them.
+ */
+function blockHead(text: string): string {
+  let start = 0;
+  let end = 0;
+  let seenSubject = false;
+  while (start <= text.length) {
+    const newline = text.indexOf("\n", start);
+    const lineEnd = newline < 0 ? text.length : newline;
+    const line = text.slice(start, lineEnd);
+    if (line.trim()) {
+      if (seenSubject && !PROPERTY_ONLY_LINE.test(line)) break;
+      seenSubject = true;
+      end = lineEnd;
+    }
+    if (newline < 0) break;
+    start = newline + 1;
+  }
+  return text.slice(0, end);
+}
+
+interface PreparedBlock {
+  readonly id: string;
+  readonly subject: number;
+  readonly propertyKeys: readonly string[];
+  readonly subjectKeys: readonly string[];
+}
+
+/**
+ * The walk for one block and its ancestors. Each block is parsed once per
+ * resolver, however many lines are resolved; ancestors are read only up to
+ * the end of their preamble, and only when a nearer step found nothing.
+ */
+export interface ContextResolver {
+  resolve(line: number, explicitKey?: string): ContextResolution;
+  /** The block's own block-scope property keys, parsed once. */
+  ownPropertyKeys(): readonly string[];
+}
+
+export function createContextResolver(input: Omit<ContextResolutionInput, "line" | "explicitKey">): ContextResolver {
   const { block, matcher } = input;
+  const lines = textLines(block.text);
+  const byLine = keysByLine(block.text, lines, matcher);
+  const subject = lines.findIndex((line) => line.text.trim().length > 0);
+  let ownProperty: readonly string[] | undefined;
+  const preparedAncestors: PreparedBlock[] = [];
+  const ancestor = (index: number): PreparedBlock => {
+    const existing = preparedAncestors[index];
+    if (existing) return existing;
+    const source = input.ancestors[index]!;
+    const head = blockHead(source.text);
+    const headLines = textLines(head);
+    const ancestorSubject = headLines.findIndex((line) => line.text.trim().length > 0);
+    const prepared = {
+      id: source.id,
+      subject: ancestorSubject,
+      propertyKeys: blockPropertyKeys(head, matcher),
+      subjectKeys: ancestorSubject < 0 ? [] : keysByLine(head, headLines, matcher).get(ancestorSubject) ?? [],
+    };
+    preparedAncestors[index] = prepared;
+    return prepared;
+  };
   const site = (step: ContextResolutionStep, blockId: string, line: number): ContextResolutionSite =>
     ({ step, blockId, line });
-  if (input.explicitKey) {
-    return { kind: "resolved", key: input.explicitKey, site: site("explicit", block.id, input.line) };
-  }
 
-  const lines = textLines(block.text);
-  const byLine = keysByLine(block.text, matcher);
-  const subject = subjectLineIndex(block.text);
-  const own = decide(byLine.get(input.line) ?? [], site("line", block.id, input.line));
-  if (own) return own;
+  return {
+    ownPropertyKeys() {
+      ownProperty ??= blockPropertyKeys(block.text, matcher);
+      return ownProperty;
+    },
+    resolve(line, explicitKey) {
+      if (explicitKey) return { kind: "resolved", key: explicitKey, site: site("explicit", block.id, line) };
+      const own = decide(byLine.get(line) ?? [], site("line", block.id, line));
+      if (own) return own;
 
-  const indent = indentWidth(lines[input.line]?.text ?? "");
-  for (let line = input.line - 1; line > subject; line -= 1) {
-    const text = lines[line]!.text;
-    if (!text.trim() || indentWidth(text) > indent) continue;
-    const found = decide(byLine.get(line) ?? [], site("preceding-line", block.id, line));
-    if (found) return found;
-  }
+      // Each line that passes narrows the indent, so the walk climbs out of a
+      // section rather than into an earlier sibling section's items.
+      let indent = indentWidth(lines[line]?.text ?? "");
+      for (let above = line - 1; above > subject; above -= 1) {
+        const text = lines[above]!.text;
+        if (!text.trim() || indentWidth(text) > indent) continue;
+        const found = decide(byLine.get(above) ?? [], site("preceding-line", block.id, above));
+        if (found) return found;
+        indent = indentWidth(text);
+      }
 
-  const property = decide(
-    blockPropertyKeys(block.text, matcher),
-    site("block-property", block.id, subject),
-  );
-  if (property) return property;
-  if (subject >= 0 && subject !== input.line) {
-    const found = decide(byLine.get(subject) ?? [], site("subject-line", block.id, subject));
-    if (found) return found;
-  }
+      const property = decide(this.ownPropertyKeys(), site("block-property", block.id, subject));
+      if (property) return property;
+      if (subject >= 0 && subject !== line) {
+        const found = decide(byLine.get(subject) ?? [], site("subject-line", block.id, subject));
+        if (found) return found;
+      }
 
-  for (const ancestor of input.ancestors) {
-    const ancestorSubject = subjectLineIndex(ancestor.text);
-    const found = decide(
-      blockPropertyKeys(ancestor.text, matcher),
-      site("ancestor-property", ancestor.id, ancestorSubject),
-    ) ?? (ancestorSubject >= 0
-      ? decide(
-        keysByLine(ancestor.text, matcher).get(ancestorSubject) ?? [],
-        site("ancestor-subject", ancestor.id, ancestorSubject),
-      )
-      : null);
-    if (found) return found;
-  }
-  return { kind: "none" };
+      for (let index = 0; index < input.ancestors.length; index += 1) {
+        const prepared = ancestor(index);
+        const found = decide(prepared.propertyKeys, site("ancestor-property", prepared.id, prepared.subject)) ??
+          decide(prepared.subjectKeys, site("ancestor-subject", prepared.id, prepared.subject));
+        if (found) return found;
+      }
+      return { kind: "none" };
+    },
+  };
+}
+
+export function resolveContextKey(input: ContextResolutionInput): ContextResolution {
+  return createContextResolver(input).resolve(input.line, input.explicitKey);
 }

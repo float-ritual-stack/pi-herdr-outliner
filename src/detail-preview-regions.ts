@@ -9,6 +9,8 @@ export type PreviewRegionKind =
   | "checklist"
   | "document-fold"
   | "body-link"
+  /** A resource projection (e.g. a Jira ticket under `jira::`); Enter opens its Resource. */
+  | "resource"
   | "annotation"
   | "annotation-thread"
   | "callout"

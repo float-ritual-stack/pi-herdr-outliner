@@ -539,7 +539,7 @@ export interface DetailState {
   readStatus: "pending" | "ready" | "failed";
   embedStates: DetailEmbedState[];
   embedRanges: DetailEmbedRange[];
-  /** Ticket projections in the current read; resource changes to them repaint the note. */
+  /** Resource projections in the current read; catalog changes to them repaint the note. */
   resourceProjections?: readonly ResourceProjection[];
   embedBackgroundEnabled: boolean;
   workIdPrefix: string | null;
@@ -4545,12 +4545,12 @@ export function createDetailController(
             event.resourceId === description.resource.id ||
             event.sourceId === description.source.id
           );
-        // A registration or refresh can change what a ticket projection shows:
-        // its own Resource, or any Resource while one is still unresolved.
+        // A registration, refresh or new Source can change what a resource
+        // projection shows: its own Resource or Source, or, while it has no
+        // Resource (not registered, no key, ambiguous), any catalog change.
         const matchesProjection = state.target?.kind === "block" && (state.resourceProjections ?? []).some(projection =>
-          unscopedResourceChange ||
-          (projection.resourceId === undefined ? projection.status !== "no-key" && projection.status !== "ambiguous"
-            : event.resourceId === projection.resourceId || event.sourceId === projection.sourceId));
+          unscopedResourceChange || projection.resourceId === undefined ||
+          event.resourceId === projection.resourceId || event.sourceId === projection.sourceId);
         if (!matchesTarget && !matchesDescription && !matchesProjection) return;
       } else if (event.domain === "content") {
         markBlockCacheStale();
