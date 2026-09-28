@@ -7,7 +7,7 @@ import {
   focusBlockByQuery,
   formatBlockFocusMatch,
 } from "./block-focus";
-import { createOutlinerClient, type RequestInput } from "./client";
+import { createOutlinerClient, OutlinerRequestError, type RequestInput } from "./client";
 import { requireClientIdForRole } from "./client-target";
 import { resolveClientPaths } from "./paths";
 import { navigateOutlinerLink, parseOutlinerLinkUri, resolveOutlinerLinkTarget } from "./outliner-links";
@@ -89,6 +89,7 @@ switch (command) {
       args: rest,
       options: {
         filter: { type: "string", multiple: true },
+        query: { type: "string" },
         text: { type: "string" },
         limit: { type: "string" },
         subtree: { type: "string" },
@@ -101,6 +102,7 @@ switch (command) {
     const limit = parseLimit(values.limit, 500);
     const query: BlockSearchQuery = {
       filters,
+      ...(values.query === undefined ? {} : { expression: values.query }),
       text: values.text,
       subtreeRootId: values.subtree,
       propertyScope: values["property-scope"] === undefined
@@ -108,6 +110,8 @@ switch (command) {
         : normalizePropertyQueryScope(values["property-scope"]),
       limit,
     };
+    // An older service ignores `expression` and would return unfiltered results.
+    if (query.expression !== undefined) await client.requireCompatibleService(["query.expression"]);
     request = {
       action: "blocks.query",
       query,
@@ -435,7 +439,17 @@ switch (command) {
 // Older services treat an absent timestamp token as an unconditional update.
 // Never send the integer contract to one of those services.
 if (request && "expectedRevision" in request) await client.requireCompatibleService();
-const result = request ? await client.request(request) : directResult;
+let result: unknown;
+try {
+  result = request ? await client.request(request) : directResult;
+} catch (error) {
+  // Query syntax errors carry a position; print it as data instead of a stack trace.
+  if (error instanceof OutlinerRequestError && error.problem) {
+    console.error(JSON.stringify({ error: error.message, problem: error.problem }, null, 2));
+    process.exit(1);
+  }
+  throw error;
+}
 if (command === "capture") {
   const receipt = result as CaptureReceipt;
   const capturedFromBlockId = receipt.block.properties.find(

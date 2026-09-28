@@ -1,6 +1,6 @@
 import { createConnection, type Socket } from "node:net";
 import { requireCapabilities } from "./service-compatibility";
-import type { OutlinerCapability, OutlinerServiceStatus } from "./types";
+import type { OutlinerCapability, OutlinerRequestProblem, OutlinerServiceStatus } from "./types";
 import type {
   OutlinerClientRegistration,
   OutlinerEvent,
@@ -148,6 +148,14 @@ export class OutlinerWatcher {
   }
 }
 
+/** A service-rejected request; `problem` carries structured detail when the service provides it. */
+export class OutlinerRequestError extends Error {
+  constructor(message: string, readonly problem?: OutlinerRequestProblem) {
+    super(message);
+    this.name = "OutlinerRequestError";
+  }
+}
+
 export class OutlinerClient {
   constructor(
     readonly socketPath: string,
@@ -186,7 +194,7 @@ export class OutlinerClient {
       socket.end();
       try {
         const response = JSON.parse(buffer.slice(0, newline)) as OutlinerResponse;
-        if (!response.ok) responseReceived.reject(new Error(response.error));
+        if (!response.ok) responseReceived.reject(new OutlinerRequestError(response.error, response.problem));
         else responseReceived.resolve(response.result as T);
       } catch (error) {
         responseReceived.reject(error);

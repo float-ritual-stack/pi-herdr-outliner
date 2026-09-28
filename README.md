@@ -570,6 +570,7 @@ EOF
 bun run cli list --subtree <block-uuid> --text "route snapshot" --limit 20
 bun run cli list --filter type=roadmap-item --limit 400 --fields title,properties,revision
 bun run cli read <block-uuid> <block-uuid> --fields title,properties
+bun run cli list --query "type=task (work-stage=review OR work-stage=validate) updated >= -7d"
 bun run cli view <saved-virtual-branch-uuid>
 bun run cli view <saved-virtual-branch-uuid> --limit 500 --expected <revision>
 bun run cli view <saved-virtual-branch-uuid> --limit 50 --offset 50
@@ -1168,7 +1169,48 @@ status="in progress" project=pi-outliner
 work-stage::review type::roadmap-item
 ```
 
-Whitespace separates clauses outside double quotes. `key` checks property presence; `key=value` and `key::value` check case-insensitive exact equality. Double-quoted values preserve spaces and support only `\\` and `\"` escapes. Invalid syntax reports a character position instead of becoming an accidental query. OR, NOT, ranges, grouping, aggregation, and reference traversal are intentionally not supported by the property expression.
+Whitespace separates clauses outside double quotes. `key` checks property presence; `key=value` and `key::value` check case-insensitive exact equality. Double-quoted values preserve spaces and support only `\\` and `\"` escapes. Invalid syntax reports a character position instead of becoming an accidental query. Aggregation and reference traversal are not part of the query language.
+
+Saved-view `[query::…]` values, CLI `list --query` and the `expression` field of
+`blocks.query` / `outliner_query` also accept `OR`, `NOT`, parentheses and
+timestamp ranges:
+
+```text
+work-stage=review OR work-stage=validate
+type=roadmap-item NOT status=done
+type=task NOT priority
+type=task (priority=high OR due) updated > 2026-09-20
+updated >= -7d
+created < 2026-09-01T12:00Z
+```
+
+- **Precedence:** `NOT` binds tightest, then `AND` (written or implied by
+  whitespace), then `OR`. Keywords are case-insensitive. Parentheses group; a
+  clause may start with `(` and end with `)` (`(a=x OR b=y)`). Quote a value
+  that contains a space or ends with `)` inside a group.
+- **NOT:** `NOT key=value` excludes blocks with that value; `NOT key` selects
+  blocks without the property (in the query's property scope).
+- **Ranges:** `created` or `updated`, then `<`, `<=`, `>` or `>=`, then a time,
+  with or without spaces. A `YYYY-MM-DD` date is a whole UTC day:
+  `> 2026-09-20` starts on the 21st and `<= 2026-09-20` includes all of the
+  20th. `today` and `yesterday` are UTC days too. ISO datetimes (UTC unless an
+  offset is given), `now` and `-N` followed by `h`, `d` or `w` are instants;
+  relative values resolve each time the service evaluates the query, so a saved
+  `updated >= -7d` view keeps moving. Only `created` and `updated` compare;
+  `updated=…` is still a property equality clause.
+- **Compatibility:** a query with no keywords, parentheses or ranges keeps its
+  exact meaning, including the special `deleted=true` Trash query.
+  `deleted=true` cannot be combined with the boolean grammar.
+- **Errors:** invalid queries fail, and are never treated as empty results.
+  `blocks.query` rejects them with a `problem` giving `code`, `field` and the
+  0-based `position`; `views.read` reports `status: "invalid"` with the
+  `query` property and position.
+- **Service:** the grammar requires a service that reports the
+  `query.expression` capability. CLI `list --query` and
+  `outliner_query.expression` check for it before sending.
+
+The Tree **Advanced property filter**, `expand-when`, checklist views and
+repeated CLI `--filter` flags keep the positive-AND clause syntax.
 
 Property filters and catalogs default to `block` scope, so body examples and line-local annotations cannot silently change workflow semantics. Callers can explicitly request `block`, `line`, `inline`, or `all` through `propertyScope`; broader block-query results include each matching record’s scope, ordinal, line, column, and source span. Text substring, subtree root, deleted-content mode, projection rank context, timestamp sort, and limit remain explicit structured fields rather than reserved filter words. Timestamp sorting accepts `created` or `updated` with `asc` or `desc`, orders the full matched collection before applying the limit, and cannot be combined with manual projection ranks. Every query carries a limit from 1 through 1000 and returns `complete` or `truncated` metadata. Tree **Advanced property filter** uses the block-scoped property catalog for key/value completion; agents call `outliner_query` with structured filters and never parse the shorthand. CLI `list` exposes the same parser through repeatable `--filter` flags and accepts `--limit` (default 500).
 

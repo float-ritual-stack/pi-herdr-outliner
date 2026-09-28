@@ -1,3 +1,4 @@
+import { queryRequestProblem } from "./block-query";
 import { MentionRepository } from "./mentions";
 import { EditRecoveryRepository } from "./edit-recovery";
 import { proposeEditMerge } from "./edit-merge-model";
@@ -1370,10 +1371,12 @@ export class OutlinerServer {
       }
       return { id: request.id, ok: true, result, sequence: this.store.sequence };
     } catch (error) {
+      const problem = queryRequestProblem(error);
       return {
         id: request.id,
         ok: false,
         error: error instanceof Error ? error.message : String(error),
+        ...(problem ? { problem } : {}),
         sequence: this.store.sequence,
       };
     }
@@ -2168,10 +2171,12 @@ export class OutlinerServer {
       }
       return { id: request.id, ok: true, result, sequence: this.store.sequence };
     } catch (error) {
+      const problem = queryRequestProblem(error);
       return {
         id: request.id,
         ok: false,
         error: error instanceof Error ? error.message : String(error),
+        ...(problem ? { problem } : {}),
         sequence: this.store.sequence,
       };
     }
@@ -2543,10 +2548,12 @@ export class OutlinerServer {
         : undefined;
       response = await this.handleAsync(request, subscribedClient);
     } catch (error) {
+      const problem = queryRequestProblem(error);
       response = {
         id: request?.id ?? "invalid",
         ok: false,
         error: error instanceof Error ? error.message : String(error),
+        ...(problem ? { problem } : {}),
         sequence: this.store.sequence,
       };
     }

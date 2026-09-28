@@ -3,7 +3,7 @@ import {placeOrderedItems} from "./virtual-placement";
 import {WorkingSelectionRepository} from "./working-selection";
 import { checklistItems, queryChecklistItems, updateChecklistText, validateChecklistIdentityChanges } from "./checklist-items";
 import type { ChecklistCollection, ChecklistIdentityChange, ChecklistQuery, ChecklistSearchQuery, ChecklistSearchCollection, ChecklistUpdateInput, ChecklistUpdateReceipt } from "./types";
-import type {SavedViewReadOptions, SavedViewReadProblem, SavedViewReadResult, VirtualBranchOrder, VirtualBranchPlacementInput} from "./types";
+import type {QueryExpression, SavedViewReadOptions, SavedViewReadProblem, SavedViewReadResult, VirtualBranchOrder, VirtualBranchPlacementInput} from "./types";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -27,8 +27,10 @@ import { isValidGitBranchName, parseDeliveryIdentity } from "./delivery-lifecycl
 import { seedDefaultWorkspace } from "./default-workspace";
 import { migrateRoadmapText } from "./roadmap-migration";
 import {
+  compileQueryExpression,
   normalizeBlockSearchQuery,
   parsePropertyFilterExpression,
+  positivePropertyFilters,
 } from "./block-query";
 import {
   firstLineWithoutPropertyTokens,
@@ -268,6 +270,19 @@ function propertyMatchContexts(records: readonly PropertyRecord[]) {
   }));
 }
 
+function sortByOccurrenceRank(blocks: VisibleBlock[], ranks: readonly VirtualOccurrenceRank[]): void {
+  const rankById = new Map(ranks.map(entry => [entry.blockId, entry.rank]));
+  const preorder = new Map(blocks.map((block, index) => [block.id, index]));
+  blocks.sort((left, right) => {
+    const leftRank = rankById.get(left.id);
+    const rightRank = rankById.get(right.id);
+    if (leftRank === undefined && rightRank === undefined) return preorder.get(left.id)! - preorder.get(right.id)!;
+    if (leftRank === undefined) return 1;
+    if (rightRank === undefined) return -1;
+    return leftRank - rightRank || left.id.localeCompare(right.id);
+  });
+}
+
 function sortQueriedBlocks(
   blocks: VisibleBlock[],
   sort: NonNullable<BlockSearchQuery["sort"]>,
@@ -282,6 +297,9 @@ function sortQueriedBlocks(
 }
 
 interface LoadedGraphTraversalOptions extends BlockTraversalOptions {
+  /** Boolean expression, ANDed with filters; relative times already resolved. */
+  where?: QueryExpression;
+  now?: number;
   text?: string;
   stopAfterMatches?: number;
   deletedMode?: "active" | "roots" | "all";
@@ -1847,7 +1865,7 @@ export class OutlinerStore {
       if (!parsed.config) throw Error(parsed.configurationErrors.join("; "));
       if (parsed.config.sort) throw Error("This branch is sorted; manual ranking is disabled");
       // The authored limit bounds display, not rank operations over hidden members.
-      const result=this.queryBlocks({filters:parsed.config.filters,rankViewId:viewId,limit:1000});
+      const result=this.queryBlocks(virtualBranchMembershipQuery(viewId,parsed.config,1000));
       return {viewId,viewRevision:view.revision,blockIds:result.blocks.filter(b=>b.id!==viewId).map(b=>b.id),completeness:result.completeness};
     })();
   }
@@ -2305,18 +2323,22 @@ export class OutlinerStore {
   private queryNormalizedBlocksFromCurrentRead(query: BlockSearchQuery): VisibleBlockCollection {
     if (query.subtreeRootId) this.require(query.subtreeRootId);
     const deletedMode = query.includeDeleted ?? "active";
-    if (query.rankViewId && deletedMode === "active") {
+    if (query.rankViewId && deletedMode === "active" && !query.where) {
       return this.queryRankedBlocksFromCurrentRead(query, query.rankViewId);
     }
+    const ranked = query.rankViewId && deletedMode === "active" ? query.rankViewId : null;
     const blocks = this.traverseLoadedGraph(this.loadGraph(), {
       filters: query.filters,
+      where: query.where,
       propertyScope: query.propertyScope,
       subtreeRootId: query.subtreeRootId,
       text: query.text,
-      stopAfterMatches: query.sort ? undefined : query.limit + 1,
+      stopAfterMatches: query.sort || ranked ? undefined : query.limit + 1,
       deletedMode,
     });
     if (query.sort) sortQueriedBlocks(blocks, query.sort);
+    // Same order as ranked SQL: manual ranks first, then canonical preorder.
+    if (ranked) sortByOccurrenceRank(blocks, this.virtualOccurrenceRanksFromCurrentRead().filter(entry => entry.viewId === ranked));
     if (blocks.length <= query.limit) {
       return { blocks, completeness: { kind: "complete" } };
     }
@@ -2474,6 +2496,7 @@ export class OutlinerStore {
       }
       const matched = this.traverseLoadedGraph(graph, {
         filters: query?.filters,
+        where: query?.where,
         propertyScope: query?.propertyScope,
         subtreeRootId: query?.subtreeRootId,
         text: query?.text,
@@ -2943,6 +2966,8 @@ export class OutlinerStore {
     const filterText = options.text?.toLowerCase();
     const deletedMode = options.deletedMode ?? "active";
     const propertyScope = options.propertyScope ?? "block";
+    const where = options.where ? compileQueryExpression(options.where, options.now) : null;
+    const contextFilters = [...(options.filters ?? []), ...(options.where ? positivePropertyFilters(options.where) : [])];
     const visit = (block: Block, depth: number): boolean => {
       const effectivelyDeleted = Boolean(block.effectiveDeletedRootId);
       if (deletedMode === "active" && effectivelyDeleted) return false;
@@ -2963,6 +2988,7 @@ export class OutlinerStore {
         deletionMatches &&
         (!options.filters?.length ||
           matchesFilters(propertyRecords, options.filters, propertyScope)) &&
+        (!where || where(block, propertyRecords, propertyScope)) &&
         (!filterText || block.text.toLowerCase().includes(filterText));
       if (matches) {
         const children = (graph.byParent.get(block.id) ?? []).filter((child) =>
@@ -2982,10 +3008,10 @@ export class OutlinerStore {
             block.text,
             (blockId) => graph.byId.get(blockId) ?? null,
           ),
-          ...(propertyScope !== "block" && options.filters?.length
+          ...(propertyScope !== "block" && contextFilters.length
             ? {
                 propertyMatches: propertyMatchContexts(
-                  matchingPropertyRecords(propertyRecords, options.filters, propertyScope),
+                  matchingPropertyRecords(propertyRecords, contextFilters, propertyScope),
                 ),
               }
             : {}),

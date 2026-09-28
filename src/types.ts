@@ -1263,8 +1263,27 @@ export interface BlockTraversalOptions {
   propertyScope?: PropertyQueryScope;
 }
 
+export type QueryTimeField = "created" | "updated";
+export type QueryComparison = "<" | "<=" | ">" | ">=";
+
+/**
+ * Boolean property/timestamp predicate. Property leaves have filter semantics
+ * (presence or case-insensitive equality within propertyScope). Time values are
+ * YYYY-MM-DD, an ISO datetime, now, today, yesterday or -N{h,d,w}; relative
+ * values resolve when the service evaluates the query.
+ */
+export type QueryExpression =
+  | { kind: "property"; key: string; value?: string }
+  | { kind: "time"; field: QueryTimeField; op: QueryComparison; value: string }
+  | { kind: "not"; operand: QueryExpression }
+  | { kind: "and" | "or"; operands: QueryExpression[] };
+
 export interface BlockSearchQuery {
   filters?: PropertyFilter[];
+  /** Structured predicate, ANDed with filters. */
+  where?: QueryExpression;
+  /** Query text in the documented grammar, parsed by the service and ANDed with where. */
+  expression?: string;
   text?: string;
   subtreeRootId?: string;
   rankViewId?: string;
@@ -1586,6 +1605,7 @@ export const OUTLINER_MIN_CLIENT_PROTOCOL = 82;
 export const OUTLINER_CAPABILITIES = [
   "blocks.read",
   "properties.preview",
+  "query.expression",
   "views.read",
 ] as const;
 export type OutlinerCapability = (typeof OUTLINER_CAPABILITIES)[number];
@@ -2045,9 +2065,19 @@ export type OutlinerRequest =
       expectedRevision: number;
     };
 
+/** Machine-readable detail for a rejected request, such as a query syntax position. */
+export interface OutlinerRequestProblem {
+  code: "query-syntax" | "query-invalid";
+  message: string;
+  /** Query field that failed, such as expression. */
+  field?: string;
+  /** 0-based character position within that field's text. */
+  position?: number;
+}
+
 export type OutlinerResponse =
   | { id: string; ok: true; result: unknown; sequence: number }
-  | { id: string; ok: false; error: string; sequence: number };
+  | { id: string; ok: false; error: string; problem?: OutlinerRequestProblem; sequence: number };
 
 export interface SelectionContext {
   selected: Block | null;

@@ -1,5 +1,14 @@
-import { normalizePropertyKey } from "./properties";
-import type { BlockSearchQuery, PropertyFilter, PropertyQueryScope } from "./types";
+import { matchesFilters, normalizePropertyKey } from "./properties";
+import type {
+  BlockProperty,
+  BlockSearchQuery,
+  PropertyFilter,
+  PropertyQueryScope,
+  PropertyRecord,
+  QueryComparison,
+  OutlinerRequestProblem,
+  QueryExpression,
+} from "./types";
 
 export const MAX_BLOCK_QUERY_LIMIT = 1000;
 
@@ -233,6 +242,362 @@ export function serializePropertyFilters(
     .join(" ");
 }
 
+// ---------------------------------------------------------------------------
+// Boolean query grammar (OR, NOT, grouping, created/updated ranges).
+//
+//   expression := or
+//   or         := and ( OR and )*
+//   and        := unary ( [AND] unary )*        juxtaposition is AND
+//   unary      := NOT unary | primary
+//   primary    := "(" expression ")" | range | clause
+//   range      := (created | updated) (< | <= | > | >=) time
+//
+// Keywords are case-insensitive. Every clause keeps the existing presence and
+// equality syntax, so a query without operators, parentheses or ranges parses
+// to exactly the positive-AND filters it always meant. Those words and prefixes
+// were syntax errors before, so no previously valid query changes meaning.
+// ---------------------------------------------------------------------------
+
+const MAX_QUERY_EXPRESSION_DEPTH = 32;
+const MAX_QUERY_EXPRESSION_LEAVES = 200;
+const COMPARISONS = new Set<QueryComparison>(["<", "<=", ">", ">="]);
+const DAY_MS = 86_400_000;
+
+/** Structured detail for a rejected query; syntax positions refer to the expression text. */
+export function queryRequestProblem(error: unknown): OutlinerRequestProblem | undefined {
+  if (error instanceof BlockQuerySyntaxError) {
+    return { code: "query-syntax", message: error.message, field: "expression", position: error.index };
+  }
+  if (error instanceof BlockQueryError) return { code: "query-invalid", message: error.message };
+  return undefined;
+}
+
+export class BlockQueryError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BlockQueryError";
+  }
+}
+
+type ExpressionToken =
+  | { kind: "lparen" | "rparen" | "and" | "or" | "not"; start: number }
+  | { kind: "cmp"; op: QueryComparison; start: number }
+  | { kind: "word"; text: string; start: number };
+
+function lexQueryExpression(input: string): { tokens: ExpressionToken[]; simple: boolean } {
+  const tokens: ExpressionToken[] = [];
+  let depth = 0;
+  let simple = true;
+  for (const word of tokenizeFilterExpression(input)) {
+    let text = word.text;
+    let start = word.start;
+    while (text.startsWith("(")) {
+      tokens.push({ kind: "lparen", start });
+      depth += 1;
+      simple = false;
+      text = text.slice(1);
+      start += 1;
+    }
+    // A trailing ")" closes a group only while one is open; at depth 0 it stays
+    // part of an unquoted value exactly as before.
+    let closing = 0;
+    while (closing < depth && text.length > closing && text[text.length - 1 - closing] === ")") closing += 1;
+    text = text.slice(0, text.length - closing);
+    if (text) {
+      const lower = text.toLowerCase();
+      const keyedRange = /^([A-Za-z][A-Za-z0-9_.-]*)(<=|>=|<|>)(.*)$/s.exec(text);
+      const bareRange = /^(<=|>=|<|>)(.*)$/s.exec(text);
+      if (lower === "and" || lower === "or" || lower === "not") {
+        tokens.push({ kind: lower, start });
+        simple = false;
+      } else if (keyedRange) {
+        tokens.push({ kind: "word", text: keyedRange[1]!, start });
+        tokens.push({ kind: "cmp", op: keyedRange[2] as QueryComparison, start: start + keyedRange[1]!.length });
+        if (keyedRange[3]) tokens.push({ kind: "word", text: keyedRange[3], start: start + keyedRange[1]!.length + keyedRange[2]!.length });
+        simple = false;
+      } else if (bareRange) {
+        tokens.push({ kind: "cmp", op: bareRange[1] as QueryComparison, start });
+        if (bareRange[2]) tokens.push({ kind: "word", text: bareRange[2], start: start + bareRange[1]!.length });
+        simple = false;
+      } else {
+        tokens.push({ kind: "word", text, start });
+      }
+    }
+    for (let index = 0; index < closing; index += 1) {
+      tokens.push({ kind: "rparen", start: start + text.length + index });
+      depth -= 1;
+    }
+  }
+  return { tokens, simple };
+}
+
+type ParsedTime = { kind: "instant"; at: (now: number) => number } | { kind: "day"; start: (now: number) => number };
+
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const ISO_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})?$/;
+
+function utcDay(year: number, month: number, day: number): number | null {
+  const start = Date.UTC(year, month - 1, day);
+  const date = new Date(start);
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day ? start : null;
+}
+
+function startOfUtcDay(now: number): number {
+  return Math.floor(now / DAY_MS) * DAY_MS;
+}
+
+/** Parse a range value; relative values resolve against the evaluation time. */
+export function parseQueryTime(value: string): ParsedTime {
+  const normalized = value.trim().toLowerCase();
+  const date = ISO_DATE.exec(normalized);
+  if (date) {
+    const start = utcDay(Number(date[1]), Number(date[2]), Number(date[3]));
+    if (start === null) throw new BlockQueryError(`Invalid date: ${value}`);
+    return { kind: "day", start: () => start };
+  }
+  if (ISO_DATETIME.test(value.trim())) {
+    const text = value.trim();
+    const at = Date.parse(/(Z|[+-]\d{2}:\d{2})$/.test(text) ? text : `${text}Z`);
+    if (!Number.isFinite(at)) throw new BlockQueryError(`Invalid datetime: ${value}`);
+    return { kind: "instant", at: () => at };
+  }
+  if (normalized === "now") return { kind: "instant", at: now => now };
+  if (normalized === "today") return { kind: "day", start: now => startOfUtcDay(now) };
+  if (normalized === "yesterday") return { kind: "day", start: now => startOfUtcDay(now) - DAY_MS };
+  const relative = /^-(\d{1,6})([hdw])$/.exec(normalized);
+  if (relative) {
+    const unit = relative[2] === "h" ? 3_600_000 : relative[2] === "d" ? DAY_MS : 7 * DAY_MS;
+    const offset = Number(relative[1]) * unit;
+    return { kind: "instant", at: now => now - offset };
+  }
+  throw new BlockQueryError(
+    `Invalid time value: ${value}; use YYYY-MM-DD, an ISO datetime, now, today, yesterday or -N followed by h, d or w`,
+  );
+}
+
+class ExpressionParser {
+  private index = 0;
+  private leaves = 0;
+
+  constructor(
+    private readonly tokens: readonly ExpressionToken[],
+    private readonly inputLength: number,
+    private readonly rejectDeleted: boolean,
+  ) {}
+
+  parse(): QueryExpression {
+    if (this.tokens.length === 0) syntaxError("Query cannot be empty", 0);
+    const expression = this.parseOr(0);
+    const extra = this.tokens[this.index];
+    if (extra) syntaxError(extra.kind === "rparen" ? "Unmatched )" : "Unexpected query text", extra.start);
+    return expression;
+  }
+
+  private peek(): ExpressionToken | undefined {
+    return this.tokens[this.index];
+  }
+
+  private position(): number {
+    return this.peek()?.start ?? this.inputLength;
+  }
+
+  private parseOr(depth: number): QueryExpression {
+    const operands = [this.parseAnd(depth)];
+    while (this.peek()?.kind === "or") {
+      this.index += 1;
+      operands.push(this.parseAnd(depth));
+    }
+    return operands.length === 1 ? operands[0]! : { kind: "or", operands };
+  }
+
+  private parseAnd(depth: number): QueryExpression {
+    const operands = [this.parseUnary(depth)];
+    for (;;) {
+      const next = this.peek();
+      if (!next || next.kind === "or" || next.kind === "rparen") break;
+      if (next.kind === "and") this.index += 1;
+      operands.push(this.parseUnary(depth));
+    }
+    return operands.length === 1 ? operands[0]! : { kind: "and", operands };
+  }
+
+  private parseUnary(depth: number): QueryExpression {
+    const token = this.peek();
+    if (token?.kind === "not") {
+      this.index += 1;
+      if (!this.startsOperand()) syntaxError("NOT requires a clause or group after it", this.position());
+      return { kind: "not", operand: this.parseUnary(depth) };
+    }
+    return this.parsePrimary(depth);
+  }
+
+  private startsOperand(): boolean {
+    const kind = this.peek()?.kind;
+    return kind === "word" || kind === "lparen" || kind === "not";
+  }
+
+  private parsePrimary(depth: number): QueryExpression {
+    const token = this.peek();
+    if (!token) syntaxError("Expected a clause or group", this.inputLength);
+    if (token.kind === "lparen") {
+      if (depth >= MAX_QUERY_EXPRESSION_DEPTH) syntaxError("Query groups are nested too deeply", token.start);
+      this.index += 1;
+      if (this.peek()?.kind === "rparen") syntaxError("Empty group", token.start);
+      const inner = this.parseOr(depth + 1);
+      if (this.peek()?.kind !== "rparen") syntaxError("Unclosed (", token.start);
+      this.index += 1;
+      return inner;
+    }
+    if (token.kind === "cmp") syntaxError("A range needs created or updated before its comparison", token.start);
+    if (token.kind !== "word") {
+      syntaxError(`${token.kind.toUpperCase()} needs a clause before it`, token.start);
+    }
+    this.index += 1;
+    if ((this.leaves += 1) > MAX_QUERY_EXPRESSION_LEAVES) syntaxError("Query has too many clauses", token.start);
+    const comparison = this.peek();
+    if (comparison?.kind === "cmp") {
+      this.index += 1;
+      const field = token.text.toLowerCase();
+      if (field !== "created" && field !== "updated") {
+        syntaxError("Range comparisons support only created and updated", token.start);
+      }
+      const value = this.peek();
+      if (value?.kind !== "word") syntaxError(`${field} ${comparison.op} requires a time value`, value?.start ?? this.inputLength);
+      this.index += 1;
+      try {
+        parseQueryTime(value.text);
+      } catch (error) {
+        syntaxError(error instanceof Error ? error.message : String(error), value.start);
+      }
+      return { kind: "time", field, op: comparison.op, value: value.text };
+    }
+    const clause = parsePropertyFilterClause(token.text, token.start);
+    if (this.rejectDeleted && clause.key === "deleted") {
+      syntaxError("deleted=true selects Trash and cannot be combined with OR, NOT, groups or ranges", token.start);
+    }
+    return { kind: "property", ...clause };
+  }
+}
+
+/** Parse query text in the documented grammar into a boolean expression. */
+export function parseQueryExpression(input: string): QueryExpression {
+  const { tokens } = lexQueryExpression(input);
+  return new ExpressionParser(tokens, input.length, true).parse();
+}
+
+/**
+ * Parse saved or typed query text. Positive-AND clause lists stay flat filters
+ * (preserving deleted=true and every existing meaning); anything using the
+ * boolean grammar becomes a `where` expression.
+ */
+export function parseSearchExpression(input: string): { filters: PropertyFilter[]; where?: QueryExpression } {
+  const { tokens, simple } = lexQueryExpression(input);
+  if (simple) return { filters: parsePropertyFilterExpression(input) };
+  return { filters: [], where: new ExpressionParser(tokens, input.length, true).parse() };
+}
+
+function normalizeQueryExpression(expression: QueryExpression, depth = 0, leaves = { count: 0 }): QueryExpression {
+  if (!expression || typeof expression !== "object") throw new BlockQueryError("Query expression must be an object");
+  if (depth > MAX_QUERY_EXPRESSION_DEPTH) throw new BlockQueryError("Query expression is nested too deeply");
+  switch (expression.kind) {
+    case "property": {
+      if ((leaves.count += 1) > MAX_QUERY_EXPRESSION_LEAVES) throw new BlockQueryError("Query expression has too many clauses");
+      const filter = normalizePropertyFilter({ key: expression.key, ...(expression.value === undefined ? {} : { value: expression.value }) });
+      if (filter.key === "deleted") throw new BlockQueryError("deleted=true cannot appear inside a query expression; use filters or includeDeleted");
+      return { kind: "property", ...filter };
+    }
+    case "time": {
+      if ((leaves.count += 1) > MAX_QUERY_EXPRESSION_LEAVES) throw new BlockQueryError("Query expression has too many clauses");
+      if (expression.field !== "created" && expression.field !== "updated") {
+        throw new BlockQueryError(`Query range field must be created or updated: ${String(expression.field)}`);
+      }
+      if (!COMPARISONS.has(expression.op)) throw new BlockQueryError(`Query range comparison must be <, <=, > or >=: ${String(expression.op)}`);
+      if (typeof expression.value !== "string") throw new BlockQueryError("Query range value must be a string");
+      parseQueryTime(expression.value);
+      return { kind: "time", field: expression.field, op: expression.op, value: expression.value.trim() };
+    }
+    case "not":
+      return { kind: "not", operand: normalizeQueryExpression(expression.operand, depth + 1, leaves) };
+    case "and":
+    case "or": {
+      if (!Array.isArray(expression.operands) || expression.operands.length === 0) {
+        throw new BlockQueryError(`Query ${expression.kind} requires at least one operand`);
+      }
+      const operands = expression.operands.map(operand => normalizeQueryExpression(operand, depth + 1, leaves));
+      return operands.length === 1 ? operands[0]! : { kind: expression.kind, operands };
+    }
+    default:
+      throw new BlockQueryError(`Unknown query expression kind: ${String((expression as { kind?: unknown }).kind)}`);
+  }
+}
+
+export interface QueryExpressionSubject {
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type CompiledQueryExpression = (
+  subject: QueryExpressionSubject,
+  properties: readonly (BlockProperty | PropertyRecord)[],
+  propertyScope?: PropertyQueryScope,
+) => boolean;
+
+/** Resolve relative times once, at `now`, and return a predicate over one block. */
+export function compileQueryExpression(expression: QueryExpression, now = Date.now()): CompiledQueryExpression {
+  switch (expression.kind) {
+    case "property": {
+      const filter = [{ key: expression.key, ...(expression.value === undefined ? {} : { value: expression.value }) }];
+      return (_subject, properties, scope) => matchesFilters(properties, filter, scope);
+    }
+    case "time": {
+      const time = parseQueryTime(expression.value);
+      const field = expression.field === "created" ? "createdAt" : "updatedAt";
+      let test: (at: number) => boolean;
+      if (time.kind === "instant") {
+        const bound = time.at(now);
+        test = expression.op === "<" ? at => at < bound
+          : expression.op === "<=" ? at => at <= bound
+          : expression.op === ">" ? at => at > bound
+          : at => at >= bound;
+      } else {
+        // A day is an interval: > D starts after that day, <= D includes all of it.
+        const start = time.start(now);
+        const end = start + DAY_MS;
+        test = expression.op === "<" ? at => at < start
+          : expression.op === "<=" ? at => at < end
+          : expression.op === ">" ? at => at >= end
+          : at => at >= start;
+      }
+      return subject => {
+        const at = Date.parse(subject[field]);
+        return Number.isFinite(at) && test(at);
+      };
+    }
+    case "not": {
+      const operand = compileQueryExpression(expression.operand, now);
+      return (subject, properties, scope) => !operand(subject, properties, scope);
+    }
+    case "and": {
+      const operands = expression.operands.map(operand => compileQueryExpression(operand, now));
+      return (subject, properties, scope) => operands.every(operand => operand(subject, properties, scope));
+    }
+    case "or": {
+      const operands = expression.operands.map(operand => compileQueryExpression(operand, now));
+      return (subject, properties, scope) => operands.some(operand => operand(subject, properties, scope));
+    }
+  }
+}
+
+/** Property clauses that can contribute match context (not under NOT). */
+export function positivePropertyFilters(expression: QueryExpression): PropertyFilter[] {
+  switch (expression.kind) {
+    case "property": return [{ key: expression.key, ...(expression.value === undefined ? {} : { value: expression.value }) }];
+    case "time":
+    case "not": return [];
+    default: return expression.operands.flatMap(positivePropertyFilters);
+  }
+}
+
 export function normalizeBlockSearchQuery(
   query: BlockSearchQuery,
 ): BlockSearchQuery {
@@ -275,6 +640,17 @@ export function normalizeBlockSearchQuery(
     }
   }
 
+  if (query.expression !== undefined && typeof query.expression !== "string") {
+    throw new Error("Block search expression must be a string");
+  }
+  const parts: QueryExpression[] = [];
+  // Plain clause lists keep their filter meaning, including deleted=true.
+  const parsedExpression = query.expression?.trim() ? parseSearchExpression(query.expression) : null;
+  if (parsedExpression?.where) parts.push(parsedExpression.where);
+  if (query.where !== undefined) parts.push(normalizeQueryExpression(query.where));
+  const where = parts.length === 0 ? undefined
+    : parts.length === 1 ? parts[0]! : { kind: "and" as const, operands: parts };
+
   let sort: BlockSearchQuery["sort"];
   if (query.sort !== undefined) {
     if (!query.sort || typeof query.sort !== "object" || Array.isArray(query.sort)) {
@@ -294,7 +670,7 @@ export function normalizeBlockSearchQuery(
   const filters: PropertyFilter[] = [];
   const seen = new Set<string>();
   let includeDeleted = query.includeDeleted;
-  for (const candidate of query.filters ?? []) {
+  for (const candidate of [...(query.filters ?? []), ...(parsedExpression?.filters ?? [])]) {
     const filter = normalizePropertyFilter(candidate);
     if (filter.key === "deleted" && filter.value?.toLowerCase() === "true") {
       includeDeleted ??= "roots";
@@ -325,6 +701,7 @@ export function normalizeBlockSearchQuery(
 
   return {
     ...(filters.length > 0 ? { filters } : {}),
+    ...(where ? { where } : {}),
     ...(text ? { text } : {}),
     ...(subtreeRootId ? { subtreeRootId } : {}),
     ...(rankViewId ? { rankViewId } : {}),

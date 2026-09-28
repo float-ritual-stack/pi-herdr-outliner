@@ -1,8 +1,10 @@
 import {
   BlockQuerySyntaxError,
+  compileQueryExpression,
   MAX_BLOCK_QUERY_LIMIT,
   parsePropertyFilterClause,
   parsePropertyFilterExpression,
+  parseSearchExpression,
 } from "./block-query";
 import { matchesFilters, parsePropertyRecords, patchPropertyText } from "./properties";
 import { parsePropertySummaryKeys } from "./property-summary";
@@ -13,6 +15,7 @@ import type {
   BlockProperty,
   BlockSearchQuery,
   PropertyFilter,
+  QueryExpression,
   VisibleBlock,
   VirtualOccurrenceRank,
 } from "./types";
@@ -72,6 +75,8 @@ export interface VirtualBranchConfig {
   viewId: string;
   query: string;
   filters: PropertyFilter[];
+  /** Present when the query uses OR, NOT, groups or created/updated ranges. */
+  where?: QueryExpression;
   sort: BlockQuerySort | null;
   limit: number;
   create: BlockProperty | null;
@@ -241,11 +246,12 @@ export function parseVirtualBranchConfig(
   const queryProperty = singleProperty(definition, "query", true, configurationErrors);
   let query = "";
   let filters: PropertyFilter[] = [];
+  let where: QueryExpression | undefined;
   if (queryProperty) {
     query = queryProperty.value;
     try {
-      filters = parsePropertyFilterExpression(query);
-      if (filters.length === 0) configurationErrors.push("Virtual branch query cannot be empty");
+      ({ filters, where } = parseSearchExpression(query));
+      if (filters.length === 0 && !where) configurationErrors.push("Virtual branch query cannot be empty");
     } catch (error) {
       const message = `Invalid virtual branch query: ${errorMessage(error)}`;
       configurationErrors.push(message);
@@ -363,6 +369,7 @@ export function parseVirtualBranchConfig(
       viewId: definition.id,
       query,
       filters,
+      ...(where ? { where } : {}),
       sort,
       limit,
       ...(expandWhen ? {expandWhen} : {}),
@@ -663,10 +670,15 @@ interface ProjectedVirtualBranch<T extends ProjectionBlock = VisibleBlock> {
 /** The canonical query whose results a saved view ranks, deduplicates and bounds. */
 export function virtualBranchMembershipQuery(
   viewId: string,
-  config: Pick<VirtualBranchConfig, "filters" | "sort">,
+  config: Pick<VirtualBranchConfig, "filters" | "where" | "sort">,
   limit: number = MAX_BLOCK_QUERY_LIMIT,
 ): BlockSearchQuery {
-  return { filters: config.filters, ...(config.sort ? { sort: config.sort } : { rankViewId: viewId }), limit };
+  return {
+    filters: config.filters,
+    ...(config.where ? { where: config.where } : {}),
+    ...(config.sort ? { sort: config.sort } : { rankViewId: viewId }),
+    limit,
+  };
 }
 
 export interface VirtualBranchMembers<T> {
@@ -1040,7 +1052,9 @@ export async function planVirtualChild<T extends ProjectionBlock>(
     const result = await queryBlocks(query);
     // Reserve a matching new root before the limit. This conservative admission
     // also covers a new child that sorts before the parent's current match root.
-    return matchesFilters(child.properties, query.filters ?? [])
+    const now = new Date().toISOString();
+    return matchesFilters(child.properties, query.filters ?? []) &&
+      (!query.where || compileQueryExpression(query.where)({ createdAt: now, updatedAt: now }, child.properties))
       ? { ...result, blocks: [child, ...result.blocks] }
       : result;
   }, ranks, { ...presentation, collapsedOccurrenceRowIds: collapsed, expandedOccurrenceRowIds: expanded });
