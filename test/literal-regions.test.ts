@@ -65,9 +65,12 @@ test("markers stand alone on a line, tolerate spacing and case, and do not nest"
   ]) {
     expect(tokens(`Title\n${open}\n[a::1]\n${close}\n[b::2]`)).toEqual(["b=2:inline"]);
   }
-  // Four spaces is indented code, and trailing prose makes it an ordinary line.
+  // Four spaces or a tab is indented code, and trailing prose makes it an ordinary line.
   expect(scanLiteralRegions("Title\n    <!-- literal -->\n[a::1]\n<!-- /literal -->").regions).toEqual([]);
   expect(tokens("Title\n    <!-- literal -->\n[a::1]\n<!-- /literal -->")).toEqual(["a=1:inline"]);
+  expect(scanLiteralRegions("Title\n\t<!-- literal -->\n[a::1]\n<!-- /literal -->").regions).toEqual([]);
+  expect(tokens("Title\n\t<!-- literal -->\n[a::1]\n<!-- /literal -->")).toEqual(["a=1:inline"]);
+  expect(scanLiteralRegions("Title\n<!-- literal -->\n[a::1]\n\t<!-- /literal -->").unterminated).not.toBeNull();
   expect(tokens("Title\n<!-- literal --> note\n[a::1]\n<!-- /literal -->")).toEqual(["a=1:inline"]);
   // A second opener is text; the first closer ends the region.
   expect(tokens("T\n<!-- literal -->\n<!-- literal -->\n[a::1]\n<!-- /literal -->\n[b::2]\n<!-- /literal -->"))

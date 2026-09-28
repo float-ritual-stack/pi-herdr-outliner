@@ -138,8 +138,8 @@ function inlineLiteralRanges(text: string, lines: SourceLine[], blockRanges: Sou
   return ranges;
 }
 
-const LITERAL_REGION_OPEN = /^[ \t]{0,3}<!--[ \t]*literal[ \t]*-->[ \t]*$/i;
-const LITERAL_REGION_CLOSE = /^[ \t]{0,3}<!--[ \t]*\/literal[ \t]*-->[ \t]*$/i;
+const LITERAL_REGION_OPEN = /^ {0,3}<!--[ \t]*literal[ \t]*-->[ \t]*$/i;
+const LITERAL_REGION_CLOSE = /^ {0,3}<!--[ \t]*\/literal[ \t]*-->[ \t]*$/i;
 
 /** A closed `<!-- literal -->` ... `<!-- /literal -->` region, marker lines included. */
 export interface LiteralRegion {
