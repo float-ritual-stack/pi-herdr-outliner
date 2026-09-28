@@ -126,7 +126,7 @@ export function readHerdrPaneSnapshot(
     timeoutMs,
   );
   socket.setEncoding("utf8");
-  socket.once("error", fail);
+  socket.on("error", fail);
   socket.once("connect", () => {
     socket.write(`${JSON.stringify({
       id: requestId,

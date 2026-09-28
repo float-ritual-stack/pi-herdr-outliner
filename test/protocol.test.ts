@@ -1865,7 +1865,9 @@ test("serves mutations and property queries over the local socket", async () => 
 test("rejects malformed socket responses instead of crashing the client", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-outliner-malformed-"));
   const socketPath = join(directory, "outliner.sock");
-  const server = createServer((socket) => socket.end("not-json\n"));
+  // Write, then close outright. A half-close via end() never reports close under Bun 1.4 once the
+  // client hangs up, which would leave server.close() waiting in cleanup.
+  const server = createServer((socket) => socket.write("not-json\n", () => socket.destroy()));
   const listening = Promise.withResolvers<void>();
   server.once("error", listening.reject);
   server.listen(socketPath, listening.resolve);

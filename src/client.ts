@@ -118,7 +118,7 @@ export class OutlinerWatcher {
         }
       }
     });
-    socket.once("error", (error) => this.reportError(error));
+    socket.on("error", (error) => this.reportError(error));
     socket.once("close", () => {
       clearAcknowledgementTimer();
       if (this.socket === socket) this.socket = null;
@@ -182,16 +182,19 @@ export class OutlinerClient {
     const fail = (error: Error): void => {
       clearTimeout(timeout);
       responseReceived.reject(error);
+      // A failed request never reuses its connection; close it so neither side waits on a half-open socket.
+      socket.destroy();
     };
     socket.setEncoding("utf8");
-    socket.once("error", fail);
+    socket.on("error", fail);
     socket.once("connect", () => socket.write(`${JSON.stringify(request)}\n`));
     socket.on("data", (chunk: string) => {
       buffer += chunk;
       const newline = buffer.indexOf("\n");
       if (newline < 0) return;
       clearTimeout(timeout);
-      socket.end();
+      // One request per connection: the answer is in, so close outright rather than half-close.
+      socket.destroy();
       try {
         const response = JSON.parse(buffer.slice(0, newline)) as OutlinerResponse;
         if (!response.ok) responseReceived.reject(new OutlinerRequestError(response.error, response.problem));

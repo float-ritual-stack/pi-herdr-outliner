@@ -61,7 +61,7 @@ function defaultSocketFactory(
   const { promise, resolve, reject } = Promise.withResolvers<Duplex>();
   const socket = createConnection(path);
   const onError = (error: Error): void => reject(error);
-  socket.once("error", onError);
+  socket.on("error", onError);
   socketHandoffErrorListeners.set(socket, onError);
   onSocket?.(socket);
   socket.once("connect", () => resolve(socket));
@@ -123,7 +123,7 @@ class NdjsonConnection {
     socket.on("data", (chunk: string) => this.accept(chunk));
     socket.once("end", () => this.end("Herdr subscription EOF"));
     socket.once("close", () => this.end("Herdr socket closed"));
-    socket.once("error", (error) => this.messages.fail(error));
+    socket.on("error", (error) => this.messages.fail(error));
   }
 
   send(value: unknown): void {

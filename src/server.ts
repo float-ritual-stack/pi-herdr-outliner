@@ -2683,6 +2683,9 @@ export class OutlinerServer {
   private accept(socket: Socket): void {
     socket.setEncoding("utf8");
     socket.once("close", () => this.removeSubscriber(socket));
+    // A peer that vanishes mid-write (EPIPE, ECONNRESET) is routine for a long-lived service:
+    // drop it like a close. Without a listener, Bun 1.4 raises these as unhandled errors.
+    socket.on("error", () => this.removeSubscriber(socket));
     let buffer = "";
     let requestQueue = Promise.resolve();
     socket.on("data", (chunk: string) => {
