@@ -25,6 +25,7 @@ import {
   normalizeAttentionMark,
 } from "./attention";
 import { readAuthoredLinks } from "./authored-links";
+import { normalizeResourceProjectionRequest, readResourceProjections } from "./resource-projection";
 import { normalizeAnnotationReferenceContext } from "./annotations";
 import type { HerdrRuntimeRegistry } from "./herdr-registry";
 import { isFragmentId, resolveFragment } from "./fragments";
@@ -1467,6 +1468,9 @@ export class OutlinerServer {
         }
         case "blocks.authored-links":
           result = readAuthoredLinks(this.store, request.ownerBlockId);
+          break;
+        case "resources.projection.read":
+          result = readResourceProjections(this.store, normalizeResourceProjectionRequest(request));
           break;
         case "children":
           result = this.store.children(request.parentId);

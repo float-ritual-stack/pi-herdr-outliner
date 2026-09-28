@@ -50,6 +50,7 @@ import {
   layoutDetailEditor,
 } from "./detail-editor-layout";
 import type { DetailEmbedRange, DetailEmbedState, DetailReadProjection } from "./detail-embeds";
+import type { ResourceProjection } from "./resource-projection";
 import {concatDocuments, generatedDocument, documentProvenanceKey, observeDocument, sourceDocument, type MappedDocument} from './document-provenance';
 import {resourceContentDocument} from './document-resources';
 import {resolvedDocument} from './document-references';
@@ -538,6 +539,8 @@ export interface DetailState {
   readStatus: "pending" | "ready" | "failed";
   embedStates: DetailEmbedState[];
   embedRanges: DetailEmbedRange[];
+  /** Ticket projections in the current read; resource changes to them repaint the note. */
+  resourceProjections?: readonly ResourceProjection[];
   embedBackgroundEnabled: boolean;
   workIdPrefix: string | null;
   resolvedBreadcrumb: string;
@@ -1067,6 +1070,7 @@ export function createDetailController(
     readStatus: "pending",
     embedStates: [],
     embedRanges: [],
+    resourceProjections: [],
     embedBackgroundEnabled: true,
     workIdPrefix: null,
     resolvedBreadcrumb: "",
@@ -1234,6 +1238,7 @@ export function createDetailController(
     state.projectedSelectedText = projection.text;
     state.embedStates = projection.embeds;
     state.embedRanges = projection.embedRanges;
+    state.resourceProjections = projection.resourceProjections ?? [];
     applyResolvedReferences(resolved,projection.provenance);
   };
 
@@ -1474,6 +1479,7 @@ export function createDetailController(
     state.readStatus = "pending";
     state.embedStates = [];
     state.embedRanges = [];
+    state.resourceProjections = [];
     state.workIdPrefix = null;
     state.resolvedBreadcrumb = "";
     state.referencedFile = null;
@@ -1895,6 +1901,7 @@ export function createDetailController(
       state.projectedSelectedText = read?.projection.text ?? next.selected.text;
       state.embedStates = read?.projection.embeds ?? [];
       state.embedRanges = read?.projection.embedRanges ?? [];
+      state.resourceProjections = read?.projection.resourceProjections ?? [];
       if (read) applyResolvedReferences(read.resolved,read.projection.provenance);
       else {
         state.resolvedSelectedText = next.selected.text;
@@ -4538,7 +4545,13 @@ export function createDetailController(
             event.resourceId === description.resource.id ||
             event.sourceId === description.source.id
           );
-        if (!matchesTarget && !matchesDescription) return;
+        // A registration or refresh can change what a ticket projection shows:
+        // its own Resource, or any Resource while one is still unresolved.
+        const matchesProjection = state.target?.kind === "block" && (state.resourceProjections ?? []).some(projection =>
+          unscopedResourceChange ||
+          (projection.resourceId === undefined ? projection.status !== "no-key" && projection.status !== "ambiguous"
+            : event.resourceId === projection.resourceId || event.sourceId === projection.sourceId));
+        if (!matchesTarget && !matchesDescription && !matchesProjection) return;
       } else if (event.domain === "content") {
         markBlockCacheStale();
         invalidateBacklinks();

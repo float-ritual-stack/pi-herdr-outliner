@@ -500,6 +500,20 @@ Click a resolved block row's disclosure triangle or press Right to inspect its o
   - `[label](pi-outliner://resource/<resource-uuid>)` remains the canonical
     syntax for an already cataloged Resource.
 
+  A `jira::` line shows the ticket's stored details under it in Detail. With
+  no key after `::`, the ticket is the nearest one in context: a key on the
+  line, the nearest line above it, the block's own `[jira::…]` property, the
+  block's first line, then its ancestors. Two different keys at the nearest
+  level are reported rather than guessed. The floatty form `- jira::` works
+  too. `--compact` shows one line. `--comments` and `--full` are accepted for
+  later slices: comments are not stored yet, and the description stays in the
+  opened Resource. A block with a `[jira::KEY]`
+  property shows its ticket at the top of the body. The region is read-only
+  and shows when the details were fetched. It never registers or fetches: an
+  unregistered ticket shows how to register it, and `r` in the opened Resource
+  still refreshes explicitly. `bun run cli ticket <block-uuid>` returns the same
+  projection to agents.
+
   Showing the branch and moving selection are read-only. An unregistered
   human-authored row is labeled **Enter creates**. Pressing `Enter` performs
   provider resolution or local interning, creates the Source only for safe
@@ -576,6 +590,8 @@ bun run cli view <saved-virtual-branch-uuid> --limit 500 --expected <revision>
 bun run cli view <saved-virtual-branch-uuid> --limit 50 --offset 50
 bun run cli create --text "A durable note [type::note]"
 bun run cli properties-preview --text "Draft title [stage::queued]"
+bun run cli ticket <block-uuid>
+bun run cli ticket <block-uuid> --line 3
 bun run cli update --id <block-uuid> --text "Revised note" --expected <revision>
 bun run cli selection
 bun run cli changes --since <sequence> --limit 50

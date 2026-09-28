@@ -1632,6 +1632,7 @@ export const OUTLINER_CAPABILITIES = [
   "properties.preview",
   "query.expression",
   "references.backlinks.facets",
+  "resources.projection",
   "views.read",
 ] as const;
 export type OutlinerCapability = (typeof OUTLINER_CAPABILITIES)[number];
@@ -1671,6 +1672,8 @@ export type OutlinerRequest =
   | { id: string; action: "blocks.read"; ids: string[]; fields?: BlockReadField[] }
   | ({ id: string; action: "views.read"; viewId: string; format?: "full" | "tree" } & SavedViewReadOptions)
   | { id: string; action: "blocks.authored-links"; ownerBlockId: string }
+  /** Capability `resources.projection`. Stored ticket details for provider lines; never fetches. */
+  | { id: string; action: "resources.projection.read"; blockId: string; line?: number }
   | { id: string; action: "get"; blockId: string }
   | { id: string; action: "children"; parentId: string | null }
   | { id: string; action: "files.read"; path: string }

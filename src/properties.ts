@@ -504,6 +504,65 @@ export function parsePropertyRecords(text: string): PropertyRecord[] {
   });
 }
 
+/**
+ * A provider line such as `jira::`, `jira:: --comments` or floatty's
+ * `- jira:: --comments`. It is recognized only for the keys a caller supplies
+ * (provider keys), so general property parsing keeps its meaning: an empty
+ * `status::` and a bulleted `- status:: done` remain prose, and
+ * `parsePropertyRecords` output is unchanged for every input.
+ */
+export interface PropertyDirectiveLine {
+  key: string;
+  /** Trimmed text after `::`, up to any bracket property on the line. */
+  value: string;
+  /** The key's offset, as a bare property record would report it. */
+  start: number;
+  end: number;
+  line: number;
+  /** Leading whitespace of the line, before any bullet. */
+  indent: string;
+  bullet: boolean;
+  /** The block-scope bare record at the same offset, when the line sits in the preamble. */
+  blockScope: boolean;
+}
+
+export function parsePropertyDirectiveLines(
+  text: string,
+  keys: ReadonlySet<string>,
+): PropertyDirectiveLine[] {
+  if (keys.size === 0 || !text.includes("::")) return [];
+  const literalRanges = scanPropertyLiteralRanges(text);
+  const records = parsePropertyRecords(text);
+  const directives: PropertyDirectiveLine[] = [];
+  sourceLines(text).forEach((line, lineIndex) => {
+    const content = text.slice(line.start, line.contentEnd);
+    const match = /^([ \t]*)(?:([-*+])[ \t]+)?([A-Za-z][A-Za-z0-9_.-]*)::/.exec(content);
+    if (!match) return;
+    const key = match[3]!.toLowerCase();
+    if (!keys.has(key)) return;
+    const start = line.start + match[0].length - match[3]!.length - 2;
+    if (offsetInRanges(line.start + match[1]!.length, literalRanges)) return;
+    const valueStart = line.start + match[0].length;
+    const bracket = records.find((record) =>
+      record.line === lineIndex && record.syntax === "bracket" && record.start >= valueStart
+    );
+    let end = bracket?.start ?? line.contentEnd;
+    while (end > valueStart && /[ \t]/.test(text[end - 1]!)) end -= 1;
+    const bare = records.find((record) => record.syntax === "bare" && record.start === start);
+    directives.push({
+      key,
+      value: text.slice(valueStart, end).trim(),
+      start,
+      end,
+      line: lineIndex,
+      indent: match[1]!,
+      bullet: match[2] !== undefined,
+      blockScope: bare?.scope === "block",
+    });
+  });
+  return directives;
+}
+
 export function parseProperties(text: string): BlockProperty[] {
   return parsePropertyRecords(text)
     .filter((property) => property.scope === "block")

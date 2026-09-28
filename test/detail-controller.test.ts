@@ -6181,3 +6181,35 @@ describe("faceted backlinks in Detail", () => {
     expect(harness.controller.state.backlinks.selectedIndex).toBe(1);
   });
 });
+
+describe("ticket projections in Detail", () => {
+  test("a resource change to a projected ticket repaints the note; unrelated changes do not", async () => {
+    const selected = makeBlock({ text: "Vendor call ACME-60\n- jira::" });
+    let summary = "Before refresh";
+    const projection = () => ({
+      anchor: { kind: "directive" as const, line: 1, start: 22, end: 28 },
+      provider: "jira" as const, propertyKey: "jira", options: { unknown: [] },
+      status: "ready" as const, key: "ACME-60", resourceId: "resource-60", sourceId: "source-tickets",
+      summary, fields: [],
+    });
+    const harness = createHarness(selected, null, undefined, async (text) => {
+      const projected = `${text}\n- Jira ACME-60 · ${summary}`;
+      return { text: projected, provenance: generatedDocument(projected, "test ticket projection"), embeds: [],
+        embedRanges: [{ startLine: 2, endLine: 2, inserted: { afterSourceLine: 1, lineCount: 1 } }],
+        resourceProjections: [projection()] };
+    });
+    await harness.controller.initialize();
+    await Promise.resolve();
+    expect(harness.controller.state.projectedSelectedText).toContain("Before refresh");
+    const reads = harness.calls.projectedReads.length;
+
+    await harness.controller.onServiceEvent({ ...event("resource-catalog"), resourceId: "resource-other", sourceId: "source-other" }, viewport);
+    expect(harness.calls.projectedReads.length).toBe(reads);
+
+    summary = "After refresh";
+    await harness.controller.onServiceEvent({ ...event("resource-catalog"), resourceId: "resource-60" }, viewport);
+    await Promise.resolve();
+    expect(harness.calls.projectedReads.length).toBeGreaterThan(reads);
+    expect(harness.controller.state.projectedSelectedText).toContain("After refresh");
+  });
+});

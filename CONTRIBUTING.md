@@ -61,13 +61,17 @@ source evidence or distinguish authored glyphs from controls.
 - `src/backlink-facets.ts` owns what a backlink source is (kind, stage, placement,
   comment resolution) as a data table; `src/backlink-view.ts` owns how clients
   hide, filter, group and order those sources.
+- `src/context-resolution.ts` owns context-scoped resolution ("the nearest key"
+  for a line: the line, lines above, the block, ancestors). It is the first
+  slice of PIE-408; ticket projections and later soft links use it rather than
+  resolving context themselves.
 - `pi-extension/index.ts` is a host adapter, not a second implementation of the service.
 - `src/work-tools.ts` owns agent workboard operations (create, stage/set, PR delivery,
   completion with proof, note sections, item bodies) over the existing RPCs. The CLI
   `work`/`note` commands, the Claude mod tools and Pi's task completion call it;
   add workboard operations there rather than in a host adapter or a one-off script.
 
-Reuse these seams. Do not add a second property parser, query path, authoritative block cache, or independent persistence layer. A bounded disposable Detail preview cache may retain service-owned revisions but never authorizes writes.
+Reuse these seams. Do not add a second property parser, context resolver, query path, authoritative block cache, or independent persistence layer. A bounded disposable Detail preview cache may retain service-owned revisions but never authorizes writes.
 
 Before adding a feature, look for the renderer, component or action that already does it; every PR review checks this in its [architecture pass](#architecture-pass).
 

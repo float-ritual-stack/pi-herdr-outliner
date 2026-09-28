@@ -123,10 +123,21 @@ export function projectedSourceLine(
   const target = Math.max(0, Math.floor(sourceLine));
   const embedLines = embedSourceLines(stripFragmentAnchors(authoredText));
   let projected = target;
-  for (let index = 0; index < embedRanges.length; index += 1) {
-    const embedLine = embedLines[index];
-    if (embedLine === undefined || embedLine > target) break;
-    const range = embedRanges[index]!;
+  // Embed ranges pair with embed tokens in order; inserted regions (ticket
+  // projections) carry their own authored anchor and do not consume a token.
+  let embedIndex = 0;
+  let embedsBeforeTarget = true;
+  for (const range of embedRanges) {
+    if (range.inserted) {
+      if (range.inserted.afterSourceLine < target) projected += range.inserted.lineCount;
+      continue;
+    }
+    if (!embedsBeforeTarget) continue;
+    const embedLine = embedLines[embedIndex++];
+    if (embedLine === undefined || embedLine > target) {
+      embedsBeforeTarget = false;
+      continue;
+    }
     if (embedLine === target) return range.startLine;
     projected += range.endLine - range.startLine;
   }

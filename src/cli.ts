@@ -213,6 +213,20 @@ switch (command) {
     });
     break;
   }
+  case "ticket": {
+    const { values, positionals } = parseArgs({
+      args: rest, allowPositionals: true, strict: true,
+      options: { line: { type: "string" } },
+    });
+    if (positionals.length !== 1) throw new Error("ticket requires one block ID");
+    const line = values.line === undefined ? undefined : Number(values.line);
+    if (line !== undefined && (!/^\d+$/.test(values.line!) || !Number.isSafeInteger(line))) {
+      throw new Error("--line must be a non-negative integer");
+    }
+    await client.requireCompatibleService(["resources.projection"]);
+    request = { action: "resources.projection.read", blockId: positionals[0]!, ...(line === undefined ? {} : { line }) };
+    break;
+  }
   case "properties-preview": {
     const { values } = parseArgs({
       args: rest, strict: true,
