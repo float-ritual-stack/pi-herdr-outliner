@@ -983,7 +983,12 @@ clients that evaluate views from `workspace.snapshot` plus `blocks.query` keep
 working because those actions are unchanged. Two client paths still evaluate
 over `blocks.query`: the Tree's virtual-child admission check, which asks whether
 a not-yet-created child would appear, and bookmark navigators, which scope the
-query to the bookmark root.
+query to the bookmark root. Those paths see at most the 1,000 matches one
+`blocks.query` returns. Below a limit of 999 their membership and truncation agree
+exactly with `views.read`: a truncated query means at least 999 eligible members.
+At limits of 999 and 1,000, when more than 1,000 blocks match, they report
+truncation conservatively and may show one member fewer if the definition matches
+its own query; they never report `total`.
 
 Tree builds canonical parent-to-children adjacency once from the complete physical
 snapshot, never from the collapse-pruned visible collection. It queries, ranks,

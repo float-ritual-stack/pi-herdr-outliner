@@ -1,4 +1,4 @@
-import {isVirtualBranchDefinition, parseVirtualBranchConfig, selectVirtualBranchMembers, virtualBranchMembershipQuery} from "./virtual-branches";
+import {isVirtualBranchDefinition, parseVirtualBranchConfig, selectVirtualBranchMembers, virtualBranchMembershipQuery, type VirtualBranchMembers} from "./virtual-branches";
 import {placeOrderedItems} from "./virtual-placement";
 import {WorkingSelectionRepository} from "./working-selection";
 import { checklistItems, queryChecklistItems, updateChecklistText, validateChecklistIdentityChanges } from "./checklist-items";
@@ -2301,7 +2301,7 @@ export class OutlinerStore {
     return this.database.transaction(() => this.queryNormalizedBlocksFromCurrentRead(query))();
   }
 
-  /** `query.limit` is normally 1..1000; saved-view reads pass UNBOUNDED_VIEW_MATCHES to count every member. */
+  /** `query.limit` is normally 1..1000; sorted saved-view reads pass UNBOUNDED_VIEW_MATCHES to count every member. */
   private queryNormalizedBlocksFromCurrentRead(query: BlockSearchQuery): VisibleBlockCollection {
     if (query.subtreeRootId) this.require(query.subtreeRootId);
     const deletedMode = query.includeDeleted ?? "active";
@@ -2371,14 +2371,24 @@ export class OutlinerStore {
       }
       const effectiveLimit = limit ?? parsed.config.limit;
       Object.assign(result, { configuredLimit: parsed.config.limit, effectiveLimit, offset });
-      let matches: VisibleBlockCollection;
+      let selected: VirtualBranchMembers<VisibleBlock>;
       try {
         const query = normalizeBlockSearchQuery(virtualBranchMembershipQuery(viewId, parsed.config, 1));
-        matches = this.queryNormalizedBlocksFromCurrentRead({ ...query, limit: UNBOUNDED_VIEW_MATCHES });
+        const ranks = this.virtualOccurrenceRanksFromCurrentRead();
+        if (query.rankViewId && (query.includeDeleted ?? "active") === "active") {
+          // Same route as queryNormalizedBlocksFromCurrentRead. Rank and count lightweight id/depth pairs, then hydrate only the page:
+          // Tree and embeds read small pages of views with many members.
+          const candidates = this.rankedMatchIdsFromCurrentRead(query, query.rankViewId);
+          const page = selectVirtualBranchMembers(viewId, parsed.config, { blocks: candidates, completeness: { kind: "complete" } }, ranks, effectiveLimit, offset);
+          selected = { ...page, members: this.hydrateRankedPageFromCurrentRead(page.members, query) };
+        } else {
+          // Sorted and Trash views are evaluated over the loaded graph, which is already hydrated.
+          const matches = this.queryNormalizedBlocksFromCurrentRead({ ...query, limit: UNBOUNDED_VIEW_MATCHES });
+          selected = selectVirtualBranchMembers(viewId, parsed.config, matches, ranks, effectiveLimit, offset);
+        }
       } catch (error) {
         return fail("failed", [{ code: "query-failed", message: error instanceof Error ? error.message : String(error) }]);
       }
-      const selected = selectVirtualBranchMembers(viewId, parsed.config, matches, this.virtualOccurrenceRanksFromCurrentRead(), effectiveLimit, offset);
       const blocks = format === "tree"
         ? selected.members.map(block => compactTreeBlock(block, id => this.getFromCurrentRead(id)))
         : selected.members;
@@ -2606,10 +2616,16 @@ export class OutlinerStore {
     return rows.map((row) => this.hydrate(row));
   }
 
-  private queryRankedBlocksFromCurrentRead(
+  /**
+   * The recursive ranked-match statement shared by bounded queries and saved-view
+   * reads. `columns` selects either full rows or the lightweight id/depth pairs a
+   * saved-view read ranks before it hydrates one page.
+   */
+  private rankedMatchStatement(
     query: BlockSearchQuery,
     rankViewId: string,
-  ): VisibleBlockCollection {
+    columns: "full" | "ids",
+  ): { sql: string; parameters: Array<string | number> } {
     const parameters: Array<string | number> = [];
     const rootQuery = query.subtreeRootId
       ? "SELECT id, 0, printf('%010d:%s', position, created_at) FROM blocks WHERE id = ?"
@@ -2640,11 +2656,16 @@ export class OutlinerStore {
       predicates.push("INSTR(LOWER(block.text), LOWER(?)) > 0");
       parameters.push(query.text);
     }
-    parameters.push(query.limit + 1);
-
     const where = predicates.length > 0 ? `WHERE ${predicates.join(" AND ")}` : "";
-    const rows = this.database
-      .query(`
+    const selected = columns === "ids"
+      ? "block.id, tree.depth"
+      : `block.*,
+          tree.depth,
+          EXISTS (
+            SELECT 1 FROM blocks child
+            WHERE child.parent_id = block.id AND child.effective_deleted_root_id IS NULL
+          ) AS has_children`;
+    const sql = `
         WITH RECURSIVE tree(id, depth, sort_path) AS (
           ${rootQuery}
           UNION ALL
@@ -2656,12 +2677,7 @@ export class OutlinerStore {
           JOIN tree ON child.parent_id = tree.id
         )
         SELECT
-          block.*,
-          tree.depth,
-          EXISTS (
-            SELECT 1 FROM blocks child
-            WHERE child.parent_id = block.id AND child.effective_deleted_root_id IS NULL
-          ) AS has_children
+          ${selected}
         FROM tree
         JOIN blocks block ON block.id = tree.id
         LEFT JOIN virtual_occurrence_ranks occurrence_rank
@@ -2671,13 +2687,22 @@ export class OutlinerStore {
           CASE WHEN occurrence_rank.rank IS NULL THEN 1 ELSE 0 END,
           occurrence_rank.rank,
           CASE WHEN occurrence_rank.rank IS NULL THEN tree.sort_path ELSE block.id END
-        LIMIT ?
-      `)
-      .all(...parameters) as VisibleBlockRow[];
+      `;
+    return { sql, parameters };
+  }
+
+  private queryRankedBlocksFromCurrentRead(
+    query: BlockSearchQuery,
+    rankViewId: string,
+  ): VisibleBlockCollection {
+    const { sql, parameters } = this.rankedMatchStatement(query, rankViewId, "full");
+    const rows = this.database
+      .query(`${sql} LIMIT ?`)
+      .all(...parameters, query.limit + 1) as VisibleBlockRow[];
     const blocks = this.hydrateVisibleRowsFromCurrentRead(
       rows.slice(0, query.limit),
       query.filters ?? [],
-      propertyScope,
+      query.propertyScope ?? "block",
     );
     return {
       blocks,
@@ -2685,6 +2710,40 @@ export class OutlinerStore {
         ? { kind: "truncated", limit: query.limit }
         : { kind: "complete" },
     };
+  }
+
+  /**
+   * Every ranked match as a lightweight id/depth pair, in the same order as
+   * queryRankedBlocksFromCurrentRead. Saved-view reads rank and count these, then
+   * hydrate only the requested page.
+   */
+  private rankedMatchIdsFromCurrentRead(
+    query: BlockSearchQuery,
+    rankViewId: string,
+  ): Array<{ id: string; depth: number }> {
+    const { sql, parameters } = this.rankedMatchStatement(query, rankViewId, "ids");
+    return this.database.query(sql).all(...parameters) as Array<{ id: string; depth: number }>;
+  }
+
+  /** Hydrate a bounded page of ranked matches, keeping the page's order. */
+  private hydrateRankedPageFromCurrentRead(
+    page: ReadonlyArray<{ id: string; depth: number }>,
+    query: BlockSearchQuery,
+  ): VisibleBlock[] {
+    if (page.length === 0) return [];
+    const placeholders = page.map(() => "?").join(", ");
+    const rows = this.database
+      .query(`
+        SELECT block.*, EXISTS (
+          SELECT 1 FROM blocks child
+          WHERE child.parent_id = block.id AND child.effective_deleted_root_id IS NULL
+        ) AS has_children
+        FROM blocks block WHERE block.id IN (${placeholders})
+      `)
+      .all(...page.map(entry => entry.id)) as Array<Omit<VisibleBlockRow, "depth">>;
+    const byId = new Map(rows.map(row => [row.id, row]));
+    const ordered = page.map(entry => ({ ...byId.get(entry.id)!, depth: entry.depth }) as VisibleBlockRow);
+    return this.hydrateVisibleRowsFromCurrentRead(ordered, query.filters ?? [], query.propertyScope ?? "block");
   }
 
   private hydrateVisibleRowsFromCurrentRead(

@@ -154,3 +154,59 @@ test("views.read matches the client evaluator for every saved view in a fixture"
     }
   } finally { await server.close(); store.close(); rmSync(root, {recursive: true, force: true}); }
 });
+
+// Tree, the navigator and embeds read a small page of each view on every refresh.
+// Ranking and totals cover every member; property hydration covers only the page.
+test("views.read hydrates only the requested page of a large ranked view", () => {
+  const root = mkdtempSync(join(tmpdir(), "saved-view-large-"));
+  const store = new OutlinerStore(join(root, "outline.sqlite"));
+  try {
+    const view = store.create("Tasks [type::virtual-branch] [query::type=task] [limit::20]");
+    const count = 3000;
+    const ids: string[] = [];
+    (store as unknown as {database: {transaction(run: () => void): () => void}}).database.transaction(() => {
+      for (let index = 0; index < count; index += 1) ids.push(store.create(`Task ${index} [type::task] [status::open]`).id);
+    })();
+    const ranked = [ids[2500]!, ids[10]!];
+    store.reorderVirtualOccurrences(view.id, ranked);
+    const expected = [...ranked, ...ids.filter(id => !ranked.includes(id))];
+
+    const hydrated: number[] = [];
+    const internals = store as unknown as {hydrateVisibleRowsFromCurrentRead(rows: unknown[], ...rest: unknown[]): unknown};
+    const hydrate = internals.hydrateVisibleRowsFromCurrentRead.bind(store);
+    internals.hydrateVisibleRowsFromCurrentRead = (rows, ...rest) => { hydrated.push(rows.length); return hydrate(rows, ...rest); };
+
+    const started = performance.now();
+    const first = store.readSavedView(view.id);
+    const elapsed = performance.now() - started;
+    expect([first.status, first.total, first.nextOffset, first.completeness]).toEqual(["ready", count, 20, {kind: "truncated", limit: 20}]);
+    expect(first.blocks.map(block => block.id)).toEqual(expected.slice(0, 20));
+    expect(first.blocks[0]).toEqual(expect.objectContaining({depth: 0, hasChildren: false, properties: [{key: "type", value: "task"}, {key: "status", value: "open"}]}));
+    const middle = store.readSavedView(view.id, {offset: 1490, limit: 1000});
+    expect(middle.blocks.map(block => block.id)).toEqual(expected.slice(1490, 2490));
+    const tail = store.readSavedView(view.id, {offset: count - 5});
+    expect([tail.blocks.map(block => block.id), tail.total, tail.completeness, tail.nextOffset])
+      .toEqual([expected.slice(count - 5), count, {kind: "complete"}, undefined]);
+    expect(hydrated).toEqual([20, 1000, 5]);
+    expect(elapsed).toBeLessThan(1000);
+  } finally { store.close(); rmSync(root, {recursive: true, force: true}); }
+});
+
+// Client evaluation (virtual-child admission, bookmark scopes) sees one bounded
+// blocks.query page. Pin where its truncation agrees with views.read and where the
+// documented conservative difference begins.
+test("client evaluator truncation agrees with views.read below limit 999", async () => {
+  const root = mkdtempSync(join(tmpdir(), "saved-view-client-bound-"));
+  const store = new OutlinerStore(join(root, "outline.sqlite"));
+  try {
+    const definition = store.create("Self [type::virtual-branch] [status::open] [query::status=open] [limit::998]");
+    const physical = [definition] as never[];
+    const matches = [definition, ...Array.from({length: 999}, (_, index) => ({...definition, id: `match-${index}`}))];
+    const query = async () => ({blocks: matches, completeness: {kind: "truncated" as const, limit: 1000}}) as never;
+    const bounded = await evaluateVirtualBranchMatches(definition as never, physical, query, [], 998);
+    expect(bounded.state.queryError ?? bounded.state.configurationErrors).toEqual([]);
+    expect([bounded.roots.length, bounded.state.completeness]).toEqual([998, {kind: "truncated", limit: 998}]);
+    const edge = await evaluateVirtualBranchMatches(definition as never, physical, query, [], 1000);
+    expect([edge.roots.length, edge.state.completeness]).toEqual([999, {kind: "truncated", limit: 1000}]);
+  } finally { store.close(); rmSync(root, {recursive: true, force: true}); }
+});

@@ -708,6 +708,12 @@ function assertViewReadLimit(limit: number): void {
  * Client-side membership over a query effect. Saved views are read through the
  * service's views.read; this remains for hypothetical plans (virtual-child
  * admission) and scoped adapters that alter the query.
+ *
+ * The query returns at most MAX_BLOCK_QUERY_LIMIT (1000) matches. For limits up
+ * to 998 membership and truncation equal views.read: a truncated query already
+ * holds more eligible members than the limit. At 999 and 1000, with more than
+ * 1000 matches, truncation is reported conservatively and the page can be one
+ * member short when the definition matches its own query.
  */
 export async function evaluateVirtualBranchMatches<T extends ProjectionBlock>(
   definition: T,
