@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { Type, type Static } from "typebox";
 import { Parse } from "typebox/value";
 import type { OutlinerRegion, OutlinerClientRuntime, OutlinerNavigationTarget } from "./types";
+import type { BacklinkViewOptions } from "./backlink-view";
 
 export type PaneEntrypoint =
   | "composed"
@@ -401,9 +402,7 @@ export interface OpenBacklinkPeekPopupOptions {
   sourceClientId: string;
   targetBlockId: string;
   selectedSourceBlockId: string;
-  filter: string;
-  sortField: "created" | "updated";
-  sortDirection: "asc" | "desc";
+  view: BacklinkViewOptions;
 }
 
 export function openBacklinkPeekPopup(
@@ -432,11 +431,7 @@ export function openBacklinkPeekPopup(
     "--env",
     `OUTLINER_BACKLINK_SELECTED_SOURCE_ID=${options.selectedSourceBlockId}`,
     "--env",
-    `OUTLINER_BACKLINK_FILTER=${options.filter}`,
-    "--env",
-    `OUTLINER_BACKLINK_SORT_FIELD=${options.sortField}`,
-    "--env",
-    `OUTLINER_BACKLINK_SORT_DIRECTION=${options.sortDirection}`,
+    `OUTLINER_BACKLINK_VIEW=${JSON.stringify(options.view)}`,
     "--focus",
   ];
   for (const name of [

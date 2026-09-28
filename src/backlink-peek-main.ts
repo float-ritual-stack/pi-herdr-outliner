@@ -10,7 +10,7 @@ import { createOutlinerClient } from "./client";
 import { OutlinerActionKeymap } from "./outliner-actions";
 import { projectedSourceLine } from "./detail-pi-preview";
 import { listLiveClients } from "./client-target";
-import { visibleBacklinkSources, type DetailBacklinkState } from "./detail-controller";
+import { BACKLINK_QUERY_LIMIT, backlinkView, parseBacklinkViewOptions } from "./backlink-view";
 import { projectDetailRead } from "./detail-embeds";
 import { reportCurrentPaneWorkspace, openDetailPane } from "./pane-control";
 import { resolveClientPaths } from "./paths";
@@ -39,22 +39,18 @@ function requiredEnvironment(name: string): string {
 }
 
 function parseLaunch(): BacklinkPeekLaunch {
-  const sortField = requiredEnvironment("OUTLINER_BACKLINK_SORT_FIELD");
-  const sortDirection = requiredEnvironment("OUTLINER_BACKLINK_SORT_DIRECTION");
-  if (sortField !== "created" && sortField !== "updated") {
-    throw new Error("OUTLINER_BACKLINK_SORT_FIELD must be created or updated");
-  }
-  if (sortDirection !== "asc" && sortDirection !== "desc") {
-    throw new Error("OUTLINER_BACKLINK_SORT_DIRECTION must be asc or desc");
+  let view: unknown;
+  try {
+    view = JSON.parse(requiredEnvironment("OUTLINER_BACKLINK_VIEW"));
+  } catch (error) {
+    throw new Error(`OUTLINER_BACKLINK_VIEW must be JSON: ${error instanceof Error ? error.message : String(error)}`);
   }
   return {
     sourceClientId: requiredEnvironment("OUTLINER_BACKLINK_SOURCE_CLIENT_ID"),
     browsingContextId: requiredEnvironment("OUTLINER_BROWSING_CONTEXT_ID"),
     targetBlockId: requiredEnvironment("OUTLINER_BACKLINK_TARGET_BLOCK_ID"),
     selectedSourceBlockId: requiredEnvironment("OUTLINER_BACKLINK_SELECTED_SOURCE_ID"),
-    filter: process.env.OUTLINER_BACKLINK_FILTER ?? "",
-    sortField,
-    sortDirection,
+    view: parseBacklinkViewOptions(view),
   };
 }
 
@@ -68,21 +64,9 @@ const actionKeymap = OutlinerActionKeymap.load();
 const client = createOutlinerClient(paths);
 const collection = await client.request<BacklinkCollection>({
   action: "references.backlinks",
-  query: { targetBlockId: launch.targetBlockId, limit: 50 },
+  query: { targetBlockId: launch.targetBlockId, limit: BACKLINK_QUERY_LIMIT },
 });
-const backlinkState: DetailBacklinkState = {
-  expanded: true,
-  loading: false,
-  collection,
-  selectedIndex: 0,
-  error: "",
-  filter: launch.filter,
-  filterDraft: null,
-  sortField: launch.sortField,
-  sortDirection: launch.sortDirection,
-  expandedSourceIds: new Set(),
-};
-const sources = visibleBacklinkSources(backlinkState);
+const sources = backlinkView(collection, launch.view).matching;
 if (!sources.some((source) => source.blockId === launch.selectedSourceBlockId)) {
   throw new Error("Selected backlink source is no longer in the filtered snapshot");
 }

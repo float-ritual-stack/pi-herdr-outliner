@@ -57,6 +57,11 @@ function state(): DetailState {
       filterDraft: null,
       sortField: "updated",
       sortDirection: "desc",
+      showRelated: false,
+      showResolved: false,
+      kindFilter: null,
+      stageFilter: "all",
+      expandedKinds: new Set(),
       expandedSourceIds: new Set(),
     },
     propertyInspector: {
@@ -608,6 +613,11 @@ test("keeps Shift+R pane-level while Backlinks are expanded", async () => {
     filterDraft: null,
     sortField: "updated",
     sortDirection: "desc",
+    showRelated: false,
+    showResolved: false,
+    kindFilter: null,
+    stageFilter: "all",
+    expandedKinds: new Set(),
     expandedSourceIds: new Set(),
     collection: {
       targetBlockId: "target-block",
@@ -665,6 +675,52 @@ test("maps backlink filter, sort, and disclosure controls", async () => {
     { type: "backlinks.sort.cycle" },
     { type: "backlinks.source.toggle" },
   ]);
+});
+
+test("maps backlink kind, stage, resolved and this-note toggles only while Backlinks are open", async () => {
+  const previewState = state();
+  previewState.mode = "preview";
+  const preview = harness(previewState, false);
+  await preview.press({ name: "k" }, "k");
+  expect(preview.intents).toEqual([{ type: "redraw" }]);
+  preview.intents.length = 0;
+
+  previewState.backlinks.expanded = true;
+  await preview.press({ name: "k" }, "k");
+  await preview.press({ name: "t" }, "t");
+  await preview.press({ name: "h" }, "h");
+  await preview.press({ name: "n" }, "n");
+  expect(preview.intents).toEqual([
+    { type: "backlinks.kind.cycle" },
+    { type: "backlinks.stage.cycle" },
+    { type: "backlinks.resolved.toggle" },
+    { type: "backlinks.related.toggle" },
+  ]);
+});
+
+test("key-clash audit: Backlinks keys shadow nothing in the scopes active beside them", () => {
+  const keymap = new OutlinerActionKeymap("<defaults>");
+  // The Backlinks scope sits ahead of these whenever the panel is open (detailActionScopes).
+  const coActive = ["preview", "annotation", "file", "property-inspector", "property-focused", "trash", "checklist-focused"];
+  // Pre-existing and intended: with a property focused, the property filter wins instead.
+  const allowed = new Set(["/ detail.property.filter"]);
+  const backlinkActions = keymap.menuItems("detail", ["backlinks"])
+    .filter((item) => keymap.action(item.id).modes.includes("backlinks"));
+  expect(backlinkActions.map((item) => item.id)).toContain("detail.backlinks.kind");
+  const clashes: string[] = [];
+  for (const scope of coActive) {
+    for (const other of keymap.menuItems("detail", [scope])) {
+      if (keymap.action(other.id).modes.includes("backlinks")) continue;
+      for (const action of backlinkActions) {
+        for (const chord of keymap.bindings(action.id)) {
+          if (keymap.bindings(other.id).includes(chord) && !allowed.has(`${chord} ${other.id}`)) {
+            clashes.push(`${chord}: ${action.id} shadows ${other.id} in ${scope}`);
+          }
+        }
+      }
+    }
+  }
+  expect(clashes).toEqual([]);
 });
 
 test("maps Shift+R to current-block reveal without a destination picker", async () => {

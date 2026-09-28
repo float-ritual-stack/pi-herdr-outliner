@@ -1,3 +1,4 @@
+import { BACKLINK_QUERY_LIMIT } from "../src/backlink-view";
 import {observeDocument} from "../src/document-provenance";
 import {captureAnnotationPassage} from "../src/document-annotation";
 import {SourceSpannedMarkdown} from "../src/source-spanned-markdown";
@@ -4893,7 +4894,7 @@ describe("detail backlink loading and navigation", () => {
     expect(harness.calls.backlinkQueries).toEqual([]);
 
     await harness.controller.dispatch({ type: "backlinks.toggle" }, viewport);
-    expect(harness.calls.backlinkQueries).toEqual([{ targetBlockId: second.id, limit: 50 }]);
+    expect(harness.calls.backlinkQueries).toEqual([{ targetBlockId: second.id, limit: BACKLINK_QUERY_LIMIT }]);
 
     await harness.controller.dispatch({ type: "backlinks.toggle" }, viewport);
     await harness.controller.dispatch({ type: "backlinks.toggle" }, viewport);
@@ -4901,8 +4902,8 @@ describe("detail backlink loading and navigation", () => {
 
     await harness.controller.onServiceEvent(event("content"), viewport);
     expect(harness.calls.backlinkQueries).toEqual([
-      { targetBlockId: second.id, limit: 50 },
-      { targetBlockId: second.id, limit: 50 },
+      { targetBlockId: second.id, limit: BACKLINK_QUERY_LIMIT },
+      { targetBlockId: second.id, limit: BACKLINK_QUERY_LIMIT },
     ]);
   });
 
@@ -4932,8 +4933,8 @@ describe("detail backlink loading and navigation", () => {
     );
 
     expect(harness.calls.backlinkQueries).toEqual([
-      { targetBlockId: first.id, limit: 50 },
-      { targetBlockId: second.id, limit: 50 },
+      { targetBlockId: first.id, limit: BACKLINK_QUERY_LIMIT },
+      { targetBlockId: second.id, limit: BACKLINK_QUERY_LIMIT },
     ]);
     expect(harness.controller.state.backlinks.collection?.targetBlockId).toBe(second.id);
   });
@@ -5026,9 +5027,15 @@ describe("detail backlink loading and navigation", () => {
       browsingContextId: "context-test",
       targetBlockId: "hub-block",
       selectedSourceBlockId: "source-two",
-      filter: "",
-      sortField: "updated",
-      sortDirection: "desc",
+      view: {
+        filter: "",
+        sortField: "updated",
+        sortDirection: "desc",
+        showRelated: false,
+        showResolved: false,
+        kind: null,
+        stage: "all",
+      },
     }]);
     expect(harness.calls.navigationDispatches).toEqual([
       { blockId: "source-two", intent: "reveal", preserveSource: false, focusTarget: true },
@@ -6024,4 +6031,119 @@ test("embedded property links retain separate targets while copy and edit own th
   expect(harness.controller.state.propertyInspector.edit?.buffer.text).toBe(value);
   await harness.controller.dispatch({type: "property-inspector.edit.cancel"}, viewport);
   expect(harness.controller.state.context.selected?.revision).toBe(1);
+});
+
+describe("faceted backlinks in Detail", () => {
+  // Fictional: a garden-club ticket referenced by letters, a day page and comments.
+  function faceted(
+    blockId: string,
+    title: string,
+    updatedAt: string,
+    facets: NonNullable<BacklinkCollection["sources"][number]["facets"]>,
+  ): BacklinkCollection["sources"][number] {
+    return {
+      blockId, title, parentContext: "Club", createdAt: updatedAt, updatedAt,
+      occurrenceCount: 1, referenceGroups: [{ kind: "work-id", count: 1 }],
+      occurrences: [], occurrencesTruncated: false, facets,
+    };
+  }
+  const letter = (stage: "waiting" | "done") => ({
+    kind: "letter", kindLabel: "Letter", relation: "other" as const,
+    stage: { property: "outbox", value: stage, bucket: stage },
+  });
+
+  async function openPanel() {
+    const hub = makeBlock({ id: "hub-block", text: "Ticket" });
+    const harness = createHarness(hub);
+    harness.setBacklinkResults([{
+      targetBlockId: hub.id,
+      completeness: { kind: "complete" },
+      sources: [
+        faceted("letter-done", "Thank-you", "2031-02-05T00:00:00.000Z", letter("done")),
+        faceted("letter-waiting", "Ask for trays", "2031-02-01T00:00:00.000Z", letter("waiting")),
+        faceted("day", "Monday", "2031-02-04T00:00:00.000Z", { kind: "day-page", kindLabel: "Day page", relation: "other" }),
+        faceted("self", "Ticket", "2031-02-06T00:00:00.000Z", { kind: "note", kindLabel: "Note", relation: "self" }),
+        faceted("resolved", "Old question", "2031-02-03T00:00:00.000Z", {
+          kind: "comment", kindLabel: "Comment", relation: "other", comment: { resolved: true },
+        }),
+      ],
+    }]);
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "backlinks.toggle" }, viewport);
+    harness.controller.setPreviewRegions(detailBacklinkRegions(harness.controller.state));
+    return harness;
+  }
+  const rows = (harness: Awaited<ReturnType<typeof openPanel>>) =>
+    visibleBacklinkSources(harness.controller.state.backlinks).map((source) => source.blockId);
+
+  test("opens with groups collapsed to their open items and asks for enough sources to count", async () => {
+    const harness = await openPanel();
+    expect(harness.calls.backlinkQueries).toEqual([{ targetBlockId: "hub-block", limit: BACKLINK_QUERY_LIMIT }]);
+    expect(rows(harness)).toEqual(["letter-waiting"]);
+    expect(harness.controller.state.previewRegions.regions
+      .filter((region) => region.kind === "backlink-group").map((region) => region.id))
+      .toEqual(["backlink-group:letter", "backlink-group:day-page"]);
+  });
+
+  test("Tab reaches a collapsed group's open rows between the headers", async () => {
+    const harness = await openPanel();
+    const order: string[] = [];
+    for (let step = 0; step < 4; step += 1) {
+      await harness.controller.dispatch({ type: "preview.focus.move", delta: 1 }, viewport);
+      order.push(harness.controller.state.previewRegions.focusedRegionId ?? "");
+    }
+    expect(order).toEqual([
+      "backlink-group:letter", "backlink:letter-waiting", "backlink-group:day-page", "backlink-group:letter",
+    ]);
+  });
+
+  test("a group header opens by pointer and by keyboard focus", async () => {
+    const harness = await openPanel();
+    // Pointer: the header link activates its group.
+    await harness.controller.dispatch({
+      type: "preview.action",
+      action: { type: "backlink.group.disclosure.toggle", kind: "letter" },
+    }, viewport);
+    expect(rows(harness)).toEqual(["letter-waiting", "letter-done"]);
+    // Keyboard: Tab to a header, then `.` (source disclosure) folds that group.
+    harness.controller.setPreviewRegions(detailBacklinkRegions(harness.controller.state));
+    await harness.controller.dispatch({ type: "preview.focus.set", regionId: "backlink-group:day-page" }, viewport);
+    await harness.controller.dispatch({ type: "backlinks.source.toggle" }, viewport);
+    expect(rows(harness)).toEqual(["letter-waiting", "letter-done", "day"]);
+    await harness.controller.dispatch({ type: "preview.activate" }, viewport);
+    expect(rows(harness)).toEqual(["letter-waiting", "letter-done"]);
+  });
+
+  test("status-line controls toggle hidden sources, kinds, stages and sort", async () => {
+    const harness = await openPanel();
+    const control = (name: "kind" | "stage" | "resolved" | "related" | "sort") =>
+      harness.controller.dispatch({ type: "preview.action", action: { type: "backlinks.control", control: name } }, viewport);
+    const backlinks = harness.controller.state.backlinks;
+
+    await control("resolved");
+    expect(backlinks.showResolved).toBe(true);
+    await control("related");
+    expect(backlinks.showRelated).toBe(true);
+    await control("kind");
+    // Kind order follows group order: groups with open items first.
+    expect(backlinks.kindFilter).toBe("letter");
+    expect(rows(harness)).toEqual(["letter-waiting", "letter-done"]);
+    await control("stage");
+    expect(backlinks.stageFilter).toBe("open");
+    expect(rows(harness)).toEqual(["letter-waiting"]);
+    for (let step = 0; step < 4; step += 1) await control("sort");
+    expect([backlinks.sortField, backlinks.sortDirection]).toEqual(["title", "asc"]);
+  });
+
+  test("a Peek selection inside a folded group opens that group", async () => {
+    const harness = await openPanel();
+    await harness.controller.onServiceEvent(event("ui", {
+      targetClientId: "detail-test",
+      command: "backlinks.select",
+      targetBlockId: "hub-block",
+      sourceBlockId: "letter-done",
+    }), viewport);
+    expect(rows(harness)).toEqual(["letter-waiting", "letter-done"]);
+    expect(harness.controller.state.backlinks.selectedIndex).toBe(1);
+  });
 });

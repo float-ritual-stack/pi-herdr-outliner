@@ -857,10 +857,12 @@ title reporting use that same in-app fallback.
 | `E` | Toggle subtle full-width backgrounds around generated embed regions in this Detail |
 | `b` | Expand/collapse the generated Backlinks section; the first expansion loads results lazily |
 | `/` | Edit a fuzzy backlink-source filter; Enter applies and Esc cancels |
-| `s` | Cycle updated/created timestamp sorting in descending/ascending order |
+| `s` | Cycle updated/created/title sorting in descending/ascending order; open items stay first |
+| `k` / `t` | Backlinks: show one kind at a time / one stage (open, waiting, draft, active, done), then all |
+| `h` / `n` | Backlinks: show or hide resolved comments / this note and its descendants |
 | `Tab` / `Shift+Tab` | In Pi Detail, traverse Properties, visible document links, callouts, annotations and expanded Backlinks in reading order; scroll follows focus |
-| `.` | Expand/collapse occurrence details for the selected backlink source |
-| Backlink/Property row click | Select and highlight that generated row |
+| `.` | Expand/collapse the focused backlink group, or occurrence details for the selected source |
+| Backlink/Property row click | Select and highlight that generated row; a backlink group header or status-line toggle activates |
 | `Ctrl`/`Meta`-click | Peek a Backlink source or open a typed Property target |
 | `Enter` | Activate the focused control or document link; a focused backlink source opens Peek |
 | Peek: `Left` / `Right` | Preview the previous / next source in the captured filtered/sorted set |
@@ -936,14 +938,31 @@ callout syntax and fold state remain unchanged.
 
 Backlinks are a generated read projection beneath the canonical Markdown
 document. The collapsed section performs no reference scan. Expanding it asks
-the service for at most 50 source blocks and groups repeated exact, page,
+the service for at most 200 source blocks and groups repeated exact, page,
 Work-ID, and block-valued property references per source. Property references
 such as `[source-block::<block-id>]` retain their normalized property key in the
 result and are summarized by property type. Empty and truncated states remain
-explicit. `/` fuzzily filters source title, context, relation type, and
-occurrence text. `s` cycles updated/created timestamp sorting in both
-directions. `.` or the clickable `+`/`−` disclosure expands only the selected
-source's occurrence snippets. Results are cached for that target and
+explicit.
+
+Sources are grouped by the kind the service reports (see
+`references.backlinks` below). Each group header shows its count and stage
+counts, such as `Letter 4 (1 waiting · 1 draft · 2 done)`. Groups start
+collapsed but keep their open (waiting, draft, active) sources listed; groups
+with open sources come first, then the most recently updated. Inside a group,
+open sources come first, then the chosen sort. Each source is one line: the
+title, then a dim suffix with its stage, breadcrumb and reference counts such as
+`Work ID ×2`, shortened to the pane width. By default the note itself, its
+descendants and resolved comments are hidden. The status line always says what
+is shown and what is hidden, for example
+`5 of 12 · 2 this note hidden · 1 resolved hidden · Kind: all · Stage: all ·
+Sort: Updated ↓`, and each part is a clickable toggle. `/` fuzzily filters
+source title, context, kind, stage, relation type, and occurrence text; any
+narrowing filter opens every group. `k` and `t` cycle the kind and stage
+filters, `h` and `n` show resolved comments and this note, and `s` cycles
+updated, created and title sorting in both directions. A group header's `+`/`−`,
+`Enter` on a focused header, or `.` toggles the group. `.` or the clickable
+`+`/`−` on a source row expands only that source's occurrence snippets. Against
+a service without the facets capability, Detail shows one flat list. Results are cached for that target and
 invalidated by canonical content/address events. Generated rows never enter the
 edit buffer or saved `Block.text`; clicking a source row selects and highlights
 it, while `Enter` or `Ctrl`/`Meta`-click opens a reversible preview over the
@@ -1365,7 +1384,17 @@ navigation, symbolic occurrences resolve through `page_addresses`, and only
 occurrences resolving to the requested canonical target become backlinks.
 Unresolved symbolic text is not a backlink. Deleted source blocks are opt-in;
 querying an existing deleted target remains supported and explicit. Results are
-bounded by source block and report `complete` or `truncated`.
+bounded by source block and report `complete` or `truncated`. A service with
+the `references.backlinks.facets` capability adds `facets` to each source: its
+`kind` and `kindLabel`, its `relation` to the target (`self`, `descendant` or
+`other`), its `stage` (the first declared of `work-stage`, `outbox`, `stage` or
+`status`, with a `waiting`/`draft`/`active`/`done` bucket for known values) and,
+for comments, whether the thread is `resolved`. The kind comes from the source's
+own `type::`, else from the nearest typed or day block up to and including its
+containing page; comments and replies are `comment`, a `day::<date>` or a
+date-prefixed `page::` address marks a `day-page`, and anything else is a
+`note`. The mapping is the data table `DEFAULT_BACKLINK_FACET_RULES` in
+`src/backlink-facets.ts`, not a list of workspace types.
 
 Work IDs are allocated through the service rather than by scanning in a client. `work-ids.status` reports the configured prefix, observed legacy prefixes, and next ID; `work-ids.configure` explicitly chooses the workspace prefix; `work-ids.allocate` optimistically appends the next ID to an opted-in canonical block or atomically replaces its single configured `[work-id::<PREFIX>-XXX]` self-assignment marker. A clean existing prefix is adopted automatically, while ambiguous legacy prefixes remain visible but unconfigured. Canonical manual IDs for the configured prefix advance the same allocator; malformed, noncanonical, or out-of-prefix property values remain inert text metadata. The reservation ledger retains owning UUIDs after purge.
 

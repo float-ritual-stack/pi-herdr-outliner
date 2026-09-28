@@ -30,8 +30,8 @@ import type {
 } from "./types";
 
 const DEFAULT_CONTEXT_UNITS = 32;
-const ANNOTATION_TYPE = "annotation";
-const ANNOTATION_REPLY_TYPE = "annotation-reply";
+export const ANNOTATION_TYPE = "annotation";
+export const ANNOTATION_REPLY_TYPE = "annotation-reply";
 export const OBSOLETE_ANNOTATION_PROPERTY_KEYS: Readonly<Record<string, true>> = {
   "target-kind": true,
   "source-block": true,

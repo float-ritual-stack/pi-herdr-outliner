@@ -41,11 +41,14 @@ import type { DetailCalloutTheme } from "./detail-callout-theme";
 import { detailEmbedIds } from "./detail-embeds";
 import { linkOutlinerDocument, linkOutlinerMarkdown, outlinerLinkUri, resourceOccurrenceLink, resourceOccurrenceLinks } from "./outliner-links";
 import {
+  backlinkGroupRegionId,
+  detailBacklinkGroupExpanded,
+  detailBacklinkView,
   detailBlockTarget,
   detailResourceDescription,
-  visibleBacklinkSources,
   type DetailState,
 } from "./detail-controller";
+import { backlinkGroupRows, type BacklinkViewGroup } from "./backlink-view";
 import {
   previewRegionActionUri,
   reconcilePreviewRegions,
@@ -69,9 +72,11 @@ import {
   SourceSpannedMarkdown,
   type SourceSpannedMarkdownRowRender,
 } from "./source-spanned-markdown";
-import type {
-  AnnotationThread,
-  BacklinkReferenceGroup,
+import {
+  BACKLINK_STAGE_BUCKETS,
+  type AnnotationThread,
+  type BacklinkReferenceGroup,
+  type BacklinkSource,
 } from "./types";
 
 export interface DetailDraftProjection {
@@ -509,6 +514,11 @@ function highlightActiveBacklink(text: string): string {
   return `${ACTIVE_SELECTION_STYLE}${text}${RESET_STYLE}`;
 }
 
+// Generated backlink Markdown uses emphasis only for secondary detail.
+function dimBacklinkDetail(text: string): string {
+  return `\x1b[2m${text}\x1b[22m`;
+}
+
 
 // Escape only `]`: pi-tui reads `\\[…\\]` as LaTeX, and an unmatched `]` already
 // keeps `[label](uri)` from forming a link.
@@ -584,46 +594,156 @@ export function parseDetailPreviewActionUri(uri: string): DetailPreviewAction | 
   return parsePreviewRegionActionUri(uri);
 }
 
+interface DetailBacklinkSection {
+  group: BacklinkViewGroup | null;
+  expanded: boolean;
+  rows: BacklinkSource[];
+}
+
+/** Rendered order of groups and rows; regions and Markdown both follow it. */
+function detailBacklinkSections(state: Readonly<DetailState>): DetailBacklinkSection[] {
+  const view = detailBacklinkView(state.backlinks);
+  if (!view.faceted) return [{ group: null, expanded: true, rows: view.matching }];
+  return view.groups.map((group) => {
+    const expanded = detailBacklinkGroupExpanded(state.backlinks, group.kind);
+    return { group, expanded, rows: backlinkGroupRows(group, expanded) };
+  });
+}
+
 export function detailBacklinkRegions(
   state: Readonly<DetailState>,
 ): PreviewRegion[] {
   const parentId = "backlinks";
-  const sources = state.backlinks.expanded
-    ? visibleBacklinkSources(state.backlinks)
-    : [];
-  const regions: PreviewRegion[] = [{
+  const sections = state.backlinks.expanded ? detailBacklinkSections(state) : [];
+  const rowRegion = (source: BacklinkSource, rowParent: string): PreviewRegion => ({
+    id: `backlink:${source.blockId}`,
+    kind: "backlink-source",
+    sourceSpan: null,
+    parentId: rowParent,
+    childIds: [],
+    focusable: true,
+    disclosure: {
+      defaultExpanded: false,
+      expanded: state.backlinks.expandedSourceIds.has(source.blockId),
+    },
+    activation: { type: "backlink.open", blockId: source.blockId },
+  });
+  const children: PreviewRegion[] = [];
+  const topIds: string[] = [];
+  for (const section of sections) {
+    if (!section.group) {
+      for (const source of section.rows) {
+        topIds.push(`backlink:${source.blockId}`);
+        children.push(rowRegion(source, parentId));
+      }
+      continue;
+    }
+    const groupId = backlinkGroupRegionId(section.group.kind);
+    topIds.push(groupId);
+    // Rows hang off the panel, not the header: a collapsed group still shows
+    // its open rows, and region traversal skips children of collapsed parents.
+    children.push({
+      id: groupId,
+      kind: "backlink-group",
+      sourceSpan: null,
+      parentId,
+      childIds: [],
+      focusable: true,
+      disclosure: { defaultExpanded: false, expanded: section.expanded },
+      activation: { type: "backlink.group.disclosure.toggle", kind: section.group.kind },
+    });
+    for (const source of section.rows) {
+      topIds.push(`backlink:${source.blockId}`);
+      children.push(rowRegion(source, parentId));
+    }
+  }
+  return [{
     id: parentId,
     kind: "backlinks",
     sourceSpan: null,
     parentId: null,
-    childIds: sources.map((source) => `backlink:${source.blockId}`),
+    childIds: topIds,
     focusable: false,
     disclosure: {
       defaultExpanded: false,
       expanded: state.backlinks.expanded,
     },
     activation: { type: "backlinks.disclosure.toggle" },
-  }];
-  if (!state.backlinks.expanded) return regions;
-  for (const source of sources) {
-    regions.push({
-      id: `backlink:${source.blockId}`,
-      kind: "backlink-source",
-      sourceSpan: null,
-      parentId,
-      childIds: [],
-      focusable: true,
-      disclosure: {
-        defaultExpanded: false,
-        expanded: state.backlinks.expandedSourceIds.has(source.blockId),
-      },
-      activation: { type: "backlink.open", blockId: source.blockId },
-    });
-  }
-  return regions;
+  }, ...children];
 }
 
-export function renderBacklinksDocument(state: Readonly<DetailState>): string {
+function backlinkStageSummary(group: BacklinkViewGroup): string {
+  const parts = BACKLINK_STAGE_BUCKETS
+    .filter((bucket) => group.stageCounts[bucket])
+    .map((bucket) => `${group.stageCounts[bucket]} ${bucket}`);
+  if (parts.length === 0) return "";
+  const staged = BACKLINK_STAGE_BUCKETS
+    .reduce((sum, bucket) => sum + (group.stageCounts[bucket] ?? 0), 0);
+  const unstaged = group.sources.length - staged;
+  if (unstaged > 0) parts.push(`${unstaged} no stage`);
+  return ` (${parts.join(" · ")})`;
+}
+
+function fitColumns(text: string, columns: number): string {
+  return truncateToWidth(text, Math.max(1, columns), "…");
+}
+
+/** Fit `title — suffix` into `columns`, shortening the suffix before the title. */
+function fitBacklinkRow(title: string, suffix: string, columns: number): { title: string; suffix: string } {
+  const separator = 3;
+  const titleWidth = visibleWidth(title);
+  const suffixWidth = visibleWidth(suffix);
+  if (!suffix || titleWidth + separator + suffixWidth <= columns) {
+    return { title: fitColumns(title, columns), suffix };
+  }
+  const room = columns - separator;
+  if (room < 12) return { title: fitColumns(title, columns), suffix: "" };
+  const suffixMinimum = Math.min(suffixWidth, Math.max(8, Math.floor(room * 0.35)));
+  const fittedTitle = fitColumns(title, room - suffixMinimum);
+  return {
+    title: fittedTitle,
+    suffix: fitColumns(suffix, room - visibleWidth(fittedTitle)),
+  };
+}
+
+function backlinkRowSuffix(source: BacklinkSource): string {
+  const facets = source.facets;
+  return [
+    ...(facets?.stage ? [facets.stage.value] : []),
+    ...(facets?.comment?.resolved ? ["resolved"] : []),
+    ...(facets && facets.relation !== "other" ? [facets.relation === "self" ? "this note" : "inside this note"] : []),
+    source.parentContext,
+    ...(source.deletedRootId ? ["Trash"] : []),
+    ...source.referenceGroups.map(backlinkGroupLabel),
+  ].join(" · ");
+}
+
+function backlinkStatusLine(state: Readonly<DetailState>): string {
+  const backlinks = state.backlinks;
+  const view = detailBacklinkView(backlinks);
+  const control = (label: string, name: "kind" | "stage" | "resolved" | "related" | "sort"): string =>
+    `[${escapeGeneratedLinkLabel(label)}](${previewRegionActionUri({ type: "backlinks.control", control: name })})`;
+  const direction = backlinks.sortDirection === "asc" ? "↑" : "↓";
+  const sort = backlinks.sortField === "created" ? "Created" : backlinks.sortField === "title" ? "Title" : "Updated";
+  const filter = backlinks.filterDraft ?? backlinks.filter;
+  const parts = [`${view.matching.length} of ${view.total}`];
+  if (filter) parts.unshift(`Filter: ${escapeGeneratedMarkdown(filter)}`);
+  if (view.filtered) parts.push(`${view.filtered} filtered`);
+  if (view.faceted) {
+    if (view.hiddenRelated) parts.push(control(`${view.hiddenRelated} this note hidden`, "related"));
+    else if (backlinks.showRelated) parts.push(control("this note shown", "related"));
+    if (view.hiddenResolved) parts.push(control(`${view.hiddenResolved} resolved hidden`, "resolved"));
+    else if (backlinks.showResolved) parts.push(control("resolved shown", "resolved"));
+    const kind = view.kinds.find((candidate) => candidate.kind === backlinks.kindFilter)?.label ??
+      backlinks.kindFilter;
+    parts.push(control(`Kind: ${kind ?? "all"}`, "kind"));
+    parts.push(control(`Stage: ${backlinks.stageFilter}`, "stage"));
+  }
+  parts.push(control(`Sort: ${sort} ${direction}`, "sort"));
+  return `_${parts.join(" · ")}_`;
+}
+
+export function renderBacklinksDocument(state: Readonly<DetailState>, width = 80): string {
   const backlinks = state.backlinks;
   const heading = `[Backlinks](${
     previewRegionActionUri({ type: "backlinks.disclosure.toggle" })
@@ -636,51 +756,62 @@ export function renderBacklinksDocument(state: Readonly<DetailState>): string {
   const collection = backlinks.collection;
   if (!collection) return `## ${heading}\n_No backlink data loaded_`;
 
-  const sources = visibleBacklinkSources(backlinks);
-  const filter = backlinks.filterDraft ?? backlinks.filter;
-  const direction = backlinks.sortDirection === "asc" ? "↑" : "↓";
-  const sort = backlinks.sortField === "created" ? "Created" : "Updated";
+  const sections = detailBacklinkSections(state);
+  const rows = sections.flatMap((section) => section.rows);
+  // A focused group header takes the selection marker, so exactly one line is active.
+  const focusedGroup = sections.find((section) => section.group &&
+    state.previewRegions.focusedRegionId === backlinkGroupRegionId(section.group.kind))?.group;
   const lines = [`## ${heading}`];
   if (backlinks.filterDraft !== null) {
     lines.push(
-      `**Filter:** ${escapeGeneratedMarkdown(filter)}▏ · ↵ apply · ⎋ cancel`,
+      `**Filter:** ${escapeGeneratedMarkdown(backlinks.filterDraft)}▏ · ↵ apply · ⎋ cancel`,
     );
   } else {
-    lines.push(
-      `_Filter: ${filter ? escapeGeneratedMarkdown(filter) : "none"} · ${sources.length}/${collection.sources.length} sources · Sort: ${sort} ${direction}_`,
-    );
+    lines.push(backlinkStatusLine(state));
   }
   if (collection.targetDeletedRootId) lines.push("_Target is in Trash._");
+  // One column of slack keeps a row from wrapping at the pane edge.
+  const columns = Math.max(8, width - 1);
   if (collection.sources.length === 0) {
     lines.push("_No backlinks._");
-  } else if (sources.length === 0) {
+  } else if (sections.every((section) => section.group === null && section.rows.length === 0)) {
     lines.push("_No backlinks match the current filter._");
   } else {
-    for (const [index, source] of sources.entries()) {
-      const title = escapeGeneratedLinkLabel(source.title);
-      const context = escapeGeneratedLinkLabel(source.parentContext);
-      const trash = source.deletedRootId ? " · Trash" : "";
-      const count = source.occurrenceCount === 1
-        ? "1 reference"
-        : `${source.occurrenceCount} references`;
-      const uri = previewRegionActionUri({ type: "backlink.open", blockId: source.blockId });
-      const selected = index === backlinks.selectedIndex;
-      const active = selected ? "**▶ ACTIVE** " : "";
-      const sourceExpanded = backlinks.expandedSourceIds.has(source.blockId);
-      const disclosure = detailBacklinkToggleUri(source.blockId);
-      const groups = source.referenceGroups.map(backlinkGroupLabel).join(", ");
-      const details = `${context}${trash} · ${count} · ${groups}`;
-      const row =
-        `[${sourceExpanded ? "−" : "+"}](${disclosure}) ${active}[${title}](${uri}) — [${details}](${uri})`;
-      lines.push(selected ? `~~${row}~~` : row);
-      if (sourceExpanded) {
-        for (const occurrence of source.occurrences) {
-          const property = occurrence.kind === "property"
-            ? `**${escapeGeneratedMarkdown(occurrence.propertyKey)} property** · `
-            : "";
-          lines.push(`  > ${property}${escapeGeneratedMarkdown(occurrence.snippet)}`);
+    for (const section of sections) {
+      if (section.group) {
+        const uri = previewRegionActionUri({ type: "backlink.group.disclosure.toggle", kind: section.group.kind });
+        const focused = section.group === focusedGroup;
+        const header = fitBacklinkRow(`${section.group.label} ${section.group.sources.length}`, "", columns - 2).title;
+        const line = `[${section.expanded ? "−" : "+"}](${uri}) ${focused ? "**▶ ACTIVE** " : ""}**[${
+          escapeGeneratedLinkLabel(header)}](${uri})**${escapeGeneratedMarkdown(backlinkStageSummary(section.group))}`;
+        lines.push(focused ? `~~${line}~~` : line);
+      }
+      for (const source of section.rows) {
+        const index = rows.indexOf(source);
+        const uri = previewRegionActionUri({ type: "backlink.open", blockId: source.blockId });
+        const selected = !focusedGroup && index === backlinks.selectedIndex;
+        const active = selected ? "**▶ ACTIVE** " : "";
+        const sourceExpanded = backlinks.expandedSourceIds.has(source.blockId);
+        const disclosure = detailBacklinkToggleUri(source.blockId);
+        const fitted = fitBacklinkRow(
+          source.title,
+          backlinkRowSuffix(source),
+          columns - 2 - (selected ? visibleWidth("▶ ACTIVE ") : 0),
+        );
+        const title = escapeGeneratedLinkLabel(fitted.title);
+        const details = fitted.suffix ? ` _[— ${escapeGeneratedLinkLabel(fitted.suffix)}](${uri})_` : "";
+        const row =
+          `[${sourceExpanded ? "−" : "+"}](${disclosure}) ${active}[${title}](${uri})${details}`;
+        lines.push(selected ? `~~${row}~~` : row);
+        if (sourceExpanded) {
+          for (const occurrence of source.occurrences) {
+            const property = occurrence.kind === "property"
+              ? `**${escapeGeneratedMarkdown(occurrence.propertyKey)} property** · `
+              : "";
+            lines.push(`  > ${property}${escapeGeneratedMarkdown(occurrence.snippet)}`);
+          }
+          if (source.occurrencesTruncated) lines.push("  > Additional occurrences omitted.");
         }
-        if (source.occurrencesTruncated) lines.push("  > Additional occurrences omitted.");
       }
     }
   }
@@ -1018,6 +1149,26 @@ function detailAnnotationRegions(
   }))]);
 }
 
+/** Backlink rows fit the rendered width, so the document is rebuilt per width. */
+class DetailBacklinksMarkdown implements Component {
+  private text: string | undefined;
+  constructor(private readonly state: Readonly<DetailState>, private readonly markdown: Markdown) {}
+
+  render(width: number): string[] {
+    const text = renderBacklinksDocument(this.state, width);
+    if (text !== this.text) {
+      this.text = text;
+      this.markdown.setText(text);
+    }
+    return this.markdown.render(width);
+  }
+
+  invalidate(): void {
+    this.text = undefined;
+    this.markdown.invalidate();
+  }
+}
+
 class DetailPreviewBody implements Component {
   renderedFrame:DocumentFrame|null=null;
   renderedWidth:number|undefined;
@@ -1026,7 +1177,7 @@ class DetailPreviewBody implements Component {
     private readonly state: Readonly<DetailState>,
     private readonly authored: DetailAnnotationPreview,
     private readonly inspector: Markdown,
-    private readonly backlinks: Markdown,
+    private readonly backlinks: DetailBacklinksMarkdown,
     private readonly dedicatedInspector: () => boolean,
     private readonly includeInspector: () => boolean,
     private readonly includeBacklinks: () => boolean,
@@ -1157,7 +1308,7 @@ export class DetailPiPreviewLayout extends VStack {
   readonly markdown: SourceSpannedMarkdown;
   private readonly annotationPreview: DetailAnnotationPreview;
   readonly inspectorMarkdown: Markdown;
-  readonly backlinkMarkdown: Markdown;
+  readonly backlinkMarkdown: DetailBacklinksMarkdown;
   readonly scrollView: ScrollView;
   private readonly body: DetailPreviewBody;
   private bodyLinks = new Map<string, RenderedLink[]>();
@@ -1172,7 +1323,6 @@ export class DetailPiPreviewLayout extends VStack {
   private renderedRawText: string | undefined;
   private renderedReferencesReady: boolean | undefined;
   private renderedWorkIdPrefix: string | null | undefined;
-  private renderedBacklinksDocument: string | undefined;
   private renderedInspectorDocument: string | undefined;
   private renderedInspectorWidth: number | undefined;
   private renderedEmbedPresentation: string | undefined;
@@ -1195,6 +1345,7 @@ export class DetailPiPreviewLayout extends VStack {
   private resetScroll = false;
   private previousBacklinksExpanded = false;
   private previousBacklinkSelectedIndex: number | undefined;
+  private previousFocusedBacklinkGroup: string | null = null;
   private pendingBacklinkSelectionScroll = false;
   private previousPropertyFocusedId: string | null = null;
   private pendingPropertySelectionScroll = false;
@@ -1233,11 +1384,12 @@ export class DetailPiPreviewLayout extends VStack {
       ...markdownTheme,
       linkUrl: () => "",
     });
-    const backlinkMarkdown = new Markdown("", 0, 0, {
+    const backlinkMarkdown = new DetailBacklinksMarkdown(state, new Markdown("", 0, 0, {
       ...markdownTheme,
       strikethrough: highlightActiveBacklink,
+      italic: dimBacklinkDetail,
       linkUrl: () => "",
-    });
+    }));
     const body = new DetailPreviewBody(
       state,
       annotationPreview,
@@ -1753,11 +1905,6 @@ export class DetailPiPreviewLayout extends VStack {
       ? detailAnnotationGroups(this.state)
       : [];
     this.annotationPreview.setGroups(annotationGroups);
-    const backlinksDocument = renderBacklinksDocument(this.state);
-    if (backlinksDocument !== this.renderedBacklinksDocument) {
-      this.renderedBacklinksDocument = backlinksDocument;
-      this.backlinkMarkdown.setText(backlinksDocument);
-    }
     const regions = this.state.propertyInspector.presentation === "dedicated"
       ? detailPropertyInspectorRegions(this.state)
       : [
@@ -1811,8 +1958,13 @@ export class DetailPiPreviewLayout extends VStack {
     }
     this.previousAnnotationFocusedId = focusedAnnotationId;
     this.previousAnnotationFocusedExpanded = focusedAnnotationExpanded;
+    const focusedBacklinkGroup = this.state.previewRegions.focusedRegionId?.startsWith("backlink-group:")
+      ? this.state.previewRegions.focusedRegionId
+      : null;
     const backlinkSelectionChanged =
-      this.state.backlinks.selectedIndex !== this.previousBacklinkSelectedIndex;
+      this.state.backlinks.selectedIndex !== this.previousBacklinkSelectedIndex ||
+      focusedBacklinkGroup !== this.previousFocusedBacklinkGroup;
+    this.previousFocusedBacklinkGroup = focusedBacklinkGroup;
     if (
       this.state.backlinks.expanded &&
       (!this.previousBacklinksExpanded || backlinkSelectionChanged)
@@ -1977,6 +2129,7 @@ export class DetailPiPreviewLayout extends VStack {
       case "property-inspector": this.pendingPropertySelectionScroll = true; break;
       case "annotation":
       case "annotation-thread": this.pendingAnnotationSelectionScroll = true; break;
+      case "backlink-group":
       case "backlink-source": this.pendingBacklinkSelectionScroll = true; break;
     }
   }

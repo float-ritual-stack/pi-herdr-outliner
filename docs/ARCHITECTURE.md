@@ -297,10 +297,20 @@ invalidates it on canonical content/address events. One relation primitive
 reverses exact block references, normalized page addresses, Work IDs, and
 block-valued properties such as `[source-block::<block-id>]`. Each projected
 source carries canonical created/updated timestamps plus normalized relation
-groups. Detail keeps only transient filter, sort, selection, and per-source
-disclosure state: fuzzy matching spans source title, parent context, relation
-type, and snippets; sorting cycles created/updated timestamps in both
-directions. The authored Markdown and generated backlink Markdown remain
+groups. With the `references.backlinks.facets` capability each source also
+carries service-derived facets (kind, relation to the target, stage bucket,
+comment resolution) from the data table in
+[`backlink-facets.ts`](../src/backlink-facets.ts); clients group and filter on
+them instead of re-reading properties. [`backlink-view.ts`](../src/backlink-view.ts)
+is the shared presentation: default hiding (the target, its descendants,
+resolved comments), kind/stage/text filters, grouping by kind with stage
+counts, open-first ordering and hidden/filtered counts that add up to the
+total. Detail and Backlink Peek both call it, and Peek receives the same view
+options at launch so its snapshot matches the panel. A collection without
+facets renders as one flat list. Detail keeps only transient view options,
+group and per-source disclosure, and selection; sorting cycles
+updated/created/title in both directions. Rows render one line each, fitted to
+the pane width. The authored Markdown and generated backlink Markdown remain
 separate components; edit/save paths only read canonical block text. `Tab` or a
 plain source-row click selects generated sources, `.` toggles the selected
 source's occurrence rows, and `Enter` or a Ctrl/Meta-click opens a non-routable

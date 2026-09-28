@@ -1,3 +1,8 @@
+import {
+  backlinkSourceFacets,
+  DEFAULT_BACKLINK_FACET_RULES,
+  type BacklinkFacetRules,
+} from "./backlink-facets";
 import { normalizePageAddress } from "./page-addresses";
 import { parsePropertyRecords } from "./properties";
 import {
@@ -29,6 +34,7 @@ export interface BacklinkRelationInput {
   blocksById: ReadonlyMap<string, Block>;
   addressTargets: ReadonlyMap<string, string>;
   workIdPrefix: string | null;
+  facetRules?: BacklinkFacetRules;
 }
 
 export function normalizeBacklinkQuery(query: BacklinkQuery): BacklinkQuery {
@@ -160,6 +166,7 @@ function backlinkSource(
   target: Block,
   occurrences: readonly BacklinkRelationOccurrence[],
   blocksById: ReadonlyMap<string, Block>,
+  facetRules: BacklinkFacetRules,
 ): BacklinkSource {
   return {
     blockId: source.id,
@@ -176,6 +183,7 @@ function backlinkSource(
     ...(source.effectiveDeletedRootId
       ? { deletedRootId: source.effectiveDeletedRootId }
       : {}),
+    facets: backlinkSourceFacets(source, target, blocksById, facetRules),
   };
 }
 
@@ -199,7 +207,13 @@ export function resolveBacklinkRelation(input: BacklinkRelationInput): BacklinkC
           occurrenceTarget(occurrence, input.addressTargets, input.workIdPrefix) === input.target.id,
       );
     if (occurrences.length === 0) continue;
-    matches.push(backlinkSource(source, input.target, occurrences, input.blocksById));
+    matches.push(backlinkSource(
+      source,
+      input.target,
+      occurrences,
+      input.blocksById,
+      input.facetRules ?? DEFAULT_BACKLINK_FACET_RULES,
+    ));
     if (matches.length > query.limit) break;
   }
 

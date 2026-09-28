@@ -1,3 +1,4 @@
+import { parseBacklinkViewOptions } from "../src/backlink-view";
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -562,9 +563,15 @@ if (args[0] === "plugin" && args[1] === "pane" && args[2] === "open") {
       sourceClientId: "detail-one",
       targetBlockId: "hub",
       selectedSourceBlockId: "source-two",
-      filter: "road map",
-      sortField: "created",
-      sortDirection: "asc",
+      view: {
+        filter: "road map",
+        sortField: "title",
+        sortDirection: "asc",
+        showRelated: true,
+        showResolved: false,
+        kind: "outbox-item",
+        stage: "open",
+      },
     }, herdr);
     const backlinkCalls = readFileSync(logPath, "utf8").trim().split("\n").map(
       (line) => JSON.parse(line) as string[],
@@ -576,9 +583,17 @@ if (args[0] === "plugin" && args[1] === "pane" && args[2] === "open") {
     expect(backlinkOpen).toContain("OUTLINER_BACKLINK_SOURCE_CLIENT_ID=detail-one");
     expect(backlinkOpen).toContain("OUTLINER_BACKLINK_TARGET_BLOCK_ID=hub");
     expect(backlinkOpen).toContain("OUTLINER_BACKLINK_SELECTED_SOURCE_ID=source-two");
-    expect(backlinkOpen).toContain("OUTLINER_BACKLINK_FILTER=road map");
-    expect(backlinkOpen).toContain("OUTLINER_BACKLINK_SORT_FIELD=created");
-    expect(backlinkOpen).toContain("OUTLINER_BACKLINK_SORT_DIRECTION=asc");
+    const viewArgument = backlinkOpen.find((argument) => argument.startsWith("OUTLINER_BACKLINK_VIEW="))!;
+    // Peek rebuilds the same view from what Detail sent, including every new filter.
+    expect(parseBacklinkViewOptions(JSON.parse(viewArgument.slice("OUTLINER_BACKLINK_VIEW=".length)))).toEqual({
+      filter: "road map",
+      sortField: "title",
+      sortDirection: "asc",
+      showRelated: true,
+      showResolved: false,
+      kind: "outbox-item",
+      stage: "open",
+    });
     expect(backlinkOpen).toContain("OUTLINER_OPEN_DESTINATION_TIMEOUT_MS=9000");
     expect(backlinkOpen).toContain("OUTLINER_REMOTE=1");
     expect(backlinkOpen).toContain("OUTLINER_SOCKET_PATH=/tmp/forwarded-outliner.sock");

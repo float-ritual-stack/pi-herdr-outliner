@@ -86,6 +86,11 @@ function state(overrides: Partial<DetailState> = {}): DetailState {
       filterDraft: null,
       sortField: "updated",
       sortDirection: "desc",
+      showRelated: false,
+      showResolved: false,
+      kindFilter: null,
+      stageFilter: "all",
+      expandedKinds: new Set(),
       expandedSourceIds: new Set(),
     },
     propertyInspector: {

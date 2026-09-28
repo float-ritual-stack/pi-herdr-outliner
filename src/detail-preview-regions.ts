@@ -13,6 +13,7 @@ export type PreviewRegionKind =
   | "annotation-thread"
   | "callout"
   | "backlinks"
+  | "backlink-group"
   | "backlink-source"
   | "property-inspector"
   | "property-group"
@@ -32,10 +33,16 @@ export type PreviewRegionAction =
   | { type: "backlinks.disclosure.toggle" }
   | { type: "backlink.open"; blockId: string }
   | { type: "backlink.source.disclosure.toggle"; blockId: string }
+  | { type: "backlink.group.disclosure.toggle"; kind: string }
+  | { type: "backlinks.control"; control: BacklinkControl }
   | { type: "property-inspector.disclosure.toggle" }
   | { type: "property-inspector.pane.open" }
   | { type: "property-inspector.value.copy"; occurrenceId: string }
   | { type: "property-inspector.target.open"; occurrenceId: string };
+
+/** Panel-level backlink toggles, reachable by pointer as well as by key. */
+export const BACKLINK_CONTROLS = ["kind", "stage", "resolved", "related", "sort"] as const;
+export type BacklinkControl = (typeof BACKLINK_CONTROLS)[number];
 
 export interface PreviewRegionDisclosure {
   defaultExpanded: boolean;
@@ -92,6 +99,11 @@ export function previewRegionActionUri(action: PreviewRegionAction): string {
     case "backlink.source.disclosure.toggle":
       if (!action.blockId.trim()) throw new Error("Backlink source ID cannot be empty");
       return `${DETAIL_PREVIEW_SCHEME}//backlink-toggle/${encodeURIComponent(action.blockId)}`;
+    case "backlink.group.disclosure.toggle":
+      if (!action.kind.trim()) throw new Error("Backlink group kind cannot be empty");
+      return `${DETAIL_PREVIEW_SCHEME}//backlink-group/${encodeURIComponent(action.kind)}`;
+    case "backlinks.control":
+      return `${DETAIL_PREVIEW_SCHEME}//backlinks-control/${action.control}`;
     case "property-inspector.disclosure.toggle":
       return `${DETAIL_PREVIEW_SCHEME}//property-inspector-toggle`;
     case "property-inspector.pane.open":
@@ -157,6 +169,12 @@ export function parsePreviewRegionActionUri(uri: string): PreviewRegionAction | 
     case "backlink-toggle":
       if (!value) throw new Error("Invalid Detail backlink source");
       return { type: "backlink.source.disclosure.toggle", blockId: value };
+    case "backlink-group":
+      if (!value) throw new Error("Invalid Detail backlink group");
+      return { type: "backlink.group.disclosure.toggle", kind: value };
+    case "backlinks-control":
+      if (!BACKLINK_CONTROLS.includes(value as BacklinkControl)) throw new Error("Invalid Detail backlinks control");
+      return { type: "backlinks.control", control: value as BacklinkControl };
     case "property-inspector-toggle":
       if (value) throw new Error("Invalid property inspector action URI");
       return { type: "property-inspector.disclosure.toggle" };

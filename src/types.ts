@@ -1496,6 +1496,28 @@ export type BacklinkReferenceGroup =
       count: number;
     };
 
+export const BACKLINK_STAGE_BUCKETS = ["waiting", "draft", "active", "done"] as const;
+/** Normalized lifecycle bucket; waiting, draft and active are open. */
+export type BacklinkStageBucket = (typeof BACKLINK_STAGE_BUCKETS)[number];
+
+/**
+ * Service-derived meaning of one backlink source, so every client groups,
+ * filters and orders the same way. Present when the service advertises
+ * `references.backlinks.facets`.
+ */
+export interface BacklinkSourceFacets {
+  /** Stable kind key, e.g. `comment`, `day-page`, `note` or a normalized `type::` value. */
+  kind: string;
+  /** Human label for the kind, e.g. "Outbox item". */
+  kindLabel: string;
+  /** Where the source sits relative to the queried target. */
+  relation: "self" | "descendant" | "other";
+  /** The first configured stage property the source declares. `bucket` is absent for an unmapped value. */
+  stage?: { property: string; value: string; bucket?: BacklinkStageBucket };
+  /** Present for comments and replies; a reply takes its thread's lifecycle. */
+  comment?: { resolved: boolean };
+}
+
 export interface BacklinkSource {
   blockId: string;
   title: string;
@@ -1507,6 +1529,8 @@ export interface BacklinkSource {
   occurrences: BacklinkOccurrence[];
   occurrencesTruncated: boolean;
   deletedRootId?: string;
+  /** Absent from services without the `references.backlinks.facets` capability. */
+  facets?: BacklinkSourceFacets;
 }
 
 export interface BacklinkQuery {
@@ -1607,6 +1631,7 @@ export const OUTLINER_CAPABILITIES = [
   "changes.since",
   "properties.preview",
   "query.expression",
+  "references.backlinks.facets",
   "views.read",
 ] as const;
 export type OutlinerCapability = (typeof OUTLINER_CAPABILITIES)[number];

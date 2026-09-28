@@ -19,6 +19,7 @@ import {
   type OutlinerActionKeymap,
 } from "./outliner-actions";
 import type { TerminalInputAction, TerminalKey } from "./terminal";
+import type { BacklinkViewOptions } from "./backlink-view";
 import type { BacklinkSource, Block } from "./types";
 
 export interface BacklinkPeekLaunch {
@@ -26,9 +27,7 @@ export interface BacklinkPeekLaunch {
   browsingContextId: string;
   targetBlockId: string;
   selectedSourceBlockId: string;
-  filter: string;
-  sortField: "created" | "updated";
-  sortDirection: "asc" | "desc";
+  view: BacklinkViewOptions;
 }
 
 export interface BacklinkPeekPreview {

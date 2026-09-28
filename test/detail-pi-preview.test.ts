@@ -70,6 +70,7 @@ import type {
   AnnotationRepresentation,
   AnnotationTarget,
   AnnotationThread,
+  BacklinkCollection,
   Block,
   OutlinerNavigationTarget,
   SelectionContext,
@@ -331,6 +332,11 @@ function state(text: string, rawText = "raw edit source"): DetailState {
       filterDraft: null,
       sortField: "updated",
       sortDirection: "desc",
+      showRelated: false,
+      showResolved: false,
+      kindFilter: null,
+      stageFilter: "all",
+      expandedKinds: new Set(),
       expandedSourceIds: new Set(),
     },
     propertyInspector: {
@@ -2393,6 +2399,11 @@ describe("generated backlink preview", () => {
       filterDraft: null,
       sortField: "updated",
       sortDirection: "desc",
+      showRelated: false,
+      showResolved: false,
+      kindFilter: null,
+      stageFilter: "all",
+      expandedKinds: new Set(),
       expandedSourceIds: new Set(["source-target"]),
       collection: {
         targetBlockId: "block-1",
@@ -2430,7 +2441,7 @@ describe("generated backlink preview", () => {
 
     const backlinkAction = { type: "backlink.open", blockId: "source-target" } as const;
     const backlinkUri = previewRegionActionUri(backlinkAction);
-    const generated = renderBacklinksDocument(detail);
+    const generated = renderBacklinksDocument(detail, 160);
     expect(generated.match(new RegExp(backlinkUri, "g"))).toHaveLength(2);
     expect(resolvePreviewPointerAction(backlinkAction, false)).toEqual({
       type: "focus",
@@ -2444,7 +2455,7 @@ describe("generated backlink preview", () => {
     expect(generated).toContain("Showing first 1 source blocks");
     expect(generated).toContain("source-block property ×2");
     expect(generated).toContain("**source-block property**");
-    expect(generated).toContain("Filter: none");
+    expect(generated).toContain("1 of 1");
     expect(generated).toContain("Sort: Updated ↓");
     expect(generated).toContain("▶ ACTIVE");
     const highlighted = layout.backlinkMarkdown.render(80).find((line) =>
@@ -2464,15 +2475,17 @@ describe("generated backlink preview", () => {
     const source = detail.backlinks.collection!.sources[0]!;
     detail.backlinks.collection!.sources[0] = {...source, title: "Meeting [draft] notes", parentContext: "Project [2026] › Notes"};
     const labels = measureRenderedLinks(withInternalLinks(() =>
-      new Markdown(renderBacklinksDocument(detail), 0, 0, plainMarkdownTheme).render(160)))
+      new Markdown(renderBacklinksDocument(detail, 160), 0, 0, plainMarkdownTheme).render(160)))
       .filter(link => link.uri === backlinkUri).map(link => link.label);
     expect(labels[0]).toBe("Meeting [draft] notes");
-    expect(labels[1]).toStartWith("Project [2026] › Notes · 3 references");
+    expect(labels[1]).toStartWith("— Project [2026] › Notes · block reference ×1");
     detail.backlinks.collection!.sources[0] = source;
     detail.backlinks.expandedSourceIds.clear();
     expect(renderBacklinksDocument(detail)).not.toContain("See ((block-1)) from here");
     detail.backlinks.filter = "missing";
     expect(renderBacklinksDocument(detail)).toContain("No backlinks match the current filter.");
+    // Generated rows follow the current state at render time.
+    detail.backlinks.filter = "";
     expect(layout.markdown.render(80).map(stripTerminalSequences).join(" ")).not.toContain(
       "Duplicate source",
     );
@@ -2483,6 +2496,71 @@ describe("generated backlink preview", () => {
     expect(
       layout.backlinkMarkdown.render(80).map(stripTerminalSequences).join(" "),
     ).not.toContain("source-target");
+  });
+
+  test("groups faceted sources by kind, one line per row, with counts that add up", () => {
+    // Fictional garden-club ticket: long titles and breadcrumbs that would wrap.
+    const detail = state("Ticket");
+    const long = "A deliberately long letter title about seed trays and the spring table rota";
+    const source = (blockId: string, title: string, facets: NonNullable<BacklinkCollection["sources"][number]["facets"]>) => ({
+      blockId, title, parentContext: "Garden club › Correspondence › Outgoing letters archive",
+      createdAt: "2031-02-01T00:00:00.000Z", updatedAt: `2031-02-0${blockId.length % 9 + 1}T00:00:00.000Z`,
+      occurrenceCount: 2, referenceGroups: [{ kind: "work-id" as const, count: 2 }],
+      occurrences: [], occurrencesTruncated: false, facets,
+    });
+    const letter = (stage: "waiting" | "draft" | "done") => ({
+      kind: "letter", kindLabel: "Letter", relation: "other" as const,
+      stage: { property: "outbox", value: stage, bucket: stage },
+    });
+    detail.backlinks.expanded = true;
+    detail.backlinks.collection = {
+      targetBlockId: "block-1",
+      completeness: { kind: "complete" },
+      sources: [
+        source("w", long, letter("waiting")),
+        source("dr", `${long} (draft)`, letter("draft")),
+        source("d1", "Thanks", letter("done")),
+        source("d22", "Receipt", letter("done")),
+        source("day", "Monday", { kind: "day-page", kindLabel: "Day page", relation: "other" }),
+        source("self", "Ticket", { kind: "note", kindLabel: "Note", relation: "self" }),
+        source("old", "Old question", { kind: "comment", kindLabel: "Comment", relation: "other", comment: { resolved: true } }),
+      ],
+    };
+    const layout = previewLayout(detail);
+    layout.syncState();
+    for (const width of [48, 72, 120]) {
+      const lines = layout.backlinkMarkdown.render(width).map(stripTerminalSequences);
+      const text = lines.join("\n");
+      expect(text).toContain("5 of 7 · 1 this note hidden · 1 resolved hidden");
+      expect(text).toContain("Letter 4 (1 waiting · 1 draft · 2 done)");
+      expect(text).toContain("Day page 1");
+      // Collapsed groups show their open items only; each on one line.
+      const rows = lines.filter((line) => line.includes("A deliberately"));
+      expect(rows).toHaveLength(2);
+      for (const row of rows) {
+        expect(visibleWidth(row.trimEnd())).toBeLessThan(width);
+        expect(row).toContain("—");
+      }
+      expect(text).not.toContain("Thanks");
+      expect(text).not.toContain("Monday");
+    }
+    const wide = layout.backlinkMarkdown.render(160).map(stripTerminalSequences).join("\n");
+    expect(wide).toContain("waiting · Garden club › Correspondence › Outgoing letters archive · Work ID ×2");
+    const generated = renderBacklinksDocument(detail, 120);
+    for (const control of ["kind", "stage", "resolved", "related", "sort"] as const) {
+      const uri = previewRegionActionUri({ type: "backlinks.control", control });
+      expect(generated).toContain(uri);
+      expect(parseDetailPreviewActionUri(uri)).toEqual({ type: "backlinks.control", control });
+    }
+    // Keyboard focus on a header moves the single selection marker to it.
+    detail.previewRegions.focusedRegionId = "backlink-group:day-page";
+    const focusedLines = renderBacklinksDocument(detail, 120).split("\n");
+    expect(focusedLines.filter((line) => line.includes("▶ ACTIVE"))).toHaveLength(1);
+    expect(focusedLines.find((line) => line.includes("▶ ACTIVE"))).toContain("Day page 1");
+    detail.previewRegions.focusedRegionId = null;
+    const group = previewRegionActionUri({ type: "backlink.group.disclosure.toggle", kind: "day-page" });
+    expect(generated).toContain(group);
+    expect(parseDetailPreviewActionUri(group)).toEqual({ type: "backlink.group.disclosure.toggle", kind: "day-page" });
   });
 
   test("scrolls a changed backlink selection into the preview viewport", () => {
@@ -2496,6 +2574,11 @@ describe("generated backlink preview", () => {
       filterDraft: null,
       sortField: "updated",
       sortDirection: "desc",
+      showRelated: false,
+      showResolved: false,
+      kindFilter: null,
+      stageFilter: "all",
+      expandedKinds: new Set(),
       expandedSourceIds: new Set(),
       collection: {
         targetBlockId: "block-1",
@@ -2563,6 +2646,11 @@ describe("generated backlink preview", () => {
       filterDraft: null,
       sortField: "updated",
       sortDirection: "desc",
+      showRelated: false,
+      showResolved: false,
+      kindFilter: null,
+      stageFilter: "all",
+      expandedKinds: new Set(),
       expandedSourceIds: new Set(),
     };
     expect(renderBacklinksDocument(detail)).toContain("Loading");

@@ -358,6 +358,18 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
       case "detail.backlinks.source":
         await dispatch({ type: "backlinks.source.toggle" });
         return true;
+      case "detail.backlinks.kind":
+        await dispatch({ type: "backlinks.kind.cycle" });
+        return true;
+      case "detail.backlinks.stage":
+        await dispatch({ type: "backlinks.stage.cycle" });
+        return true;
+      case "detail.backlinks.resolved":
+        await dispatch({ type: "backlinks.resolved.toggle" });
+        return true;
+      case "detail.backlinks.related":
+        await dispatch({ type: "backlinks.related.toggle" });
+        return true;
       case "detail.embed.toggle":
         await dispatch({ type: "embed-background.toggle" });
         return true;

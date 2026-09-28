@@ -30,7 +30,20 @@ import {
   attentionSourceLine,
   emptyAttentionState,
 } from "./attention";
-import { subsequenceScore } from "./block-focus";
+import {
+  backlinkGroupRows,
+  BACKLINK_QUERY_LIMIT,
+  backlinkView,
+  DEFAULT_BACKLINK_VIEW_OPTIONS,
+  nextBacklinkKindFilter,
+  nextBacklinkSort,
+  nextBacklinkStageFilter,
+  type BacklinkSortDirection,
+  type BacklinkSortField,
+  type BacklinkStageFilter,
+  type BacklinkView,
+  type BacklinkViewOptions,
+} from "./backlink-view";
 import {
   detailEditorPositionAtVisualPoint,
   detailEditorVisualRowForSourceLine,
@@ -76,6 +89,7 @@ import {
   movePreviewRegionFocus,
   reconcilePreviewRegions,
   togglePreviewRegionDisclosure,
+  type BacklinkControl,
   type PreviewRegion,
   type PreviewRegionAction,
   type PreviewRegionState,
@@ -170,9 +184,6 @@ export interface DetailLineRange {
   endLine: number;
 }
 
-export type DetailBacklinkSortField = "created" | "updated";
-export type DetailBacklinkSortDirection = "asc" | "desc";
-
 export interface DetailBacklinkState {
   expanded: boolean;
   loading: boolean;
@@ -182,9 +193,35 @@ export interface DetailBacklinkState {
   error: string;
   filter: string;
   filterDraft: string | null;
-  sortField: DetailBacklinkSortField;
-  sortDirection: DetailBacklinkSortDirection;
+  sortField: BacklinkSortField;
+  sortDirection: BacklinkSortDirection;
+  showRelated: boolean;
+  showResolved: boolean;
+  kindFilter: string | null;
+  stageFilter: BacklinkStageFilter;
+  /** Kind groups the reader opened; groups start collapsed. */
+  expandedKinds: Set<string>;
   expandedSourceIds: Set<string>;
+}
+
+export function createDetailBacklinkState(): DetailBacklinkState {
+  return {
+    expanded: false,
+    loading: false,
+    collection: null,
+    selectedIndex: 0,
+    error: "",
+    filter: DEFAULT_BACKLINK_VIEW_OPTIONS.filter,
+    filterDraft: null,
+    sortField: DEFAULT_BACKLINK_VIEW_OPTIONS.sortField,
+    sortDirection: DEFAULT_BACKLINK_VIEW_OPTIONS.sortDirection,
+    showRelated: DEFAULT_BACKLINK_VIEW_OPTIONS.showRelated,
+    showResolved: DEFAULT_BACKLINK_VIEW_OPTIONS.showResolved,
+    kindFilter: DEFAULT_BACKLINK_VIEW_OPTIONS.kind,
+    stageFilter: DEFAULT_BACKLINK_VIEW_OPTIONS.stage,
+    expandedKinds: new Set(),
+    expandedSourceIds: new Set(),
+  };
 }
 export type DetailPropertyInspectorPresentation = "inline" | "dedicated";
 
@@ -254,34 +291,53 @@ export function propertyInspectorTargetLink(
 
 
 
-function normalizeBacklinkFilter(value: string): string {
-  return value.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
+export function backlinkGroupRegionId(kind: string): string {
+  return `backlink-group:${kind}`;
 }
 
+const BACKLINK_CONTROL_INTENTS = {
+  kind: "backlinks.kind.cycle",
+  stage: "backlinks.stage.cycle",
+  resolved: "backlinks.resolved.toggle",
+  related: "backlinks.related.toggle",
+  sort: "backlinks.sort.cycle",
+} as const satisfies Record<BacklinkControl, DetailIntent["type"]>;
+
+export function detailBacklinkViewOptions(
+  backlinks: Readonly<DetailBacklinkState>,
+): BacklinkViewOptions {
+  return {
+    filter: backlinks.filter,
+    sortField: backlinks.sortField,
+    sortDirection: backlinks.sortDirection,
+    showRelated: backlinks.showRelated,
+    showResolved: backlinks.showResolved,
+    kind: backlinks.kindFilter,
+    stage: backlinks.stageFilter,
+  };
+}
+
+export function detailBacklinkView(backlinks: Readonly<DetailBacklinkState>): BacklinkView {
+  return backlinkView(backlinks.collection, detailBacklinkViewOptions(backlinks));
+}
+
+/** A narrowing filter opens every group so matches are never folded away. */
+export function detailBacklinkGroupExpanded(
+  backlinks: Readonly<DetailBacklinkState>,
+  kind: string,
+): boolean {
+  return backlinks.expandedKinds.has(kind) || backlinks.filter !== "" ||
+    backlinks.kindFilter !== null || backlinks.stageFilter !== "all";
+}
+
+/** Backlink rows as rendered, in order; selection and focus index this list. */
 export function visibleBacklinkSources(
   backlinks: Readonly<DetailBacklinkState>,
 ): BacklinkSource[] {
-  const query = normalizeBacklinkFilter(backlinks.filter);
-  const sources = backlinks.collection?.sources.filter((source) => {
-    if (!query) return true;
-    const fields = [
-      source.title,
-      source.parentContext,
-      ...source.referenceGroups.map((group) =>
-        group.kind === "property" ? group.propertyKey : group.kind
-      ),
-      ...source.occurrences.map((occurrence) => occurrence.snippet),
-    ].map(normalizeBacklinkFilter);
-    return fields.some((field) =>
-      field.includes(query) || subsequenceScore(query, field) >= 900
-    );
-  }) ?? [];
-  const timestamp = backlinks.sortField === "created" ? "createdAt" : "updatedAt";
-  const direction = backlinks.sortDirection === "asc" ? 1 : -1;
-  return sources.sort((left, right) =>
-    direction * left[timestamp].localeCompare(right[timestamp]) ||
-    left.title.localeCompare(right.title) ||
-    left.blockId.localeCompare(right.blockId)
+  const view = detailBacklinkView(backlinks);
+  if (!view.faceted) return view.matching;
+  return view.groups.flatMap((group) =>
+    backlinkGroupRows(group, detailBacklinkGroupExpanded(backlinks, group.kind))
   );
 }
 type DetailAnnotationTarget = AnnotationTarget;
@@ -690,6 +746,11 @@ export type DetailIntent =
   | { type: "backlinks.filter.commit" }
   | { type: "backlinks.filter.cancel" }
   | { type: "backlinks.sort.cycle" }
+  | { type: "backlinks.kind.cycle" }
+  | { type: "backlinks.stage.cycle" }
+  | { type: "backlinks.resolved.toggle" }
+  | { type: "backlinks.related.toggle" }
+  | { type: "backlinks.group.toggle"; kind?: string }
   | { type: "backlinks.source.toggle"; blockId?: string }
   | { type: "preview.focus.move"; delta: -1 | 1 }
   | { type: "preview.focus.set"; regionId: string }
@@ -1023,18 +1084,7 @@ export function createDetailController(
     status: "",
     busy: false,
     refreshPending: false,
-    backlinks: {
-      expanded: false,
-      loading: false,
-      collection: null,
-      selectedIndex: 0,
-      error: "",
-      filter: "",
-      filterDraft: null,
-      sortField: "updated",
-      sortDirection: "desc",
-      expandedSourceIds: new Set(),
-    },
+    backlinks: createDetailBacklinkState(),
     propertyInspector: {
       presentation: options.propertyInspectorPresentation ?? "inline",
       model: null,
@@ -1289,6 +1339,8 @@ export function createDetailController(
     state.backlinks.selectedIndex = 0;
     state.backlinks.filter = "";
     state.backlinks.filterDraft = null;
+    state.backlinks.kindFilter = null;
+    state.backlinks.expandedKinds.clear();
     state.backlinks.expandedSourceIds.clear();
   };
 
@@ -1329,7 +1381,7 @@ export function createDetailController(
     try {
       const collection = await effects.queryBacklinks({
         targetBlockId,
-        limit: 50,
+        limit: BACKLINK_QUERY_LIMIT,
       });
       if (state.backlinks.expanded && isCurrent()) {
         if (isBufferMode()) state.refreshPending = true;
@@ -3608,6 +3660,13 @@ export function createDetailController(
               blockId: intent.action.blockId,
             }, viewport);
             break;
+          case "backlink.group.disclosure.toggle":
+            state.previewRegions.focusedRegionId = backlinkGroupRegionId(intent.action.kind);
+            await dispatch({ type: "backlinks.group.toggle", kind: intent.action.kind }, viewport);
+            break;
+          case "backlinks.control":
+            await dispatch({ type: BACKLINK_CONTROL_INTENTS[intent.action.control] }, viewport);
+            break;
           case "backlink.open": {
             const blockId = intent.action.blockId;
             const index = visibleBacklinkSources(state.backlinks)
@@ -3857,26 +3916,70 @@ export function createDetailController(
         state.status = "Backlink filter unchanged";
         break;
       case "backlinks.sort.cycle": {
-        const options: Array<[
-          DetailBacklinkSortField,
-          DetailBacklinkSortDirection,
-        ]> = [
-          ["updated", "desc"],
-          ["updated", "asc"],
-          ["created", "desc"],
-          ["created", "asc"],
-        ];
-        const current = options.findIndex(([field, direction]) =>
-          field === state.backlinks.sortField && direction === state.backlinks.sortDirection
+        const [field, direction] = nextBacklinkSort(
+          state.backlinks.sortField,
+          state.backlinks.sortDirection,
         );
-        const [field, direction] = options[(current + 1) % options.length];
         state.backlinks.sortField = field;
         state.backlinks.sortDirection = direction;
         state.backlinks.selectedIndex = 0;
         state.status = `Backlinks sorted by ${field} ${direction}`;
         break;
       }
+      case "backlinks.kind.cycle": {
+        const kinds = detailBacklinkView(state.backlinks).kinds;
+        state.backlinks.kindFilter = nextBacklinkKindFilter(state.backlinks.kindFilter, kinds);
+        state.backlinks.selectedIndex = 0;
+        const label = kinds.find((kind) => kind.kind === state.backlinks.kindFilter)?.label;
+        state.status = label ? `Backlinks: only ${label}` : "Backlinks: every kind";
+        break;
+      }
+      case "backlinks.stage.cycle":
+        state.backlinks.stageFilter = nextBacklinkStageFilter(state.backlinks.stageFilter);
+        state.backlinks.selectedIndex = 0;
+        state.status = state.backlinks.stageFilter === "all"
+          ? "Backlinks: every stage"
+          : `Backlinks: only ${state.backlinks.stageFilter}`;
+        break;
+      case "backlinks.resolved.toggle":
+        state.backlinks.showResolved = !state.backlinks.showResolved;
+        clampBacklinkSelection();
+        state.status = state.backlinks.showResolved
+          ? "Showing resolved comments"
+          : "Hiding resolved comments";
+        break;
+      case "backlinks.related.toggle":
+        state.backlinks.showRelated = !state.backlinks.showRelated;
+        clampBacklinkSelection();
+        state.status = state.backlinks.showRelated
+          ? "Showing this note and its descendants"
+          : "Hiding this note and its descendants";
+        break;
+      case "backlinks.group.toggle": {
+        const focused = focusedPreviewRegion(state.previewRegions);
+        const kind = intent.kind ?? (focused?.activation?.type === "backlink.group.disclosure.toggle"
+          ? focused.activation.kind
+          : selectedBacklinkSource()?.facets?.kind);
+        if (!kind) {
+          state.status = "No backlink group selected";
+          break;
+        }
+        const selected = selectedBacklinkSource()?.blockId;
+        if (state.backlinks.expandedKinds.has(kind)) state.backlinks.expandedKinds.delete(kind);
+        else state.backlinks.expandedKinds.add(kind);
+        const rows = visibleBacklinkSources(state.backlinks);
+        const kept = rows.findIndex((source) => source.blockId === selected);
+        state.backlinks.selectedIndex = kept >= 0 ? kept : Math.min(state.backlinks.selectedIndex, Math.max(0, rows.length - 1));
+        break;
+      }
       case "backlinks.source.toggle": {
+        const focusedGroup = intent.blockId === undefined
+          ? focusedPreviewRegion(state.previewRegions)
+          : undefined;
+        if (focusedGroup?.activation?.type === "backlink.group.disclosure.toggle") {
+          await dispatch({ type: "backlinks.group.toggle", kind: focusedGroup.activation.kind }, viewport);
+          break;
+        }
         const blockId = intent.blockId ?? selectedBacklinkSource()?.blockId;
         if (!blockId) {
           state.status = "No backlink source selected";
@@ -3901,9 +4004,7 @@ export function createDetailController(
           browsingContextId: effects.browsingContextId,
           targetBlockId,
           selectedSourceBlockId: source.blockId,
-          filter: state.backlinks.filter,
-          sortField: state.backlinks.sortField,
-          sortDirection: state.backlinks.sortDirection,
+          view: detailBacklinkViewOptions(state.backlinks),
         });
         state.status = `Peeking ${source.title}`;
         break;
@@ -4262,6 +4363,10 @@ export function createDetailController(
         command.sourceBlockId
       ) {
         await loadBacklinks();
+        // Peek walks every matching source; open the group of one that was folded away.
+        const kind = state.backlinks.collection?.sources
+          .find((source) => source.blockId === command.sourceBlockId)?.facets?.kind;
+        if (kind) state.backlinks.expandedKinds.add(kind);
         const index = visibleBacklinkSources(state.backlinks)
           .findIndex((source) => source.blockId === command.sourceBlockId);
         if (index >= 0) {
