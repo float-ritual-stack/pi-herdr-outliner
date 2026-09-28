@@ -358,10 +358,23 @@ describe('register', () => {
     expect(run.init?.cwd).toBe(WORKSPACE)
     expect(run.init?.env).toEqual({ OUTLINER_WORKSPACE_ROOT: WORKSPACE })
 
-    await $.tool.call({ tool: 'mcp__pi-outliner__work_complete', item: 'PIE-8', delivery: 'd-1', proof: 'Proof\n\nChecked.' })
+    await $.tool.call({ tool: 'mcp__pi-outliner__work_complete', item: 'PIE-8', deliveries: ['d-1', 'PIE-8/door'], proof: 'Proof\n\nChecked.' })
     const completed = session.runs.findLast(candidate => candidate.argv.includes('complete'))!
-    expect(completed.argv.slice(3, 9)).toEqual(['work', 'complete', 'PIE-8', '--delivery', 'd-1', '--stdin'])
+    expect(completed.argv.slice(3, 11)).toEqual(['work', 'complete', 'PIE-8', '--delivery', 'd-1', '--delivery', 'PIE-8/door', '--stdin'])
     expect(completed.init?.stdin).toBe('Proof\n\nChecked.')
+
+    await $.tool.call({ tool: 'mcp__pi-outliner__work_complete', item: 'PIE-8', allMerged: true, proofBlock: 'p-1' })
+    const allMerged = session.runs.findLast(candidate => candidate.argv.includes('complete'))!
+    expect(allMerged.argv.slice(3, 9)).toEqual(['work', 'complete', 'PIE-8', '--all-merged', '--proof-block', 'p-1'])
+
+    await $.tool.call({ tool: 'mcp__pi-outliner__work_deliver', item: 'PIE-8', repo: 'example-org/example-door', pr: 16, key: 'door' })
+    const delivered = session.runs.findLast(candidate => candidate.argv.includes('deliver'))!
+    expect(delivered.argv.slice(3, 11)).toEqual(['work', 'deliver', 'PIE-8', '--repo', 'example-org/example-door', '--pr', '16', '--key'])
+    expect(delivered.argv[11]).toBe('door')
+
+    await $.tool.call({ tool: 'mcp__pi-outliner__work_set', item: 'PIE-8/door', key: 'delivery-stage', value: 'complete', expectedRevision: 2 })
+    const set = session.runs.findLast(candidate => candidate.argv.includes('set'))!
+    expect(set.argv.slice(3, 10)).toEqual(['work', 'set', 'PIE-8/door', 'delivery-stage', 'complete', '--expected', '2'])
 
     await $.tool.call({ tool: 'mcp__pi-outliner__note_section', block: 'PIE-8', heading: '## Now', body: 'Updated.' })
     const section = session.runs.findLast(candidate => candidate.argv.includes('section'))!
@@ -384,6 +397,8 @@ describe('register', () => {
     const runs = session.runs.length
     const both = await $.tool.call({ tool: 'mcp__pi-outliner__work_complete', item: 'PIE-8', proof: 'x', proofBlock: 'y' })
     expect(both.deny).toContain('either proof text or an existing proofBlock')
+    const named = await $.tool.call({ tool: 'mcp__pi-outliner__work_complete', item: 'PIE-8', proof: 'x', deliveries: ['d-1'], allMerged: true })
+    expect(named.deny).toContain('not both')
     expect(session.runs.length).toBe(runs)
   })
 

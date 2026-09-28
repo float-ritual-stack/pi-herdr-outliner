@@ -70,6 +70,19 @@ function workActor(values: Record<string, unknown>): WorkActor {
   return { author, actorId, ...(sessionId ? { sessionId } : {}) };
 }
 
+/** The `work` / `note` synopsis, printed by `work help` and after an unknown operation. */
+const WORK_USAGE = [
+  "  work create --title T --project P --arc A --track T… --priority high|medium|low [--stage S] [--batch UUID] [--stdin|--body-file F]",
+  "  work stage <item> <stage> [--expected N]",
+  "  work set <item> <key> <value> [--expected N]",
+  "  work set <delivery> delivery-stage complete|validate [--expected N]   (delivery: block UUID or key, e.g. PIE-123/door)",
+  "  work deliver <item> --repo owner/name --pr N [--key name] [--base B] [--branch W]",
+  "  work complete <item> [--delivery <uuid|key|name>]… [--all-merged] --proof-file F|--stdin|--proof-block UUID",
+  "  work body <item> --file F|--stdin [--expected N]",
+  "  note section <block> <heading> --file F|--stdin [--expected N]",
+  "  Writers: --author user|agent --actor ID [--session ID]. <item> is a Work ID or block UUID.",
+].join("\n");
+
 const ACTOR_OPTIONS = {
   author: { type: "string" }, actor: { type: "string" }, session: { type: "string" }, expected: { type: "string" },
 } as const;
@@ -85,6 +98,10 @@ async function runWorkCommand(group: "work" | "note", args: string[]): Promise<u
       args: operands, allowPositionals: true, strict: true, options: { ...ACTOR_OPTIONS, ...options },
     }) as { values: Record<string, string | boolean | string[] | undefined>; positionals: string[] };
     const expected = (value: unknown) => value === undefined ? {} : { expectedRevision: parseRevision(value as string) };
+    if (operation === undefined || operation === "help" || operation === "--help") {
+      console.log(WORK_USAGE);
+      process.exit(0);
+    }
     await client.requireCompatibleService();
     if (group === "note") {
       if (operation !== "section") throw new Error("note expects: section <block> <heading> --file <path>|--stdin");
@@ -152,7 +169,7 @@ async function runWorkCommand(group: "work" | "note", args: string[]): Promise<u
       }
       case "complete": {
         const { values, positionals } = parse({
-          delivery: { type: "string" },
+          delivery: { type: "string", multiple: true }, "all-merged": { type: "boolean" },
           "proof-file": { type: "string" }, "proof-block": { type: "string" }, stdin: { type: "boolean" },
         });
         if (positionals.length !== 1) throw new Error("work complete requires one item");
@@ -162,7 +179,10 @@ async function runWorkCommand(group: "work" | "note", args: string[]): Promise<u
         }
         return await completeWorkItem(client, {
           task: positionals[0]!,
-          ...(values.delivery === undefined ? {} : { delivery: values.delivery as string }),
+          ...(values.delivery === undefined ? {} : {
+            deliveries: (values.delivery as string[]).flatMap((value) => value.split(",")).map((value) => value.trim()).filter(Boolean),
+          }),
+          ...(values["all-merged"] ? { allMerged: true } : {}),
           proof: proofText === undefined ? { blockId: values["proof-block"] as string } : { text: proofText },
         }, workActor(values));
       }
@@ -173,7 +193,7 @@ async function runWorkCommand(group: "work" | "note", args: string[]): Promise<u
         return await replaceItemBody(client, positionals[0]!, body, workActor(values), expected(values.expected));
       }
       default:
-        throw new Error("work expects: create, stage, set, deliver, complete, or body");
+        throw new Error(`work expects one of:\n${WORK_USAGE}`);
     }
   } catch (error) {
     console.error(`error: ${error instanceof Error ? error.message : String(error)}`);

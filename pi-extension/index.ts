@@ -1631,7 +1631,7 @@ export function createOutlinerExtension(actorId: OutlinerHostActorId) {
     const task = synchronized.task;
     const completed = await completeWorkItem(client, {
       task,
-      ...(synchronized.delivery ? { delivery: synchronized.delivery.block } : {}),
+      ...(synchronized.delivery ? { deliveries: [synchronized.delivery.block] } : {}),
       proof: { blockId: proofBlockId },
     }, { ...agentMutation(actorId, context, "outliner-task:complete"), actorId });
     const updated = await client.request<Block>({ action: "get", blockId: completed.blockId });

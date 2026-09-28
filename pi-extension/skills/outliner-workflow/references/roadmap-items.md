@@ -17,16 +17,45 @@ and new revision. Refusals print one `error: …` line and exit 1.
 bun src/cli.ts work create --title … --project … --arc … --track … --priority … [--stage queued] [--stdin|--body-file f]
 bun src/cli.ts work stage PIE-123 doing [--expected N]
 bun src/cli.ts work set PIE-123 priority high [--expected N]
-bun src/cli.ts work deliver PIE-123 --repo owner/name --pr 42 [--base main] [--branch feature/x]
-bun src/cli.ts work complete PIE-123 [--delivery <uuid>] --proof-file proof.md|--stdin|--proof-block <uuid>
+bun src/cli.ts work set PIE-123/door delivery-stage complete [--expected N]
+bun src/cli.ts work deliver PIE-123 --repo owner/name --pr 42 [--key door] [--base main] [--branch feature/x]
+bun src/cli.ts work complete PIE-123 [--delivery <uuid|key|name>]… [--all-merged] --proof-file proof.md|--stdin|--proof-block <uuid>
 bun src/cli.ts work body PIE-123 --file body.md|--stdin [--expected N]
 bun src/cli.ts note section <uuid> "Heading" --file section.md|--stdin [--expected N]
+bun src/cli.ts work help
 ```
 
 Add `--author agent --actor <id>` for agent writes. `work stage … done` is
-refused: Done goes through `work complete`, which needs the named delivery merged
-(or no incomplete delivery) and creates or links the proof. `work deliver` reads
-the PR through `gh` and refuses a PR whose branches differ from the delivery's.
+refused: Done goes through `work complete`, which creates or links the proof.
+`work deliver` reads the PR through `gh` and refuses a PR whose branches differ
+from the delivery's.
+
+### Items with several deliveries
+
+An item can ship through more than one PR, one delivery each: say the Outliner
+change and a door change in another repository. Each delivery has a key
+`PIE-123/<name>`.
+
+- **Recording.** `work deliver --key door` records the PR as `PIE-123/door`
+  (`--key PIE-123/door` is the same). Without `--key`, a PR whose repository and
+  branch a delivery already records syncs that delivery; otherwise the first
+  delivery is `primary`, and once primary records another repository the new one
+  is named after its repository (`owner/ep0ch-door` → `PIE-123/ep0ch-door`). A
+  second branch in primary's own repository, or a key that already records other
+  branches, is refused with a request for `--key <name>`.
+- **Completing.** `work complete` covers deliveries named with `--delivery`
+  (repeat it or separate with commas; block UUID, key or name) or, with
+  `--all-merged`, every delivery whose PR is merged and synced. Each one covered
+  must be merged. While any other delivery is not Complete the command is
+  refused, naming each one with its next step (include it, or merge the PR and
+  sync it with `work deliver … --key <name>`). No delivery is left behind in
+  Validate under a Done item.
+- **Finishing one by hand.** `work set <delivery> delivery-stage complete`
+  completes one merged delivery, for example one left in Validate on an item
+  that is already done; `validate` reopens a complete one. The delivery is named
+  by block UUID or key and the write is revision-checked (`--expected N`). Work
+  and Review come from the PR through `work deliver`, so they cannot be set.
+
 `note section` replaces what Detail folds under the heading, up to the next
 heading of its level (a trailing callout included) and returns it as `previous`.
 The Claude mod exposes the same commands as `work_*` and `note_section` tools.
@@ -94,7 +123,9 @@ the batch before changing membership; keep these decisions as history.
   repeated sync of unchanged facts preserves explicit rework in Doing.
   Delivery identity records Git facts; it does not own batch scope.
 - `outliner_task complete` requires linked proof and, for recorded code delivery,
-  a merged PR. It sets Done and clears the session binding.
+  a merged PR. It completes the session's delivery; like `work complete`, it is
+  refused while another delivery of the item is incomplete. It sets Done and
+  clears the session binding.
 - `outliner_task clear` repairs binding without changing the item's progress.
 
 Execution order follows dependencies and practical sequencing. A batch remains

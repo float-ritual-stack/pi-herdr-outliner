@@ -9,7 +9,7 @@
  * tell is wrong before writing, and say why.
  */
 import type { RequestInput } from "./client";
-import { deliveryIdentities, deterministicDeliveryIdentity, parseDeliveryIdentity } from "./delivery-lifecycle";
+import { deliveryIdentities, parseDeliveryIdentity, type DeliveryIdentity } from "./delivery-lifecycle";
 import { documentFolds } from "./document-folds";
 import { markdownSourceTokens } from "./markdown-structure";
 import { getProperty, matchesFilters, normalizePropertyKey, parsePropertyRecords, patchPropertyText, validateProperty } from "./properties";
@@ -212,10 +212,31 @@ export interface WorkSetResult extends WorkItemRef {
   changed: boolean;
 }
 
+function isDeliveryBlock(block: Block): boolean {
+  return block.properties.some((property) => property.key === "type" && property.value === "delivery");
+}
+
+/**
+ * A roadmap item or one of its deliveries: a block UUID, a Work ID, or a
+ * delivery key (`PIE-123/door`), which is looked up among that item's
+ * deliveries rather than by title.
+ */
+async function resolveItemOrDelivery(client: WorkToolsClient, address: string): Promise<Block> {
+  const trimmed = address.trim();
+  const slash = trimmed.indexOf("/");
+  if (slash > 0 && parseWorkId(trimmed.slice(0, slash))) {
+    const task = await resolveWorkItem(client, trimmed.slice(0, slash));
+    const workId = requireWorkItem(task);
+    return findItemDelivery(workId, await itemDeliveries(client, task), trimmed.slice(slash + 1)).block;
+  }
+  return resolveBlock(client, address);
+}
+
 /**
  * Sets one single-valued property on a roadmap item, revision-checked, and
  * reads the value back. `work-stage` must be a known stage; Done needs proof,
- * so it goes through `completeWorkItem` instead.
+ * so it goes through `completeWorkItem` instead. On a delivery (its block
+ * UUID or key) only `delivery-stage` can be set, through `setDeliveryStage`.
  */
 export async function setWorkProperty(
   client: WorkToolsClient,
@@ -224,8 +245,15 @@ export async function setWorkProperty(
   rawValue: string,
   actor: WorkActor,
   options: { expectedRevision?: number } = {},
-): Promise<WorkSetResult> {
+): Promise<WorkSetResult | DeliveryStageResult> {
   const { key, value } = validateProperty(normalizePropertyKey(rawKey), rawValue);
+  if (key === "delivery-stage") {
+    const block = await resolveItemOrDelivery(client, address);
+    if (!isDeliveryBlock(block)) {
+      throw new WorkToolRefusal(`[delivery-stage::…] belongs to a delivery; name its block UUID or key (PIE-123/primary), not ${block.id}`);
+    }
+    return setDeliveryStage(client, block, value, actor, options);
+  }
   if (IMMUTABLE_KEYS.has(key)) throw new WorkToolRefusal(`[${key}::…] is the item's identity and cannot be changed`);
   if (LIST_KEYS.has(key)) throw new WorkToolRefusal(`[${key}::…] is a list on roadmap items; edit it with properties.patch, not work set`);
   if (key === "status") throw new WorkToolRefusal("Roadmap items have no status; set work-stage instead");
@@ -237,7 +265,11 @@ export async function setWorkProperty(
     }
     if (stage === "done") throw new WorkToolRefusal("Done needs linked proof; use work complete");
   }
-  const block = await resolveWorkItem(client, address);
+  const block = await resolveItemOrDelivery(client, address);
+  if (isDeliveryBlock(block)) {
+    throw new WorkToolRefusal(`On a delivery, work set changes only delivery-stage, not ${key}`);
+  }
+  requireWorkItem(block);
   const revision = requireRevision(block, options.expectedRevision);
   const previous = getProperty(block.properties, key) ?? null;
   const operation = propertyTransition(block, key, stage);
@@ -263,7 +295,7 @@ export function setWorkStage(
   actor: WorkActor,
   options: { expectedRevision?: number } = {},
 ): Promise<WorkSetResult> {
-  return setWorkProperty(client, address, "work-stage", stage, actor, options);
+  return setWorkProperty(client, address, "work-stage", stage, actor, options) as Promise<WorkSetResult>;
 }
 
 // ─── Delivery ──────────────────────────────────────────────────────────────
@@ -284,11 +316,72 @@ export interface WorkDeliverResult extends WorkItemRef {
   changed: boolean;
 }
 
+const DELIVERY_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** The item's deliveries, as recorded beneath it. */
+async function itemDeliveries(client: WorkToolsClient, task: Block): Promise<DeliveryIdentity[]> {
+  return deliveryIdentities(await client.request<Block[]>({ action: "children", parentId: task.id }));
+}
+
 /**
- * Records a pull request as the item's delivery (`deliveries.ensure`) and
- * syncs its facts (`deliveries.sync`): open → Review, merged → Validate. The
- * PR must be the delivery's branch into its base, so a wrong number is refused
- * rather than recorded.
+ * A full delivery key for `workId`: `door` becomes `PIE-123/door`; a full key
+ * must belong to this item.
+ */
+export function deliveryKeyFor(workId: string, name: string): string {
+  const trimmed = name.trim();
+  const slash = trimmed.indexOf("/");
+  if (slash >= 0) {
+    if (trimmed.slice(0, slash).toUpperCase() !== workId.toUpperCase()) {
+      throw new WorkToolRefusal(`Delivery key ${trimmed} does not belong to ${workId}; give a name such as "door"`);
+    }
+  }
+  const suffix = slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
+  if (!DELIVERY_NAME.test(suffix)) {
+    throw new WorkToolRefusal(`Delivery name "${suffix}" must be letters, digits, ".", "_" or "-", such as "door"`);
+  }
+  return `${workId.toUpperCase()}/${suffix}`;
+}
+
+function describeDelivery(delivery: DeliveryIdentity): string {
+  return `${delivery.key} (${delivery.repository}:${delivery.workBranch})`;
+}
+
+/**
+ * Which delivery a PR is recorded under when no key is given: the delivery
+ * already recording this repository and branch; else `primary`; else, when
+ * primary belongs to another repository, one named after this repository
+ * (`owner/ep0ch-door` → `ep0ch-door`). A second branch in primary's own
+ * repository needs an explicit name.
+ */
+export function defaultDeliveryKey(
+  workId: string,
+  deliveries: readonly DeliveryIdentity[],
+  repository: string,
+  workBranch: string,
+): string {
+  const same = deliveries.filter((delivery) => delivery.repository === repository && delivery.workBranch === workBranch);
+  if (same.length === 1) return same[0]!.key;
+  if (same.length > 1) {
+    throw new WorkToolRefusal(`More than one delivery records ${repository}:${workBranch} (${same.map((d) => d.key).join(", ")}); pass --key`);
+  }
+  const primaryKey = deliveryKeyFor(workId, "primary");
+  const primary = deliveries.find((delivery) => delivery.key === primaryKey);
+  if (!primary) return primaryKey;
+  if (primary.repository === repository) {
+    throw new WorkToolRefusal(
+      `${describeDelivery(primary)} already records another branch of ${repository}; ` +
+        `pass --key <name> to record ${workBranch} as a second delivery`,
+    );
+  }
+  return deliveryKeyFor(workId, repository.split("/")[1]!);
+}
+
+/**
+ * Records a pull request as one of the item's deliveries (`deliveries.ensure`)
+ * and syncs its facts (`deliveries.sync`): open → Review, merged → Validate.
+ * The PR must be the delivery's branch into its base, so a wrong number is
+ * refused rather than recorded. `deliveryKey` is a name (`door`) or a full key
+ * (`PIE-123/door`); omitted, `defaultDeliveryKey` chooses one.
  */
 export async function deliverPullRequest(
   client: WorkToolsClient,
@@ -312,11 +405,22 @@ export async function deliverPullRequest(
   }
   const task = await resolveWorkItem(client, input.address);
   const workId = requireWorkItem(task);
+  const deliveries = await itemDeliveries(client, task);
+  const deliveryKey = input.deliveryKey === undefined
+    ? defaultDeliveryKey(workId, deliveries, input.repository, workBranch)
+    : deliveryKeyFor(workId, input.deliveryKey);
+  const existing = deliveries.find((delivery) => delivery.key === deliveryKey);
+  if (existing && (existing.repository !== input.repository || existing.workBranch !== workBranch || existing.baseBranch !== baseBranch)) {
+    throw new WorkToolRefusal(
+      `${existing.key} already records ${existing.repository}:${existing.workBranch} into ${existing.baseBranch}; ` +
+        `pass --key <name> to record ${input.repository}:${workBranch} as another delivery`,
+    );
+  }
   const ensured = await client.request<DeliveryReceipt>({
     action: "deliveries.ensure",
     input: {
       taskBlockId: task.id,
-      deliveryKey: input.deliveryKey ?? deterministicDeliveryIdentity(workId).deliveryKey,
+      deliveryKey,
       repository: input.repository,
       baseBranch,
       workBranch,
@@ -386,59 +490,115 @@ export async function readPullRequestFacts(repository: string, number: number): 
 
 // ─── Completion ────────────────────────────────────────────────────────────
 
+export interface DeliveryRef extends BlockRef {
+  deliveryKey: string;
+  stage: string;
+}
+
 export interface WorkCompleteResult extends WorkItemRef {
   proof: BlockRef & { created: boolean };
-  delivery: (BlockRef & { deliveryKey: string; stage: string }) | null;
+  /** The deliveries this completion covered, each now Complete. */
+  deliveries: DeliveryRef[];
+}
+
+function deliveryRef(block: Block): DeliveryRef {
+  const delivery = parseDeliveryIdentity(block);
+  return { ...blockRef(block), deliveryKey: delivery.key, stage: delivery.stage };
+}
+
+function isMerged(delivery: DeliveryIdentity): boolean {
+  return (delivery.stage === "validate" || delivery.stage === "complete") && delivery.mergeCommit !== null;
 }
 
 /**
- * Accepts an item with linked proof: its delivery (if it has one) must be
- * merged; the proof becomes a child `[type::proof]` (or an existing linked
- * block); the delivery becomes Complete and the item Done with a `proof` link.
- *
- * `delivery`: the delivery block (or its UUID). Omitted, the item must have no
- * incomplete delivery, so an unmerged one is never skipped silently.
- * Everything is checked before the first write.
+ * One of the item's deliveries, named by block UUID (optionally `((uuid))`),
+ * full key (`PIE-123/door`) or name (`door`).
+ */
+function findItemDelivery(workId: string, deliveries: readonly DeliveryIdentity[], address: string | Block): DeliveryIdentity {
+  const listed = () => deliveries.map((delivery) => `${delivery.key} ${delivery.block.id}`).join(", ") || "none";
+  if (typeof address !== "string") {
+    const match = deliveries.find((delivery) => delivery.block.id === address.id);
+    if (!match) throw new WorkToolRefusal(`Delivery ${address.id} does not belong to ${workId}; its deliveries: ${listed()}`);
+    return match;
+  }
+  const trimmed = address.trim().replace(/^\(\((.*)\)\)$/, "$1").trim();
+  const match = BLOCK_ID.test(trimmed)
+    ? deliveries.find((delivery) => delivery.block.id === trimmed.toLowerCase())
+    : deliveries.find((delivery) => delivery.key.toUpperCase() === deliveryKeyFor(workId, trimmed).toUpperCase());
+  if (!match) throw new WorkToolRefusal(`${workId} has no delivery ${trimmed}; its deliveries: ${listed()}`);
+  return match;
+}
+
+/** What finishing one delivery takes, for a refusal that names it. */
+function howToFinish(workId: string, delivery: DeliveryIdentity): string {
+  const name = delivery.key.slice(delivery.key.indexOf("/") + 1);
+  const deliver = `work deliver ${workId} --repo ${delivery.repository} --pr ${delivery.pullRequestNumber ?? "N"} --key ${name}`;
+  if (isMerged(delivery)) return `merged: include it with --delivery ${delivery.key}, or use --all-merged`;
+  if (delivery.pullRequestNumber === null) return `no PR recorded: record it with ${deliver}`;
+  if (delivery.stage === "validate") return `in validate without a merge commit: sync it with ${deliver}`;
+  return `PR #${delivery.pullRequestNumber} is not merged (${delivery.stage}): merge it and sync with ${deliver}`;
+}
+
+/**
+ * Accepts an item with linked proof. Its deliveries are all covered or
+ * already Complete: `deliveries` names the ones to complete (block UUID, key or
+ * name), `allMerged` takes every merged one, and any other incomplete delivery
+ * refuses the completion by name, so none is left behind. Each covered
+ * delivery must be merged. The proof becomes a child `[type::proof]` (or an
+ * existing linked block); covered deliveries become Complete and the item Done
+ * with a `proof` link. Everything is checked before the first write.
  */
 export async function completeWorkItem(
   client: WorkToolsClient,
   input: {
     task: string | Block;
-    delivery?: string | Block;
+    deliveries?: ReadonlyArray<string | Block>;
+    allMerged?: boolean;
     proof: { text: string } | { blockId: string };
   },
   actor: WorkActor,
 ): Promise<WorkCompleteResult> {
+  if (input.allMerged && input.deliveries?.length) {
+    throw new WorkToolRefusal("Name deliveries or use all-merged, not both");
+  }
   const task = typeof input.task === "string" ? await resolveWorkItem(client, input.task) : input.task;
   const workId = requireWorkItem(task);
+  const deliveries = await itemDeliveries(client, task);
   const stage = getProperty(task.properties, "work-stage")?.toLowerCase();
   if (stage === "superseded") throw new WorkToolRefusal(`${workId} is superseded; reopen it explicitly before completing`);
-  if (stage === "done") throw new WorkToolRefusal(`${workId} is already done`);
-
-  let deliveryBlock: Block | null = null;
-  if (input.delivery === undefined) {
-    const open = deliveryIdentities(await client.request<Block[]>({ action: "children", parentId: task.id }))
-      .filter((delivery) => delivery.stage !== "complete");
-    if (open.length > 0) {
-      throw new WorkToolRefusal(
-        `${workId} has incomplete deliveries; name the one to complete: ${open.map((delivery) => `${delivery.key} ${delivery.block.id}`).join(", ")}`,
-      );
-    }
-  } else {
-    deliveryBlock = typeof input.delivery === "string"
-      ? await getActiveBlock(client, input.delivery)
-      : input.delivery;
+  if (stage === "done") {
+    const leftover = deliveries.filter((delivery) => delivery.stage !== "complete");
+    throw new WorkToolRefusal(
+      leftover.length === 0
+        ? `${workId} is already done`
+        : `${workId} is already done; finish a leftover delivery with work set <delivery> delivery-stage complete: ` +
+          leftover.map((delivery) => `${delivery.key} ${delivery.block.id} (${delivery.stage})`).join(", "),
+    );
   }
-  const delivery = deliveryBlock ? parseDeliveryIdentity(deliveryBlock) : null;
-  if (delivery) {
-    if (delivery.block.parentId !== task.id) {
-      throw new WorkToolRefusal(`Delivery ${delivery.key} does not belong to ${workId}`);
+
+  const selected: DeliveryIdentity[] = [];
+  if (input.allMerged) {
+    selected.push(...deliveries.filter(isMerged));
+  } else {
+    for (const address of input.deliveries ?? []) {
+      const delivery = findItemDelivery(workId, deliveries, address);
+      if (!selected.includes(delivery)) selected.push(delivery);
     }
-    if ((delivery.stage !== "validate" && delivery.stage !== "complete") || !delivery.mergeCommit) {
+  }
+  for (const delivery of selected) {
+    if (!isMerged(delivery)) {
       throw new WorkToolRefusal(
         `Delivery ${delivery.key} must have a merged PR and reach Validate before completion (it is ${delivery.stage})`,
       );
     }
+  }
+  const remaining = deliveries.filter((delivery) => delivery.stage !== "complete" && !selected.includes(delivery));
+  if (remaining.length > 0) {
+    throw new WorkToolRefusal(
+      `${workId} has ${remaining.length === 1 ? "another incomplete delivery" : "other incomplete deliveries"}, ` +
+        `so it cannot be done yet: ` +
+        remaining.map((delivery) => `${delivery.key} ${delivery.block.id} — ${howToFinish(workId, delivery)}`).join("; "),
+    );
   }
 
   let proof: Block;
@@ -460,20 +620,20 @@ export async function completeWorkItem(
     proofCreated = true;
   }
 
-  let completedDelivery = delivery?.block ?? null;
   const operations: PropertyPatchOperation[] = [propertyTransition(task, "work-stage", "done")];
   if (!task.properties.some((property) => property.key === "proof" && property.value === proof.id)) {
     operations.push({ op: "append", key: "proof", value: proof.id });
   }
+  const completed: Block[] = [];
   try {
-    if (delivery && delivery.stage === "validate") {
-      completedDelivery = await client.request<Block>({
+    for (const delivery of selected) {
+      completed.push(delivery.stage === "complete" ? delivery.block : await client.request<Block>({
         action: "properties.patch",
         blockId: delivery.block.id,
         expectedRevision: delivery.block.revision,
         operations: [propertyTransition(delivery.block, "delivery-stage", "complete")],
         mutation: mutationOf(actor),
-      });
+      }));
     }
     const updated = await client.request<Block>({
       action: "properties.patch",
@@ -485,15 +645,69 @@ export async function completeWorkItem(
     return {
       ...workItemRef(updated),
       proof: { ...blockRef(proof), created: proofCreated },
-      delivery: completedDelivery
-        ? { ...blockRef(completedDelivery), deliveryKey: delivery!.key, stage: parseDeliveryIdentity(completedDelivery).stage }
-        : null,
+      deliveries: completed.map(deliveryRef),
     };
   } catch (error) {
-    if (!proofCreated) throw error;
+    const written = completed.filter((block) => selected.find((delivery) => delivery.block.id === block.id)!.stage !== "complete");
+    if (!proofCreated && written.length === 0) throw error;
     const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`${reason}. Proof ${proof.id} was created; retry with it as the existing proof`);
+    const notes = [
+      ...(written.length ? [`${written.map((block) => parseDeliveryIdentity(block).key).join(", ")} ${written.length === 1 ? "is" : "are"} now complete`] : []),
+      ...(proofCreated ? [`proof ${proof.id} was created; retry with it as the existing proof`] : []),
+    ];
+    throw new Error(`${reason}. ${notes.join("; ")}`);
   }
+}
+
+// ─── Delivery stage ────────────────────────────────────────────────────────
+
+export interface DeliveryStageResult extends DeliveryRef {
+  workId: string;
+  taskBlockId: string;
+  previous: string;
+  changed: boolean;
+}
+
+/**
+ * Sets a delivery's `delivery-stage` by hand, revision-checked: `complete`
+ * finishes a merged delivery left in Validate (say, on an item already done);
+ * `validate` reopens a complete one. Both need its merge commit. Work and
+ * Review come from the PR, through `work deliver`.
+ */
+export async function setDeliveryStage(
+  client: WorkToolsClient,
+  deliveryBlock: Block,
+  rawStage: string,
+  actor: WorkActor,
+  options: { expectedRevision?: number } = {},
+): Promise<DeliveryStageResult> {
+  const delivery = parseDeliveryIdentity(deliveryBlock);
+  const stage = rawStage.trim().toLowerCase();
+  if (stage !== "complete" && stage !== "validate") {
+    throw new WorkToolRefusal(
+      stage === "work" || stage === "review"
+        ? `A delivery's ${stage} stage comes from its PR; sync it with work deliver`
+        : `Unknown delivery stage "${rawStage}"; set complete or validate`,
+    );
+  }
+  const revision = requireRevision(deliveryBlock, options.expectedRevision);
+  if (!delivery.mergeCommit || (delivery.stage !== "validate" && delivery.stage !== "complete")) {
+    throw new WorkToolRefusal(`Delivery ${delivery.key} must have a merged PR before it is ${stage} (it is ${delivery.stage})`);
+  }
+  const task = await getActiveBlock(client, deliveryBlock.parentId ?? "");
+  const workId = requireWorkItem(task);
+  const base = { workId, taskBlockId: task.id, previous: delivery.stage };
+  if (delivery.stage === stage) return { ...base, ...deliveryRef(deliveryBlock), changed: false };
+  const updated = await client.request<Block>({
+    action: "properties.patch",
+    blockId: deliveryBlock.id,
+    expectedRevision: revision,
+    operations: [propertyTransition(deliveryBlock, "delivery-stage", stage)],
+    mutation: mutationOf(actor),
+  });
+  const readBack = deliveryRef(updated);
+  if (readBack.stage !== stage) throw new Error(`${updated.id} reads back [delivery-stage::${readBack.stage}] after setting ${stage}`);
+  return { ...base, ...readBack, changed: true };
 }
 
 // ─── Prose ─────────────────────────────────────────────────────────────────

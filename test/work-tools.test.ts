@@ -62,9 +62,9 @@ async function setup() {
     const result = await runCli(cliEnv, args, stdin);
     return { ...result, json: result.exitCode === 0 ? JSON.parse(result.stdout) : undefined, error: result.stderr.trim() };
   };
-  const pull = (number: number, state: "OPEN" | "MERGED", head = "feature/pie-001", mergeCommit: string | null = null) =>
+  const pull = (number: number, state: "OPEN" | "MERGED", head = "feature/pie-001", mergeCommit: string | null = null, repo = REPO) =>
     writeFileSync(join(pulls, `${number}.json`), JSON.stringify({
-      number, url: `https://github.com/${REPO}/pull/${number}`, state,
+      number, url: `https://github.com/${repo}/pull/${number}`, state,
       mergeCommit: mergeCommit ? { oid: mergeCommit } : null, headRefName: head, baseRefName: "main",
     }));
   const file = (name: string, text: string) => {
@@ -164,7 +164,8 @@ test("completion needs a merged delivery and records proof, delivery Complete an
   const deliveryId = opened.json.delivery.blockId;
 
   const unnamed = await h.run(["work", "complete", "PIE-001", "--proof-file", proofFile]);
-  expect(unnamed.error).toContain(`name the one to complete: PIE-001/primary ${deliveryId}`);
+  expect(unnamed.error).toContain(`PIE-001 has another incomplete delivery, so it cannot be done yet: PIE-001/primary ${deliveryId}`);
+  expect(unnamed.error).toContain(`PR #9 is not merged (review): merge it and sync with work deliver PIE-001 --repo ${REPO} --pr 9 --key primary`);
   const unmerged = await h.run(["work", "complete", "PIE-001", "--delivery", deliveryId, "--proof-file", proofFile]);
   expect(unmerged.error).toContain("must have a merged PR");
   expect(h.store.children(json.blockId).map((child) => child.id)).toEqual([deliveryId]);
@@ -175,7 +176,7 @@ test("completion needs a merged delivery and records proof, delivery Complete an
   expect(completed.json).toMatchObject({
     workId: "PIE-001", workStage: "done",
     proof: { created: true },
-    delivery: { blockId: deliveryId, deliveryKey: "PIE-001/primary", stage: "complete" },
+    deliveries: [{ blockId: deliveryId, deliveryKey: "PIE-001/primary", stage: "complete" }],
   });
   const proof = h.store.require(completed.json.proof.blockId);
   expect(proof.parentId).toBe(json.blockId);
@@ -190,6 +191,135 @@ test("completion needs a merged delivery and records proof, delivery Complete an
   expect(again.error).toContain("already done");
 });
 
+const DOOR = "example-org/example-door";
+
+/** PIE-001 with a merged primary delivery in REPO (#11) and a merged one in DOOR (#12) under `doorKey`. */
+async function twoMergedDeliveries(doorKey?: string) {
+  const h = await setup();
+  const { json } = await h.create();
+  h.pull(11, "MERGED", "feature/pie-001", "aaa1111");
+  const primary = await h.run(["work", "deliver", "PIE-001", "--repo", REPO, "--pr", "11"]);
+  h.pull(12, "MERGED", "feature/pie-001-door", "bbb2222", DOOR);
+  const door = await h.run(["work", "deliver", "PIE-001", "--repo", DOOR, "--pr", "12", ...(doorKey ? ["--key", doorKey] : [])]);
+  expect(door.error).toBe("");
+  return { h, itemId: json.blockId as string, primaryId: primary.json.delivery.blockId as string, door };
+}
+
+test("a second repository's PR becomes a second delivery named after the repository", async () => {
+  const { h, itemId, primaryId, door } = await twoMergedDeliveries();
+  expect(door.json).toMatchObject({
+    workStage: "validate",
+    delivery: { deliveryKey: "PIE-001/example-door", stage: "validate", created: true },
+    pullRequest: { number: 12, url: `https://github.com/${DOOR}/pull/12` },
+  });
+  expect(h.store.require(door.json.delivery.blockId).properties).toContainEqual({ key: "repository", value: DOOR });
+  expect(h.store.require(primaryId).properties).toContainEqual({ key: "repository", value: REPO });
+
+  // Syncing either PR again finds its own delivery without a key.
+  const again = await h.run(["work", "deliver", "PIE-001", "--repo", DOOR, "--pr", "12"]);
+  expect(again.json.delivery).toMatchObject({ blockId: door.json.delivery.blockId, created: false });
+  expect(h.store.children(itemId).length).toBe(2);
+});
+
+test("--key names a delivery; a second branch in primary's repository needs one", async () => {
+  const h = await setup();
+  await h.create();
+  h.pull(21, "OPEN");
+  await h.run(["work", "deliver", "PIE-001", "--repo", REPO, "--pr", "21"]);
+  h.pull(22, "OPEN", "feature/pie-001-docs");
+  const unnamed = await h.run(["work", "deliver", "PIE-001", "--repo", REPO, "--pr", "22"]);
+  expect(unnamed.error).toContain(`PIE-001/primary (${REPO}:feature/pie-001) already records another branch of ${REPO}; pass --key <name>`);
+  const taken = await h.run(["work", "deliver", "PIE-001", "--repo", REPO, "--pr", "22", "--key", "primary"]);
+  expect(taken.error).toContain("PIE-001/primary already records");
+  expect((await h.run(["work", "deliver", "PIE-001", "--repo", REPO, "--pr", "22", "--key", "PIE-002/docs"])).error)
+    .toContain("does not belong to PIE-001");
+  const named = await h.run(["work", "deliver", "PIE-001", "--repo", REPO, "--pr", "22", "--key", "docs"]);
+  expect(named.json.delivery).toMatchObject({ deliveryKey: "PIE-001/docs", stage: "review", created: true });
+});
+
+test("completing one delivery is refused while another is incomplete, naming it and how to finish it", async () => {
+  const { h, itemId, primaryId, door } = await twoMergedDeliveries("PIE-001/door");
+  const doorId = door.json.delivery.blockId;
+  const before = [itemId, primaryId, doorId].map((id) => h.store.require(id));
+  const proofFile = h.file("proof.md", "Checked both deliveries");
+
+  const one = await h.run(["work", "complete", "PIE-001", "--delivery", primaryId, "--proof-file", proofFile]);
+  expect(one.exitCode).toBe(1);
+  expect(one.error).toContain(
+    `PIE-001 has another incomplete delivery, so it cannot be done yet: PIE-001/door ${doorId} — merged: include it with --delivery PIE-001/door, or use --all-merged`,
+  );
+  expect([itemId, primaryId, doorId].map((id) => h.store.require(id))).toEqual(before);
+  expect(h.store.children(itemId).length).toBe(2);
+
+  const both = await h.run(["work", "complete", "PIE-001", "--delivery", `${primaryId},door`, "--proof-file", proofFile]);
+  expect(both.json).toMatchObject({
+    workStage: "done",
+    deliveries: [
+      { blockId: primaryId, deliveryKey: "PIE-001/primary", stage: "complete" },
+      { blockId: doorId, deliveryKey: "PIE-001/door", stage: "complete" },
+    ],
+  });
+});
+
+test("--all-merged completes every merged delivery, and refuses while one is unmerged", async () => {
+  const { h, itemId, primaryId, door } = await twoMergedDeliveries();
+  h.pull(13, "OPEN", "feature/pie-001-extra");
+  const extra = await h.run(["work", "deliver", "PIE-001", "--repo", REPO, "--pr", "13", "--key", "extra"]);
+  const proofFile = h.file("proof.md", "Checked every delivery");
+  const before = h.store.require(itemId);
+
+  const refused = await h.run(["work", "complete", "PIE-001", "--all-merged", "--proof-file", proofFile]);
+  expect(refused.error).toContain(`PIE-001/extra ${extra.json.delivery.blockId} — PR #13 is not merged (review)`);
+  expect(refused.error).toContain(`work deliver PIE-001 --repo ${REPO} --pr 13 --key extra`);
+  expect(h.store.require(itemId)).toEqual(before);
+  expect(h.store.children(itemId).length).toBe(3);
+  expect((await h.run(["work", "complete", "PIE-001", "--all-merged", "--delivery", "extra", "--proof-file", proofFile])).error)
+    .toContain("not both");
+
+  h.pull(13, "MERGED", "feature/pie-001-extra", "ccc3333");
+  await h.run(["work", "deliver", "PIE-001", "--repo", REPO, "--pr", "13", "--key", "extra"]);
+  const done = await h.run(["work", "complete", "PIE-001", "--all-merged", "--proof-file", proofFile]);
+  expect(done.json.workStage).toBe("done");
+  expect(done.json.deliveries.map((delivery: { blockId: string; stage: string }) => [delivery.blockId, delivery.stage])).toEqual([
+    [primaryId, "complete"], [door.json.delivery.blockId, "complete"], [extra.json.delivery.blockId, "complete"],
+  ]);
+});
+
+test("a delivery left in validate on a done item is completed with work set, revision-checked", async () => {
+  const h = await setup();
+  const { json } = await h.create();
+  h.pull(31, "MERGED", "feature/pie-001", "ddd4444");
+  const primary = await h.run(["work", "deliver", "PIE-001", "--repo", REPO, "--pr", "31"]);
+  await h.run(["work", "complete", "PIE-001", "--delivery", "primary", "--proof-file", h.file("proof.md", "Checked")]);
+  h.pull(32, "MERGED", "feature/pie-001-door", "eee5555", DOOR);
+  const door = await h.run(["work", "deliver", "PIE-001", "--repo", DOOR, "--pr", "32"]);
+  expect(door.json).toMatchObject({ workStage: "done", delivery: { deliveryKey: "PIE-001/example-door", stage: "validate" } });
+  const doorId = door.json.delivery.blockId;
+  const revision = h.store.require(doorId).revision;
+
+  const again = await h.run(["work", "complete", "PIE-001", "--proof-block", h.store.children(json.blockId)[1]!.id]);
+  expect(again.error).toContain(`already done; finish a leftover delivery with work set <delivery> delivery-stage complete: PIE-001/example-door ${doorId} (validate)`);
+  const refusals: Array<[string[], string]> = [
+    [["work", "set", doorId, "delivery-stage", "complete", "--expected", String(revision + 5)], `is at revision ${revision}`],
+    [["work", "set", doorId, "delivery-stage", "review"], "comes from its PR"],
+    [["work", "set", doorId, "priority", "high"], "only delivery-stage"],
+    [["work", "set", "PIE-001", "delivery-stage", "complete"], "belongs to a delivery"],
+    [["work", "set", "PIE-001/nothing", "delivery-stage", "complete"], "PIE-001 has no delivery nothing"],
+  ];
+  for (const [args, message] of refusals) expect((await h.run(args)).error).toContain(message);
+  expect(h.store.require(doorId).revision).toBe(revision);
+
+  const set = await h.run(["work", "set", "PIE-001/example-door", "delivery-stage", "complete", "--expected", String(revision)]);
+  expect(set.json).toMatchObject({
+    workId: "PIE-001", taskBlockId: json.blockId, blockId: doorId, deliveryKey: "PIE-001/example-door",
+    previous: "validate", stage: "complete", changed: true, revision: revision + 1,
+  });
+  expect(h.store.require(doorId).properties).toContainEqual({ key: "delivery-stage", value: "complete" });
+  expect(h.store.require(primary.json.delivery.blockId).properties).toContainEqual({ key: "delivery-stage", value: "complete" });
+  expect((await h.run(["work", "complete", "PIE-001", "--proof-block", h.store.children(json.blockId)[1]!.id])).error)
+    .toBe("error: PIE-001 is already done");
+});
+
 test("an existing proof block completes work that has no delivery; unlinked proof is refused", async () => {
   const h = await setup();
   const { json } = await h.create();
@@ -197,7 +327,7 @@ test("an existing proof block completes work that has no delivery; unlinked proo
   expect((await h.run(["work", "complete", "PIE-001", "--proof-block", stray.id])).error).toContain("must be a child of PIE-001");
   const proof = h.store.create(`Checked [type::proof] [source-block::${json.blockId}]`);
   const completed = await h.run(["work", "complete", "PIE-001", "--proof-block", proof.id]);
-  expect(completed.json).toMatchObject({ workStage: "done", delivery: null, proof: { blockId: proof.id, created: false } });
+  expect(completed.json).toMatchObject({ workStage: "done", deliveries: [], proof: { blockId: proof.id, created: false } });
 });
 
 test("a note section is replaced up to the next heading of its level; the rest is kept", async () => {

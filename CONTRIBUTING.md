@@ -66,8 +66,9 @@ source evidence or distinguish authored glyphs from controls.
   slice of PIE-408; resource projections and later soft links use it rather than
   resolving context themselves.
 - `pi-extension/index.ts` is a host adapter, not a second implementation of the service.
-- `src/work-tools.ts` owns agent workboard operations (create, stage/set, PR delivery,
-  completion with proof, note sections, item bodies) over the existing RPCs. The CLI
+- `src/work-tools.ts` owns agent workboard operations (create, stage/set, PR delivery
+  and delivery keys, completion with proof across all of an item's deliveries,
+  delivery stage, note sections, item bodies) over the existing RPCs. The CLI
   `work`/`note` commands, the Claude mod tools and Pi's task completion call it;
   add workboard operations there rather than in a host adapter or a one-off script.
 

@@ -4,6 +4,17 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+- Items with several deliveries: `work deliver --key <name>` records a PR as
+  its own delivery (`PIE-123/<name>`); without a key, a PR in another
+  repository than primary's is named after its repository instead of failing
+  with "conflicting repository". `work complete` takes several `--delivery`
+  values or `--all-merged`, and is refused while any other delivery is
+  incomplete, naming it and how to finish it, so none is left in Validate under
+  a Done item. `work set <delivery> delivery-stage complete|validate` finishes
+  or reopens one merged delivery, revision-checked. `work help` prints the
+  synopsis. Pi's task completion and the Claude `work_*` tools share the same
+  rules. No service change. PIE-447.
+
 - Agent workboard commands: `work create`, `work stage`, `work set`,
   `work deliver`, `work complete`, `work body` and `note section` in the CLI,
   and matching `work_*` / `note_section` tools in the Claude mod. Items are

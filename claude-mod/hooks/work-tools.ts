@@ -81,9 +81,17 @@ export const WORK_TOOLS: readonly WorkToolDefinition[] = [
     name: 'work_set',
     description:
       'Set one single-valued property on a roadmap item (priority, work-batch, arc…), checked against its revision ' +
-      'and read back. Identity properties and multi-valued ones are refused.',
-    inputSchema: schema({ item: ITEM, key: { type: 'string' }, value: { type: 'string' }, expectedRevision: EXPECTED },
-      ['item', 'key', 'value']),
+      'and read back. Identity properties and multi-valued ones are refused. On a delivery only delivery-stage can ' +
+      'be set: complete finishes a merged delivery (e.g. one left in validate on an item already done), validate reopens it.',
+    inputSchema: schema({
+      item: {
+        type: 'string',
+        description: 'A roadmap item (Work ID or block UUID), or for delivery-stage a delivery: its block UUID or key (PIE-123/door).',
+      },
+      key: { type: 'string' },
+      value: { type: 'string' },
+      expectedRevision: EXPECTED,
+    }, ['item', 'key', 'value']),
     command(input) {
       const [item, key, value] = [text(input, 'item'), text(input, 'key'), text(input, 'value')]
       if (!item || !key || !value) return 'Give the item, the property key and its value.'
@@ -93,12 +101,19 @@ export const WORK_TOOLS: readonly WorkToolDefinition[] = [
   {
     name: 'work_deliver',
     description:
-      "Record a GitHub pull request as the item's delivery and sync its live state: an open PR moves the item to " +
-      "review, a merged one to validate. The PR's branches must match the delivery's.",
+      "Record a GitHub pull request as one of the item's deliveries and sync its live state: an open PR moves the " +
+      "item to review, a merged one to validate. The PR's branches must match the delivery's. An item can have " +
+      'several deliveries (one per repository or branch), each under its own key.',
     inputSchema: schema({
       item: ITEM,
       repo: { type: 'string', description: 'owner/name' },
       pr: { type: 'integer', minimum: 1 },
+      key: {
+        type: 'string',
+        description:
+          'Delivery name (door → PIE-123/door). Omitted: the delivery already recording this repo and branch, else ' +
+          'primary, else (primary is another repo) the repository name. A second branch in the same repo needs one.',
+      },
       base: { type: 'string', description: "Base branch; defaults to the PR's" },
       branch: { type: 'string', description: "Work branch; defaults to the PR's head" },
     }, ['item', 'repo', 'pr']),
@@ -107,7 +122,8 @@ export const WORK_TOOLS: readonly WorkToolDefinition[] = [
       const pr = input.pr
       if (!item || !repo || typeof pr !== 'number' || !Number.isSafeInteger(pr) || pr < 1) return 'Give the item, repo and PR number.'
       const args = ['work', 'deliver', item, '--repo', repo, '--pr', String(pr)]
-      const [base, branch] = [text(input, 'base'), text(input, 'branch')]
+      const [key, base, branch] = [text(input, 'key'), text(input, 'base'), text(input, 'branch')]
+      if (key) args.push('--key', key)
       if (base) args.push('--base', base)
       if (branch) args.push('--branch', branch)
       return { args }
@@ -116,20 +132,33 @@ export const WORK_TOOLS: readonly WorkToolDefinition[] = [
   {
     name: 'work_complete',
     description:
-      'Accept a roadmap item with linked proof: the named delivery must be merged; the proof is added as a child ' +
-      'block (or an existing linked proof block is used), the delivery becomes complete and the item done.',
+      'Accept a roadmap item with linked proof. Every incomplete delivery must be covered: name them in deliveries ' +
+      'or set allMerged; each must be merged. If another delivery is still incomplete the call is refused, naming it ' +
+      'and how to finish it. The proof is added as a child block (or an existing linked proof block is used), the ' +
+      'covered deliveries become complete and the item done.',
     inputSchema: schema({
       item: ITEM,
-      delivery: { type: 'string', description: 'The delivery block UUID; required when the item has an incomplete delivery' },
+      deliveries: {
+        type: 'array',
+        items: { type: 'string' },
+        minItems: 1,
+        description: 'Deliveries to complete: block UUID, key (PIE-123/door) or name (door)',
+      },
+      allMerged: { type: 'boolean', description: 'Complete every delivery whose PR is merged, instead of naming them' },
       proof: { type: 'string', description: 'Proof as Markdown: first line is its title' },
       proofBlock: { type: 'string', description: 'An existing proof block UUID linked to the item, instead of proof text' },
     }, ['item']),
     command(input) {
       const item = text(input, 'item')
-      const [proof, proofBlock, delivery] = [text(input, 'proof'), text(input, 'proofBlock'), text(input, 'delivery')]
+      const [proof, proofBlock] = [text(input, 'proof'), text(input, 'proofBlock')]
+      const deliveries = Array.isArray(input.deliveries)
+        ? input.deliveries.filter((delivery): delivery is string => typeof delivery === 'string' && delivery.trim() !== '')
+        : []
       if (!item) return 'Give the item.'
       if (!proof === !proofBlock) return 'Give either proof text or an existing proofBlock.'
-      const args = ['work', 'complete', item, ...(delivery ? ['--delivery', delivery] : [])]
+      if (input.allMerged === true && deliveries.length) return 'Name deliveries or set allMerged, not both.'
+      const args = ['work', 'complete', item, ...deliveries.flatMap(delivery => ['--delivery', delivery]),
+        ...(input.allMerged === true ? ['--all-merged'] : [])]
       return proof ? { args: [...args, '--stdin'], stdin: proof } : { args: [...args, '--proof-block', proofBlock!] }
     },
   },

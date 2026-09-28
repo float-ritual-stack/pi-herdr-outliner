@@ -50,6 +50,12 @@ this session. Items are named by Work ID or block UUID, never by title. The tool
 result is the command's JSON; a refusal (stale revision, unknown stage, unmerged
 delivery…) comes back as the CLI's reason.
 
+An item can have several deliveries, one per PR. `work_deliver` takes a `key`
+(`door` → `PIE-123/door`); `work_complete` takes `deliveries` or `allMerged` and
+is refused, naming what is left, while any other delivery is incomplete; and
+`work_set` sets `delivery-stage` on a delivery named by UUID or key, such as
+one left in validate on an item that is already done.
+
 ## Use
 
 Function hooks are early access and need `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`.
