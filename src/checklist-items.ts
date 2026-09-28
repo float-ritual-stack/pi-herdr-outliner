@@ -1,5 +1,5 @@
 import { normalizePropertyFilter } from "./block-query";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { fragmentAnchors } from "./fragments";
 import { markdownListItems } from "./markdown-structure";
 import { matchesFilters, parsePropertyRecords } from "./properties";
@@ -49,6 +49,7 @@ export function checklistItems(text: string, properties = parsePropertyRecords(t
 }
 
 export function queryChecklistItems(text: string, query: ChecklistQuery, properties: PropertyRecord[]) {
+  if (!query || typeof query !== "object" || Array.isArray(query)) throw new Error("Checklist query is required");
   if (!Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > 1000) {
     throw new Error("Checklist query limit must be between 1 and 1000");
   }
@@ -75,17 +76,41 @@ export function queryChecklistItems(text: string, query: ChecklistQuery, propert
   };
 }
 
+const SHORT_ID_PREFIX = "t-";
+const SHORT_ID_LENGTH = 6;
+
+/**
+ * A short generated item ID, unique among all anchors in the note. On collision the
+ * same random hex is extended one digit at a time, so IDs stay short and readable.
+ */
+export function shortChecklistItemId(usedIds: ReadonlySet<string>, random = () => randomBytes(16).toString("hex")): string {
+  for (;;) {
+    const hex = random();
+    for (let length = SHORT_ID_LENGTH; length <= hex.length; length++) {
+      const candidate = `${SHORT_ID_PREFIX}${hex.slice(0, length)}`;
+      if (!usedIds.has(candidate)) return candidate;
+    }
+  }
+}
+
 /** Produces a minimal source edit after checking the current item, not the whole-note hash. */
-export function updateChecklistText(text: string, revision: number, input: ChecklistUpdateInput): {text: string; itemId: string} {
-  const items = checklistItems(text);
+export function updateChecklistText(text: string, revision: number, input: ChecklistUpdateInput,
+  random?: () => string): {text: string; itemId: string} {
+  if (!input || typeof input !== "object") throw new Error("Checklist update input is required");
   const target = input.target;
+  if (!target || typeof target !== "object") throw new Error("Checklist update target is required");
+  const items = checklistItems(text);
   let item: ChecklistItem | undefined;
   if ("itemId" in target) {
     const matches = items.filter(candidate => candidate.itemId === target.itemId);
     if (matches.length > 1 || matches[0]?.identity === "duplicate") throw new Error(`Duplicate checklist item ID: ${target.itemId}`);
     item = matches[0];
   } else {
-    if (!Number.isSafeInteger(target.start) || target.start < 0 || target.expectedRevision !== revision) {
+    // Missing or malformed coordinates are caller errors, not evidence of a concurrent edit.
+    if (target.start === undefined) throw new Error("Checklist target.start is required to address an unassigned item; use the start returned by checklist.query");
+    if (!Number.isSafeInteger(target.start) || target.start < 0) throw new Error("Checklist target.start must be a non-negative integer");
+    if (target.expectedRevision === undefined) throw new Error("Checklist target.expectedRevision is required to address an unassigned item; use the revision returned by checklist.query");
+    if (target.expectedRevision !== revision) {
       throw new Error("Checklist location changed; query the current note before addressing an unassigned item");
     }
     item = items.find(candidate => candidate.span.start === target.start);
@@ -99,7 +124,7 @@ export function updateChecklistText(text: string, revision: number, input: Check
   const usedIds = new Set(fragmentAnchors(text).map(anchor => anchor.id));
   let itemId = item.itemId;
   if (!itemId) {
-    do {itemId = `task-${randomUUID()}`;} while (usedIds.has(itemId));
+    itemId = shortChecklistItemId(usedIds, random);
     const newline = text.indexOf("\n", item.span.start);
     const end = newline < 0 ? text.length : newline;
     const header = text.slice(item.span.start, end);

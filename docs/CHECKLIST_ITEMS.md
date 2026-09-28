@@ -48,7 +48,8 @@ coordinates, not durable identity.
 
 Use `statuses` to include selected states, or `excludeStatuses` to omit them.
 `nested` defaults to `include`; `top-level` excludes items inside another list
-item. The required limit is 1–1000. Results retain canonical source order and
+item. The `query` object and its limit (1–1000) are required; the service does
+not default them. Results retain canonical source order and
 report completeness, the observed block revision and the parent plan's title.
 The block ID provides the route back to the complete plan and its instructions.
 
@@ -123,9 +124,14 @@ For an addressed item:
 ```
 
 For an unassigned item, use `target: {start, expectedRevision}` from the observed
-query. This location is valid only against that exact block revision. A status
-change or `change: {kind: "ensure-id"}` assigns a unique `task-…` ID explicitly.
-Repeating `ensure-id` for an already addressed item is a no-op.
+query. This location is valid only against that exact block revision: a missing
+`start` or `expectedRevision` is rejected as required, while a different revision
+reports that the checklist location changed. A status change or
+`change: {kind: "ensure-id"}` assigns a short ID explicitly, `t-` plus six random
+hex digits (for example `^t-daca0f`). If that ID is already used by any anchor in
+the note, the same digits are extended one at a time until it is unique. Items
+already addressed by older generated `task-<uuid>` IDs, or by hand-written IDs,
+keep them. Repeating `ensure-id` for an already addressed item is a no-op.
 
 The service checks the current item's evidence and changes only the marker and,
 when necessary, inserts its ID. Existing surrounding text, whitespace and line

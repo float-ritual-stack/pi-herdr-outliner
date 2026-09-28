@@ -168,7 +168,7 @@ test('live checklist views use correlated canonical matches, shared controls and
   await click(reader,tasks(reader)[0]!.uri);await reader.key({name:'return'},44,12,noDetail);
   expect(paint(reader)).toContain('1 matched step');
   expect(tasks(reader)).toHaveLength(1);
-  expect((await client.request<Block>({action:'get',blockId:plan.id})).text).toMatch(/- \[x\] Prepare \[owner::alex\] \^task-/);
+  expect((await client.request<Block>({action:'get',blockId:plan.id})).text).toMatch(/- \[x\] Prepare \[owner::alex\] \^t-[0-9a-f]{6,}$/m);
   expect(await client.request<Block>({action:'get',blockId:view.id})).toEqual(view);
   await reader.key({name:'z',ctrl:true},44,12,noDetail);
   expect(tasks(reader)).toHaveLength(2);
@@ -236,7 +236,7 @@ test('comments distinguish nested checklist results from each other and canonica
     expect(annotationFrameCells(thread,canonical)).toHaveLength(0);
   }
   const updated=await client.request<Block>({action:'get',blockId:plan.id});
-  expect(updated.text.replace(/ \^task-[A-Za-z0-9_-]+/g,'')).toBe(plan.text);
+  expect(updated.text.replace(/ \^t-[0-9a-f]{6,}/g,'')).toBe(plan.text);
   expect(updated.revision).toBe(plan.revision+1);
 }));
 
@@ -343,9 +343,9 @@ test('embedded steps keep occurrence focus while edits, copy and undo reach the 
   expect(reader.state!.activeLink).toBe(tasks(reader).at(-1)!.uri);
   await click(reader,tasks(reader)[2]!.uri);await reader.action('preview.checklist.choose:address',noDetail);
   const addressed=await client.request<Block>({action:'get',blockId:plan.id});
-  expect(addressed.text).toMatch(/Prepare \^task-/);
+  expect(addressed.text).toMatch(/Prepare \^t-[0-9a-f]{6,}$/m);
   expect(await client.request<Block>({action:'get',blockId:host.id})).toEqual(host);
-  expect(paint(reader)).not.toContain('^task-');
+  expect(paint(reader)).not.toContain('^t-');
   // A fragment-only Preview still edits the full source at the original offset.
   await reader.load({kind:'block',blockId:plan.id,fragmentId:'verify'});reader.focus();
   expect(tasks(reader)).toHaveLength(1);
@@ -468,4 +468,24 @@ test('Preview ignores late checklist receipts after navigation and refuses stale
   const merged=await client.request<Block>({action:'get',blockId:a.id});
   expect(merged.text).toContain('- [~] Prepare differently ^prepare');
   expect(merged.text).toContain('Verify independently');
+}));
+
+// Legacy long generated anchors and new short ones both address the step, open by
+// fragment and stay out of the painted text.
+test('Preview hides legacy and short generated checklist anchors while addressing both',async()=>fixture(async client=>{
+  const legacy='task-0b7c3f4e-2d1a-4c55-9e8f-1a2b3c4d5e6f';
+  const plan=await client.request<Block>({action:'create',text:`# Garden\n\n- [ ] Water tomatoes ^${legacy}\n- [ ] Weed beds ^t-5e1f0a`});
+  const reader=new DocumentPreview(client,()=>{});
+  await reader.load({kind:'block',blockId:plan.id});reader.focus();
+  expect(tasks(reader)).toHaveLength(2);
+  expect(paint(reader)).toContain('Water tomatoes');
+  expect(paint(reader)).not.toContain('^task-');
+  expect(paint(reader)).not.toContain('^t-');
+  const fragment=new DocumentPreview(client,()=>{});
+  await fragment.load({kind:'block',blockId:plan.id,fragmentId:legacy});fragment.focus();
+  expect(tasks(fragment)).toHaveLength(1);
+  expect(paint(fragment)).not.toContain('Weed beds');
+  expect(paint(fragment)).not.toContain('^task-');
+  await click(fragment,tasks(fragment)[0]!.uri);await fragment.action('preview.checklist.choose:done',noDetail);
+  expect((await client.request<Block>({action:'get',blockId:plan.id})).text).toContain(`- [x] Water tomatoes ^${legacy}`);
 }));

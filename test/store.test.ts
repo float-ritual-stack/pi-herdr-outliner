@@ -9,6 +9,7 @@ import {
 } from "../src/annotations";
 import { PROPERTY_PARSER_VERSION } from "../src/properties";
 import { PAGE_ADDRESS_REGISTRY_VERSION } from "../src/page-addresses";
+import { checklistItems, shortChecklistItemId, updateChecklistText } from "../src/checklist-items";
 import { OutlinerStore } from "../src/store";
 import type {
   AnnotationCreateInput,
@@ -150,6 +151,71 @@ test("checklist mutations reject missing or ambiguous identity and stale target 
     target: {itemId: "first"}, expectedEvidence: item.evidence, change: {kind: "status", status: "done"},
   }, mutation)).toThrow("Checklist item changed");
   expect(store.require(unique.id).text).toBe(edited.text);
+});
+
+test("checklist queries without a query object name the missing field", () => {
+  const store = makeStore();
+  const block = store.create("# Errands\n\n- [ ] Buy stamps\n- [ ] Post the parcel");
+  expect(() => store.queryChecklist(block.id, undefined as never)).toThrow("Checklist query is required");
+  expect(() => store.queryChecklist(block.id, {} as never)).toThrow("Checklist query limit must be between 1 and 1000");
+  expect(() => store.searchChecklist(undefined as never)).toThrow("Checklist search query is required");
+  expect(() => store.searchChecklist({} as never)).toThrow("Checklist query is required");
+});
+
+test("an unassigned checklist target without start says so instead of reporting a moved item", () => {
+  const store = makeStore();
+  const mutation = {author: "agent" as const, actorId: "checklist-test"};
+  const block = store.create("# Errands\n\n- [ ] Buy stamps\n- [ ] Post the parcel");
+  const item = store.queryChecklist(block.id, {limit: 10}).items[0]!;
+  const change = {kind: "status", status: "done"} as const;
+  expect(() => store.updateChecklist(block.id, {target: {expectedRevision: block.revision}, expectedEvidence: item.evidence, change} as never, mutation))
+    .toThrow("target.start is required");
+  expect(() => store.updateChecklist(block.id, undefined as never, mutation)).toThrow("Checklist update input is required");
+  expect(() => store.updateChecklist(block.id, {expectedEvidence: item.evidence, change} as never, mutation))
+    .toThrow("Checklist update target is required");
+  // A missing start is reported as missing even when the revision is also stale.
+  expect(() => store.updateChecklist(block.id, {target: {expectedRevision: block.revision + 5}, expectedEvidence: item.evidence, change} as never, mutation))
+    .toThrow("target.start is required");
+  expect(() => store.updateChecklist(block.id, {target: {start: -1, expectedRevision: block.revision}, expectedEvidence: item.evidence, change}, mutation))
+    .toThrow("target.start must be a non-negative integer");
+  expect(() => store.updateChecklist(block.id, {target: {start: item.span.start}, expectedEvidence: item.evidence, change} as never, mutation))
+    .toThrow("target.expectedRevision is required");
+  expect(() => store.updateChecklist(block.id, {target: {start: item.span.start, expectedRevision: block.revision + 1}, expectedEvidence: item.evidence, change}, mutation))
+    .toThrow("Checklist location changed");
+  expect(store.require(block.id)).toEqual(block);
+});
+
+test("first checklist addressing assigns a short note-unique anchor; long legacy anchors keep working", () => {
+  const store = makeStore();
+  const mutation = {author: "agent" as const, actorId: "checklist-test"};
+  const legacy = "task-0b7c3f4e-2d1a-4c55-9e8f-1a2b3c4d5e6f";
+  const block = store.create(`# Picnic\n\n- [ ] Pack lunch\n- [ ] Bring blanket ^${legacy}`);
+  const observed = store.queryChecklist(block.id, {limit: 10});
+  expect(observed.items.map(item => item.itemId)).toEqual([undefined, legacy]);
+  const assigned = store.updateChecklist(block.id, {
+    target: {start: observed.items[0]!.span.start, expectedRevision: block.revision},
+    expectedEvidence: observed.items[0]!.evidence, change: {kind: "ensure-id"},
+  }, mutation);
+  expect(assigned.item.itemId).toMatch(/^t-[0-9a-f]{6}$/);
+  expect(assigned.block.text).toBe(block.text.replace("Pack lunch", `Pack lunch ^${assigned.item.itemId}`));
+  const legacyDone = store.updateChecklist(block.id, {
+    target: {itemId: legacy}, expectedEvidence: observed.items[1]!.evidence, change: {kind: "status", status: "done"},
+  }, mutation);
+  expect(legacyDone.item).toMatchObject({itemId: legacy, identity: "unique", status: "done"});
+});
+
+test("short checklist anchors extend on collision with any anchor in the note", () => {
+  const random = () => "daca0f12345678901234567890abcdef";
+  expect(shortChecklistItemId(new Set(), random)).toBe("t-daca0f");
+  expect(shortChecklistItemId(new Set(["t-daca0f"]), random)).toBe("t-daca0f1");
+  expect(shortChecklistItemId(new Set(["t-daca0f", "t-daca0f1", "t-daca0f12"]), random)).toBe("t-daca0f123");
+  // Headings and paragraphs share the note's anchor namespace.
+  const text = "# Plan ^t-daca0f\n\n- [ ] Step";
+  const [item] = checklistItems(text);
+  const edit = updateChecklistText(text, 1, {
+    target: {start: item!.span.start, expectedRevision: 1}, expectedEvidence: item!.evidence, change: {kind: "ensure-id"},
+  }, random);
+  expect(edit).toEqual({text: "# Plan ^t-daca0f\n\n- [ ] Step ^t-daca0f1", itemId: "t-daca0f1"});
 });
 
 test("whole-note writes preserve list addresses unless an exact-revision identity change is declared", () => {

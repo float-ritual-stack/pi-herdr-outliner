@@ -95,6 +95,10 @@ test("checklist RPC publishes canonical content changes and returns item evidenc
   await connected.promise;
   const block = await client.request<Block>({action: "create", text: "# Plan\n\n- [ ] Review ^review"});
   const observed = await client.request<ChecklistCollection>({action: "checklist.query", blockId: block.id, query: {limit: 10}});
+  await expect(client.request({action: "checklist.query", blockId: block.id} as never)).rejects.toThrow("Checklist query is required");
+  await expect(client.request({action: "checklist.update", blockId: block.id,
+    input: {target: {expectedRevision: block.revision}, expectedEvidence: observed.items[0]!.evidence, change: {kind: "ensure-id"}},
+    mutation: {author: "agent", actorId: "checklist-client"}} as never)).rejects.toThrow("target.start is required");
   const updated = await client.request<ChecklistUpdateReceipt>({
     action: "checklist.update", blockId: block.id,
     input: {target: {itemId: "review"}, expectedEvidence: observed.items[0]!.evidence, change: {kind: "status", status: "waiting"}},
