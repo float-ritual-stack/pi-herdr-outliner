@@ -298,7 +298,7 @@ reverses exact block references, normalized page addresses, Work IDs, and
 block-valued properties such as `[source-block::<block-id>]`. Each projected
 source carries canonical created/updated timestamps plus normalized relation
 groups. With the `references.backlinks.facets` capability each source also
-carries service-derived facets (kind, relation to the target, stage bucket,
+carries service-derived facets (kind, placement relative to the target, stage bucket,
 comment resolution) from the data table in
 [`backlink-facets.ts`](../src/backlink-facets.ts); clients group and filter on
 them instead of re-reading properties. [`backlink-view.ts`](../src/backlink-view.ts)

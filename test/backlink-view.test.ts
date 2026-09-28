@@ -33,7 +33,7 @@ function source(
 }
 
 const letter = (stage: "waiting" | "draft" | "done"): BacklinkSourceFacets => ({
-  kind: "letter", kindLabel: "Letter", relation: "other",
+  kind: "letter", kindLabel: "Letter", placement: "other",
   stage: { property: "outbox", value: stage, bucket: stage },
 });
 
@@ -46,16 +46,16 @@ function collection(): BacklinkCollection {
       source("2", "Ask for trays", "2031-02-02T00:00:00.000Z", letter("waiting")),
       source("3", "Fence quote", "2031-02-09T00:00:00.000Z", letter("done")),
       source("4", "Draft invite", "2031-02-03T00:00:00.000Z", letter("draft")),
-      source("5", "Ticket itself", "2031-02-10T00:00:00.000Z", { kind: "note", kindLabel: "Note", relation: "self" }),
-      source("6", "Its checklist", "2031-02-10T00:00:00.000Z", { kind: "note", kindLabel: "Note", relation: "descendant" }),
-      source("7", "Old question", "2031-02-04T00:00:00.000Z", { kind: "comment", kindLabel: "Comment", relation: "other", comment: { resolved: true } }),
-      source("8", "Open question", "2031-02-05T00:00:00.000Z", { kind: "comment", kindLabel: "Comment", relation: "other", comment: { resolved: false } }),
-      source("9", "Monday", "2031-02-06T00:00:00.000Z", { kind: "day-page", kindLabel: "Day page", relation: "other" }),
-      source("10", "Tuesday", "2031-02-11T00:00:00.000Z", { kind: "day-page", kindLabel: "Day page", relation: "other" }),
+      source("5", "Ticket itself", "2031-02-10T00:00:00.000Z", { kind: "note", kindLabel: "Note", placement: "self" }),
+      source("6", "Its checklist", "2031-02-10T00:00:00.000Z", { kind: "note", kindLabel: "Note", placement: "descendant" }),
+      source("7", "Old question", "2031-02-04T00:00:00.000Z", { kind: "comment", kindLabel: "Comment", placement: "other", comment: { resolved: true } }),
+      source("8", "Open question", "2031-02-05T00:00:00.000Z", { kind: "comment", kindLabel: "Comment", placement: "other", comment: { resolved: false } }),
+      source("9", "Monday", "2031-02-06T00:00:00.000Z", { kind: "day-page", kindLabel: "Day page", placement: "other" }),
+      source("10", "Tuesday", "2031-02-11T00:00:00.000Z", { kind: "day-page", kindLabel: "Day page", placement: "other" }),
       source("11", "Planting plan", "2031-02-07T00:00:00.000Z", {
-        kind: "plan", kindLabel: "Plan", relation: "other", stage: { property: "stage", value: "mulling" },
+        kind: "plan", kindLabel: "Plan", placement: "other", stage: { property: "stage", value: "mulling" },
       }),
-      source("12", "Status board", "2031-02-08T00:00:00.000Z", { kind: "status", kindLabel: "Status", relation: "other" }),
+      source("12", "Status board", "2031-02-08T00:00:00.000Z", { kind: "status", kindLabel: "Status", placement: "other" }),
     ],
   };
 }

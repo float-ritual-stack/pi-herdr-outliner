@@ -711,7 +711,7 @@ function backlinkRowSuffix(source: BacklinkSource): string {
   return [
     ...(facets?.stage ? [facets.stage.value] : []),
     ...(facets?.comment?.resolved ? ["resolved"] : []),
-    ...(facets && facets.relation !== "other" ? [facets.relation === "self" ? "this note" : "inside this note"] : []),
+    ...(facets && facets.placement !== "other" ? [facets.placement === "self" ? "this note" : "inside this note"] : []),
     source.parentContext,
     ...(source.deletedRootId ? ["Trash"] : []),
     ...source.referenceGroups.map(backlinkGroupLabel),
@@ -726,7 +726,8 @@ function backlinkStatusLine(state: Readonly<DetailState>): string {
   const direction = backlinks.sortDirection === "asc" ? "↑" : "↓";
   const sort = backlinks.sortField === "created" ? "Created" : backlinks.sortField === "title" ? "Title" : "Updated";
   const filter = backlinks.filterDraft ?? backlinks.filter;
-  const parts = [`${view.matching.length} of ${view.total}`];
+  // Sources that match, not rows shown: a collapsed group folds its done rows.
+  const parts = [`${view.matching.length} of ${view.total} match`];
   if (filter) parts.unshift(`Filter: ${escapeGeneratedMarkdown(filter)}`);
   if (view.filtered) parts.push(`${view.filtered} filtered`);
   if (view.faceted) {

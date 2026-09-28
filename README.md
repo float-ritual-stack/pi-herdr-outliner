@@ -954,7 +954,7 @@ title, then a dim suffix with its stage, breadcrumb and reference counts such as
 `Work ID ×2`, shortened to the pane width. By default the note itself, its
 descendants and resolved comments are hidden. The status line always says what
 is shown and what is hidden, for example
-`5 of 12 · 2 this note hidden · 1 resolved hidden · Kind: all · Stage: all ·
+`5 of 12 match · 2 this note hidden · 1 resolved hidden · Kind: all · Stage: all ·
 Sort: Updated ↓`, and each part is a clickable toggle. `/` fuzzily filters
 source title, context, kind, stage, relation type, and occurrence text; any
 narrowing filter opens every group. `k` and `t` cycle the kind and stage
@@ -1386,14 +1386,15 @@ Unresolved symbolic text is not a backlink. Deleted source blocks are opt-in;
 querying an existing deleted target remains supported and explicit. Results are
 bounded by source block and report `complete` or `truncated`. A service with
 the `references.backlinks.facets` capability adds `facets` to each source: its
-`kind` and `kindLabel`, its `relation` to the target (`self`, `descendant` or
+`kind` and `kindLabel`, its `placement` relative to the target (`self`, `descendant` or
 `other`), its `stage` (the first declared of `work-stage`, `outbox`, `stage` or
 `status`, with a `waiting`/`draft`/`active`/`done` bucket for known values) and,
 for comments, whether the thread is `resolved`. The kind comes from the source's
-own `type::`, else from the nearest typed or day block up to and including its
-containing page; comments and replies are `comment`, a `day::<date>` or a
-date-prefixed `page::` address marks a `day-page`, and anything else is a
-`note`. The mapping is the data table `DEFAULT_BACKLINK_FACET_RULES` in
+own `type::`, else from the nearest typed block up to and including its
+containing page; comments and replies are `comment`. An untyped containing page
+is a `day-page` when it has a `day::<YYYY-MM-DD>` or its whole `page::` address
+is such a date; anything else is a `note`. The stage is the source's own, else
+the stage of the block that supplied the kind. The mapping is the data table `DEFAULT_BACKLINK_FACET_RULES` in
 `src/backlink-facets.ts`, not a list of workspace types.
 
 Work IDs are allocated through the service rather than by scanning in a client. `work-ids.status` reports the configured prefix, observed legacy prefixes, and next ID; `work-ids.configure` explicitly chooses the workspace prefix; `work-ids.allocate` optimistically appends the next ID to an opted-in canonical block or atomically replaces its single configured `[work-id::<PREFIX>-XXX]` self-assignment marker. A clean existing prefix is adopted automatically, while ambiguous legacy prefixes remain visible but unconfigured. Canonical manual IDs for the configured prefix advance the same allocator; malformed, noncanonical, or out-of-prefix property values remain inert text metadata. The reservation ledger retains owning UUIDs after purge.

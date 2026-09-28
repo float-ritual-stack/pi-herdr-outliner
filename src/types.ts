@@ -1511,7 +1511,7 @@ export interface BacklinkSourceFacets {
   /** Human label for the kind, e.g. "Outbox item". */
   kindLabel: string;
   /** Where the source sits relative to the queried target. */
-  relation: "self" | "descendant" | "other";
+  placement: "self" | "descendant" | "other";
   /** The first configured stage property the source declares. `bucket` is absent for an unmapped value. */
   stage?: { property: string; value: string; bucket?: BacklinkStageBucket };
   /** Present for comments and replies; a reply takes its thread's lifecycle. */

@@ -29,7 +29,7 @@ import {
 } from "../src/detail-controller";
 import { composedTreeNavigation } from "../src/composed-surface";
 import { OutlinerActionKeymap } from "../src/outliner-actions";
-import { detailBacklinkRegions } from "../src/detail-pi-preview";
+import { detailBacklinkRegions, renderBacklinksDocument } from "../src/detail-pi-preview";
 import { resolveAnnotationReferences } from "../src/detail-annotations";
 import { detailPropertyInspectorRegions } from "../src/property-inspector";
 import { buildDetailAnsiPreview, renderDetailLines } from "../src/detail-renderer";
@@ -6048,7 +6048,7 @@ describe("faceted backlinks in Detail", () => {
     };
   }
   const letter = (stage: "waiting" | "done") => ({
-    kind: "letter", kindLabel: "Letter", relation: "other" as const,
+    kind: "letter", kindLabel: "Letter", placement: "other" as const,
     stage: { property: "outbox", value: stage, bucket: stage },
   });
 
@@ -6061,10 +6061,10 @@ describe("faceted backlinks in Detail", () => {
       sources: [
         faceted("letter-done", "Thank-you", "2031-02-05T00:00:00.000Z", letter("done")),
         faceted("letter-waiting", "Ask for trays", "2031-02-01T00:00:00.000Z", letter("waiting")),
-        faceted("day", "Monday", "2031-02-04T00:00:00.000Z", { kind: "day-page", kindLabel: "Day page", relation: "other" }),
-        faceted("self", "Ticket", "2031-02-06T00:00:00.000Z", { kind: "note", kindLabel: "Note", relation: "self" }),
+        faceted("day", "Monday", "2031-02-04T00:00:00.000Z", { kind: "day-page", kindLabel: "Day page", placement: "other" }),
+        faceted("self", "Ticket", "2031-02-06T00:00:00.000Z", { kind: "note", kindLabel: "Note", placement: "self" }),
         faceted("resolved", "Old question", "2031-02-03T00:00:00.000Z", {
-          kind: "comment", kindLabel: "Comment", relation: "other", comment: { resolved: true },
+          kind: "comment", kindLabel: "Comment", placement: "other", comment: { resolved: true },
         }),
       ],
     }]);
@@ -6133,6 +6133,40 @@ describe("faceted backlinks in Detail", () => {
     expect(rows(harness)).toEqual(["letter-waiting"]);
     for (let step = 0; step < 4; step += 1) await control("sort");
     expect([backlinks.sortField, backlinks.sortDirection]).toEqual(["title", "asc"]);
+  });
+
+  test("folding a group while a filter is active does nothing and says why", async () => {
+    const harness = await openPanel();
+    await harness.controller.dispatch({ type: "backlinks.stage.cycle" }, viewport);
+    await harness.controller.dispatch({ type: "backlinks.group.toggle", kind: "letter" }, viewport);
+    expect(harness.controller.state.backlinks.expandedKinds.has("letter")).toBe(false);
+    expect(harness.controller.state.status).toBe("Clear the filter to fold groups");
+  });
+
+  test("against a service without the facets capability, Detail shows one flat list", async () => {
+    const hub = makeBlock({ id: "hub-block", text: "Ticket" });
+    const harness = createHarness(hub);
+    // An older service returns the same sources with no `facets`.
+    harness.setBacklinkResults([{
+      targetBlockId: hub.id,
+      completeness: { kind: "complete" },
+      sources: ["older", "newer", "self"].map((blockId, index) => ({
+        blockId, title: blockId, parentContext: "Club",
+        createdAt: `2031-02-0${index + 1}T00:00:00.000Z`, updatedAt: `2031-02-0${index + 1}T00:00:00.000Z`,
+        occurrenceCount: 1, referenceGroups: [{ kind: "work-id" as const, count: 1 }],
+        occurrences: [], occurrencesTruncated: false,
+      })),
+    }]);
+    await harness.controller.initialize();
+    await harness.controller.dispatch({ type: "backlinks.toggle" }, viewport);
+    const regions = detailBacklinkRegions(harness.controller.state);
+    expect(regions.some((region) => region.kind === "backlink-group")).toBe(false);
+    // Nothing is hidden: the target's own row stays, newest first.
+    expect(visibleBacklinkSources(harness.controller.state.backlinks).map((source) => source.blockId))
+      .toEqual(["self", "newer", "older"]);
+    const document = renderBacklinksDocument(harness.controller.state, 100);
+    expect(document).toContain("3 of 3 match · [Sort: Updated ↓]");
+    expect(document).not.toContain("Kind:");
   });
 
   test("a Peek selection inside a folded group opens that group", async () => {

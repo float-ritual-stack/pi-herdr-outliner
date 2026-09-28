@@ -2455,7 +2455,7 @@ describe("generated backlink preview", () => {
     expect(generated).toContain("Showing first 1 source blocks");
     expect(generated).toContain("source-block property ×2");
     expect(generated).toContain("**source-block property**");
-    expect(generated).toContain("1 of 1");
+    expect(generated).toContain("1 of 1 match");
     expect(generated).toContain("Sort: Updated ↓");
     expect(generated).toContain("▶ ACTIVE");
     const highlighted = layout.backlinkMarkdown.render(80).find((line) =>
@@ -2509,7 +2509,7 @@ describe("generated backlink preview", () => {
       occurrences: [], occurrencesTruncated: false, facets,
     });
     const letter = (stage: "waiting" | "draft" | "done") => ({
-      kind: "letter", kindLabel: "Letter", relation: "other" as const,
+      kind: "letter", kindLabel: "Letter", placement: "other" as const,
       stage: { property: "outbox", value: stage, bucket: stage },
     });
     detail.backlinks.expanded = true;
@@ -2521,9 +2521,9 @@ describe("generated backlink preview", () => {
         source("dr", `${long} (draft)`, letter("draft")),
         source("d1", "Thanks", letter("done")),
         source("d22", "Receipt", letter("done")),
-        source("day", "Monday", { kind: "day-page", kindLabel: "Day page", relation: "other" }),
-        source("self", "Ticket", { kind: "note", kindLabel: "Note", relation: "self" }),
-        source("old", "Old question", { kind: "comment", kindLabel: "Comment", relation: "other", comment: { resolved: true } }),
+        source("day", "Monday", { kind: "day-page", kindLabel: "Day page", placement: "other" }),
+        source("self", "Ticket", { kind: "note", kindLabel: "Note", placement: "self" }),
+        source("old", "Old question", { kind: "comment", kindLabel: "Comment", placement: "other", comment: { resolved: true } }),
       ],
     };
     const layout = previewLayout(detail);
@@ -2531,7 +2531,8 @@ describe("generated backlink preview", () => {
     for (const width of [48, 72, 120]) {
       const lines = layout.backlinkMarkdown.render(width).map(stripTerminalSequences);
       const text = lines.join("\n");
-      expect(text).toContain("5 of 7 · 1 this note hidden · 1 resolved hidden");
+      // The status line may wrap; rows may not.
+      expect(text.replace(/\s+/g, " ")).toContain("5 of 7 match · 1 this note hidden · 1 resolved hidden");
       expect(text).toContain("Letter 4 (1 waiting · 1 draft · 2 done)");
       expect(text).toContain("Day page 1");
       // Collapsed groups show their open items only; each on one line.

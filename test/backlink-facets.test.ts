@@ -11,7 +11,7 @@ import { OutlinerClient } from "../src/client";
 import { OutlinerServer } from "../src/server";
 import { requireCapabilities } from "../src/service-compatibility";
 import { OutlinerStore } from "../src/store";
-import type { BacklinkCollection, BacklinkSource, Block } from "../src/types";
+import { ROADMAP_WORK_STAGES, type BacklinkCollection, type BacklinkSource, type Block } from "../src/types";
 
 // Fictional workspace: a garden-club ticket and the notes that mention it.
 
@@ -50,7 +50,7 @@ describe("backlink source facets", () => {
     const target = workspace.create("Seed swap [page::Seed Swap]");
     const letter = workspace.create("Ask about tomatoes for [[Seed Swap]] [type::letter-draft]");
     const facets = facetsOf(workspace.queryBacklinks({ targetBlockId: target.id, limit: 10 }), letter);
-    expect(facets).toMatchObject({ kind: "letter-draft", kindLabel: "Letter draft", relation: "other" });
+    expect(facets).toMatchObject({ kind: "letter-draft", kindLabel: "Letter draft", placement: "other" });
   });
 
   test("an untyped block takes the type of its containing page, and stops at that page", () => {
@@ -67,19 +67,43 @@ describe("backlink source facets", () => {
     expect(facetsOf(collection, inside)).toMatchObject({ kind: "note", kindLabel: "Note" });
   });
 
-  test("a day property or a date-prefixed page address marks a day page", () => {
+  test("only a page is a day page: a day:: date on it, or an address that is exactly a date", () => {
     const workspace = store();
     const target = workspace.create("Seed swap [page::Seed Swap]");
-    const byProperty = workspace.create("Checklist for [[Seed Swap]] [day::2031-04-02]");
-    const dayPage = workspace.create("Journal [page::2031-04-03]");
-    const byAddress = workspace.create("Watered, then [[Seed Swap]]", dayPage.id);
-    const titledDay = workspace.create("Recap of [[Seed Swap]] [page::2031-04-04 - club recap]");
-    const notADate = workspace.create("Budget for [[Seed Swap]] [page::20310-4]");
+    const datedPage = workspace.create("Journal [page::2031-04-03]");
+    const inDatedPage = workspace.create("Watered, then [[Seed Swap]]", datedPage.id);
+    const dayProperty = workspace.create("Tuesday [page::Tuesday notes] [day::2031-04-04]");
+    const inDayProperty = workspace.create("Bring [[Seed Swap]] labels", dayProperty.id);
+    // Not day pages: a date-prefixed slug page, and a day:: on a block that is not a page.
+    const slug = workspace.create("Recap of [[Seed Swap]] [page::2031-04-04-club-recap]");
+    const untypedDay = workspace.create("Checklist for [[Seed Swap]] [day::2031-04-02]");
     const collection = workspace.queryBacklinks({ targetBlockId: target.id, limit: 10 });
-    for (const source of [byProperty, byAddress, titledDay]) {
+    for (const source of [inDatedPage, inDayProperty]) {
       expect(facetsOf(collection, source)).toMatchObject({ kind: "day-page", kindLabel: "Day page" });
     }
-    expect(facetsOf(collection, notADate)?.kind).toBe("note");
+    expect(facetsOf(collection, slug)?.kind).toBe("note");
+    expect(facetsOf(collection, untypedDay)?.kind).toBe("note");
+  });
+
+  test("every roadmap work stage, and todo/unprocessed, has a bucket", () => {
+    const buckets = Object.values(DEFAULT_BACKLINK_FACET_RULES.stageBuckets).flat();
+    for (const stage of ROADMAP_WORK_STAGES) expect(buckets).toContain(stage);
+    expect(DEFAULT_BACKLINK_FACET_RULES.stageBuckets.waiting).toEqual(
+      expect.arrayContaining(["later", "todo", "unprocessed"]),
+    );
+  });
+
+  test("a child takes the stage of the block that gave it its kind, unless it has its own", () => {
+    const workspace = store();
+    const target = workspace.create("Seed swap [page::Seed Swap]");
+    const letter = workspace.create("Letter [type::letter] [outbox::waiting]");
+    const line = workspace.create("Mentions [[Seed Swap]]", letter.id);
+    const doneLine = workspace.create("Sent part about [[Seed Swap]] [outbox::done]", letter.id);
+    const collection = workspace.queryBacklinks({ targetBlockId: target.id, limit: 10 });
+    expect(facetsOf(collection, line)).toMatchObject({
+      kind: "letter", stage: { property: "outbox", value: "waiting", bucket: "waiting" },
+    });
+    expect(facetsOf(collection, doneLine)?.stage).toEqual({ property: "outbox", value: "done", bucket: "done" });
   });
 
   test("stage comes from the first configured property and buckets known values", () => {
@@ -104,10 +128,10 @@ describe("backlink source facets", () => {
     const grandchild = workspace.create("Sub-step of [[Seed Swap]]", child.id);
     const elsewhere = workspace.create("Elsewhere [[Seed Swap]]");
     const collection = workspace.queryBacklinks({ targetBlockId: target.id, limit: 10 });
-    expect(facetsOf(collection, target)?.relation).toBe("self");
-    expect(facetsOf(collection, child)?.relation).toBe("descendant");
-    expect(facetsOf(collection, grandchild)?.relation).toBe("descendant");
-    expect(facetsOf(collection, elsewhere)?.relation).toBe("other");
+    expect(facetsOf(collection, target)?.placement).toBe("self");
+    expect(facetsOf(collection, child)?.placement).toBe("descendant");
+    expect(facetsOf(collection, grandchild)?.placement).toBe("descendant");
+    expect(facetsOf(collection, elsewhere)?.placement).toBe("other");
   });
 
   test("comments report whether their thread is resolved; a reply follows its thread", () => {
@@ -147,6 +171,15 @@ describe("backlink source facets", () => {
     expect(found.facets?.kind).toBe("note");
   });
 
+  test("a malformed comment keeps its kind but gets no comment facet instead of failing the query", () => {
+    const workspace = store();
+    const target = workspace.create("Seed swap [page::Seed Swap]");
+    const odd = workspace.create("Comment on [[Seed Swap]] [type::annotation] [annotation-status::archived]");
+    const facets = facetsOf(workspace.queryBacklinks({ targetBlockId: target.id, limit: 10 }), odd);
+    expect(facets?.kind).toBe("comment");
+    expect(facets?.comment).toBeUndefined();
+  });
+
   test("the rule table is data: another table changes kinds and stages without code", () => {
     const TARGET_ID = "0f3a3c52-8d5e-4b8e-9a53-6f1d2c7b9e10";
     const target: Block = {
@@ -175,7 +208,7 @@ describe("backlink source facets", () => {
     expect(collection.sources[0]!.facets).toEqual({
       kind: "parcel",
       kindLabel: "Parcels",
-      relation: "other",
+      placement: "other",
       stage: { property: "phase", value: "shipped", bucket: "done" },
     });
     expect(humanizeBacklinkKind("day_page-summary")).toBe("Day page summary");
@@ -213,7 +246,7 @@ describe("backlink facet protocol", () => {
     expect(collection.sources[0]!.facets).toEqual({
       kind: "letter",
       kindLabel: "Letter",
-      relation: "other",
+      placement: "other",
       stage: { property: "outbox", value: "draft", bucket: "draft" },
     });
     // An older client reads the same fields it always did; facets are only added.

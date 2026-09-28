@@ -322,12 +322,15 @@ export function detailBacklinkView(backlinks: Readonly<DetailBacklinkState>): Ba
 }
 
 /** A narrowing filter opens every group so matches are never folded away. */
+function backlinkNarrowingActive(backlinks: Readonly<DetailBacklinkState>): boolean {
+  return backlinks.filter !== "" || backlinks.kindFilter !== null || backlinks.stageFilter !== "all";
+}
+
 export function detailBacklinkGroupExpanded(
   backlinks: Readonly<DetailBacklinkState>,
   kind: string,
 ): boolean {
-  return backlinks.expandedKinds.has(kind) || backlinks.filter !== "" ||
-    backlinks.kindFilter !== null || backlinks.stageFilter !== "all";
+  return backlinks.expandedKinds.has(kind) || backlinkNarrowingActive(backlinks);
 }
 
 /** Backlink rows as rendered, in order; selection and focus index this list. */
@@ -3962,6 +3965,11 @@ export function createDetailController(
           : selectedBacklinkSource()?.facets?.kind);
         if (!kind) {
           state.status = "No backlink group selected";
+          break;
+        }
+        // A narrowing filter opens every group, so a fold would change nothing visible.
+        if (backlinkNarrowingActive(state.backlinks)) {
+          state.status = "Clear the filter to fold groups";
           break;
         }
         const selected = selectedBacklinkSource()?.blockId;

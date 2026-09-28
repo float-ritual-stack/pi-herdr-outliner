@@ -1,4 +1,4 @@
-import { ANNOTATION_REPLY_TYPE, ANNOTATION_TYPE } from "./annotations";
+import { ANNOTATION_REPLY_TYPE, ANNOTATION_TYPE, parseAnnotationBlockContent } from "./annotations";
 import { getProperty } from "./properties";
 import type { BacklinkSourceFacets, BacklinkStageBucket, Block } from "./types";
 
@@ -13,13 +13,13 @@ export interface BacklinkFacetRules {
   readonly typeProperty: string;
   /** Property that declares a page; the kind search stops at the containing page. */
   readonly pageProperty: string;
-  /** Property holding an ISO date that marks a day page. */
+  /** Property holding an ISO date that marks a page as a day page. */
   readonly dayProperty: string;
   /** Type values folded onto one kind. */
   readonly kindAliases: Readonly<Record<string, string>>;
   /** Labels for kinds whose humanized key reads poorly. */
   readonly kindLabels: Readonly<Record<string, string>>;
-  /** Kind for a day page found through `dayProperty` or a date-prefixed page address. */
+  /** Kind for a page whose `dayProperty` or whole page address is an ISO date. */
   readonly dayPageKind: string;
   /** Kind when neither the source nor its page declares a type or day. */
   readonly fallbackKind: string;
@@ -46,7 +46,7 @@ export const DEFAULT_BACKLINK_FACET_RULES: BacklinkFacetRules = {
   fallbackKind: "note",
   stageProperties: ["work-stage", "outbox", "stage", "status"],
   stageBuckets: {
-    waiting: ["waiting", "queued", "blocked", "pending", "next", "planned"],
+    waiting: ["waiting", "queued", "later", "blocked", "pending", "next", "planned", "todo", "unprocessed"],
     draft: ["draft", "unprioritized", "idea", "proposed"],
     active: ["active", "doing", "in-progress", "review", "validate", "open", "started"],
     done: [
@@ -56,7 +56,7 @@ export const DEFAULT_BACKLINK_FACET_RULES: BacklinkFacetRules = {
   },
 };
 
-const ISO_DAY = /^\d{4}-\d{2}-\d{2}(?![\d])/;
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 export function isOpenBacklinkStage(bucket: BacklinkStageBucket | undefined): boolean {
   return bucket === "waiting" || bucket === "draft" || bucket === "active";
@@ -73,35 +73,17 @@ function kindForType(value: string, rules: BacklinkFacetRules): string {
   return rules.kindAliases[normalized] ?? normalized;
 }
 
-function isDayBlock(block: Block, rules: BacklinkFacetRules): boolean {
-  const day = getProperty(block.properties, rules.dayProperty);
-  if (day !== undefined && ISO_DAY.test(day.trim())) return true;
-  const page = getProperty(block.properties, rules.pageProperty);
-  return page !== undefined && ISO_DAY.test(page.trim());
+/** Only a page is a day page: a `day::` date on it, or a page address that is exactly a date. */
+function isDayPage(block: Block, rules: BacklinkFacetRules): boolean {
+  const page = getProperty(block.properties, rules.pageProperty)?.trim();
+  if (page === undefined) return false;
+  const day = getProperty(block.properties, rules.dayProperty)?.trim();
+  return (day !== undefined && ISO_DAY.test(day)) || ISO_DAY.test(page);
 }
 
-function sourceKind(
-  source: Block,
-  blocksById: ReadonlyMap<string, Block>,
-  rules: BacklinkFacetRules,
-): string {
-  // Nearest first: the source, then ancestors up to and including its page.
-  let block: Block | undefined = source;
-  const seen = new Set<string>();
-  while (block && !seen.has(block.id)) {
-    seen.add(block.id);
-    const type = getProperty(block.properties, rules.typeProperty)?.trim();
-    if (type) return kindForType(type, rules);
-    if (isDayBlock(block, rules)) return rules.dayPageKind;
-    if (getProperty(block.properties, rules.pageProperty) !== undefined) break;
-    block = block.parentId ? blocksById.get(block.parentId) : undefined;
-  }
-  return rules.fallbackKind;
-}
-
-function sourceStage(source: Block, rules: BacklinkFacetRules): BacklinkSourceFacets["stage"] {
+function blockStage(block: Block, rules: BacklinkFacetRules): BacklinkSourceFacets["stage"] {
   for (const property of rules.stageProperties) {
-    const value = getProperty(source.properties, property)?.trim();
+    const value = getProperty(block.properties, property)?.trim();
     if (!value) continue;
     const normalized = value.toLowerCase();
     const bucket = (Object.keys(rules.stageBuckets) as BacklinkStageBucket[])
@@ -111,11 +93,36 @@ function sourceStage(source: Block, rules: BacklinkFacetRules): BacklinkSourceFa
   return undefined;
 }
 
-function sourceRelation(
+/**
+ * Nearest first: the source, then ancestors up to and including its page.
+ * The block that names the kind also supplies the stage, unless the source
+ * declares its own.
+ */
+function sourceKindAndStage(
+  source: Block,
+  blocksById: ReadonlyMap<string, Block>,
+  rules: BacklinkFacetRules,
+): { kind: string; stage: BacklinkSourceFacets["stage"] } {
+  const own = blockStage(source, rules);
+  let block: Block | undefined = source;
+  const seen = new Set<string>();
+  while (block && !seen.has(block.id)) {
+    seen.add(block.id);
+    const type = getProperty(block.properties, rules.typeProperty)?.trim();
+    if (type) return { kind: kindForType(type, rules), stage: own ?? blockStage(block, rules) };
+    if (getProperty(block.properties, rules.pageProperty) !== undefined) {
+      return { kind: isDayPage(block, rules) ? rules.dayPageKind : rules.fallbackKind, stage: own };
+    }
+    block = block.parentId ? blocksById.get(block.parentId) : undefined;
+  }
+  return { kind: rules.fallbackKind, stage: own };
+}
+
+function sourcePlacement(
   source: Block,
   target: Block,
   blocksById: ReadonlyMap<string, Block>,
-): BacklinkSourceFacets["relation"] {
+): BacklinkSourceFacets["placement"] {
   if (source.id === target.id) return "self";
   const seen = new Set<string>();
   let parentId = source.parentId;
@@ -130,15 +137,25 @@ function sourceRelation(
 function commentFacet(
   source: Block,
   blocksById: ReadonlyMap<string, Block>,
+  rules: BacklinkFacetRules,
 ): BacklinkSourceFacets["comment"] {
-  const type = getProperty(source.properties, "type")?.trim().toLowerCase();
+  const type = getProperty(source.properties, rules.typeProperty)?.trim().toLowerCase();
   if (type !== ANNOTATION_TYPE && type !== ANNOTATION_REPLY_TYPE) return undefined;
+  const content = annotationContent(source);
+  if (!content) return undefined;
   // Lifecycle belongs to the root thread; a reply follows its root.
-  const rootId = type === ANNOTATION_REPLY_TYPE
-    ? getProperty(source.properties, "parent-annotation")?.trim()
-    : undefined;
-  const root = rootId ? blocksById.get(rootId) ?? source : source;
-  return { resolved: getProperty(root.properties, "annotation-status")?.trim() === "resolved" };
+  const root = content.parentAnnotationId ? blocksById.get(content.parentAnnotationId) : undefined;
+  const lifecycle = root ? annotationContent(root)?.lifecycle ?? content.lifecycle : content.lifecycle;
+  return { resolved: lifecycle === "resolved" };
+}
+
+/** The annotation parser throws on unknown lifecycles; a malformed comment simply has no comment facet. */
+function annotationContent(block: Block): ReturnType<typeof parseAnnotationBlockContent> | null {
+  try {
+    return parseAnnotationBlockContent(block);
+  } catch {
+    return null;
+  }
 }
 
 export function backlinkSourceFacets(
@@ -147,13 +164,12 @@ export function backlinkSourceFacets(
   blocksById: ReadonlyMap<string, Block>,
   rules: BacklinkFacetRules = DEFAULT_BACKLINK_FACET_RULES,
 ): BacklinkSourceFacets {
-  const kind = sourceKind(source, blocksById, rules);
-  const stage = sourceStage(source, rules);
-  const comment = commentFacet(source, blocksById);
+  const { kind, stage } = sourceKindAndStage(source, blocksById, rules);
+  const comment = commentFacet(source, blocksById, rules);
   return {
     kind,
     kindLabel: rules.kindLabels[kind] ?? humanizeBacklinkKind(kind),
-    relation: sourceRelation(source, target, blocksById),
+    placement: sourcePlacement(source, target, blocksById),
     ...(stage ? { stage } : {}),
     ...(comment ? { comment } : {}),
   };

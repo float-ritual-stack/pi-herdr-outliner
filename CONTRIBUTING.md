@@ -58,7 +58,7 @@ source evidence or distinguish authored glyphs from controls.
 - `src/tree-controller.ts` / `src/tree-renderer.ts` own Tree behavior and presentation.
 - `src/detail-controller.ts` plus `src/detail-*` own Detail behavior and presentation.
 - `src/virtual-branches.ts` owns projection semantics.
-- `src/backlink-facets.ts` owns what a backlink source is (kind, stage, relation,
+- `src/backlink-facets.ts` owns what a backlink source is (kind, stage, placement,
   comment resolution) as a data table; `src/backlink-view.ts` owns how clients
   hide, filter, group and order those sources.
 - `pi-extension/index.ts` is a host adapter, not a second implementation of the service.

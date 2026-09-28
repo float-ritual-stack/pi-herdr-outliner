@@ -138,7 +138,7 @@ export function backlinkView(
   let hiddenResolved = 0;
   const shown: BacklinkSource[] = [];
   for (const source of all) {
-    if (faceted && !options.showRelated && source.facets!.relation !== "other") hiddenRelated += 1;
+    if (faceted && !options.showRelated && source.facets!.placement !== "other") hiddenRelated += 1;
     else if (faceted && !options.showResolved && source.facets!.comment?.resolved) hiddenResolved += 1;
     else shown.push(source);
   }
