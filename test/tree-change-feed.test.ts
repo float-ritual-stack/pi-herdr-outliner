@@ -8,13 +8,13 @@ import {OutlinerServer} from "../src/server";
 import {OutlinerStore} from "../src/store";
 import {serviceTreeNavigation} from "../src/navigation-routes";
 import {createTreeController} from "../src/tree-controller";
-import type {Block, OutlinerEvent} from "../src/types";
+import type {Block, OutlinerEvent, OutlinerServiceStatus} from "../src/types";
 
 initTheme(undefined,false);
 const cleanups: (() => Promise<void>)[]=[];
 afterEach(async()=>{for(const cleanup of cleanups.splice(0).reverse())await cleanup();});
 
-async function fixture(options:{unsupported?:string}={}) {
+async function fixture(options:{unsupported?:string;withheldCapability?:string}={}) {
   const dir=mkdtempSync(join(tmpdir(),"outliner-tree-feed-"));
   const store=new OutlinerStore(join(dir,"outline.sqlite"));
   const server=new OutlinerServer(store,join(dir,"outline.sock"));
@@ -33,6 +33,8 @@ async function fixture(options:{unsupported?:string}={}) {
   const controller=createTreeController({clientId:"tree",browsingContextId:"tree-context",workspaceRoot:dir,
     request:(input:RequestInput)=>{requests.push(input.action);
       if(input.action===options.unsupported)return Promise.reject(new Error(`Unknown action: ${input.action}`));
+      if(input.action==="ping"&&options.withheldCapability)return client.request<OutlinerServiceStatus>(input).then(status=>
+        ({...status,capabilities:status.capabilities?.filter(capability=>capability!==options.withheldCapability)}) as never);
       return client.request(input);},
     navigation:serviceTreeNavigation(client,"tree","tree-context"),
     createDetailPane:async()=>{},openCapturePopup:async()=>{},openVirtualBranchNavigator:async()=>{},
@@ -94,8 +96,18 @@ test("Tree reconnects without reloading when the feed reports no outline change"
   expect(created.id).toBeTruthy();
 });
 
-test("Tree reloads on reconnect when the service lacks the changes.since capability",async()=>{
-  // An older service rejects the unknown action; Tree falls back to a full reload.
+test("Tree reloads on reconnect, without asking the feed, when the service lacks the changes.since capability",async()=>{
+  const f=await fixture({withheldCapability:"changes.since"});
+  const before=f.indexReads();
+  f.controller.handleDisconnect();
+  await f.controller.handleConnect();
+  expect(f.requests).toContain("ping");
+  expect(f.requests).not.toContain("changes.since");
+  expect(f.indexReads()-before).toBe(1);
+});
+
+test("Tree reloads on reconnect when a changes.since request fails",async()=>{
+  // A failed feed read is doubt, and doubt means a full reload.
   const f=await fixture({unsupported:"changes.since"});
   const before=f.indexReads();
   f.controller.handleDisconnect();

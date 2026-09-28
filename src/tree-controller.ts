@@ -9,7 +9,8 @@ import {TreeConnections} from "./tree-connections";
 import {TreeWorkingSelection} from "./tree-working-selection";
 import {OpenDestinationChooser, destinationRecoveryKey, missingNavigationDestination, type OpenDestinationTarget} from "./open-destination-chooser";
 import type {DetailDestinationPlacement} from "./detail-pane-placement";
-import type {ChangeFeedPage, OutlinerCapability, OutlinerViewAddress} from "./types";
+import type {ChangeFeedPage, OutlinerCapability, OutlinerServiceStatus, OutlinerViewAddress} from "./types";
+import {checkServiceCompatibility} from "./service-compatibility";
 import {DocumentPreview, type DocumentPreviewState} from './document-preview';
 import {treePreviewFrame, defaultPreviewPreferences, type PreviewPreferences} from './tree-preview';
 import type { RequestInput } from "./client";
@@ -2052,12 +2053,14 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
    * Asks the change feed what a reconnect missed; any doubt means `outline`.
    * The feed hides sequence advances that change no outline content (Resource
    * catalog bookkeeping), so a later sequence with no visible change is one.
-   * A service without the `changes.since` capability rejects the request, which
-   * falls back to a full reload.
+   * A service without the `changes.since` capability is not asked; like a
+   * failed request, that falls back to a full reload.
    */
   async function changesSince(sequence: number | null): Promise<"outline" | "resource-catalog" | "none"> {
     if (sequence === null) return "outline";
     try {
+      const service = await effects.request<OutlinerServiceStatus>({ action: "ping" });
+      if (checkServiceCompatibility(service, ["changes.since"])) return "outline";
       const page = await effects.request<ChangeFeedPage>({ action: "changes.since", sequence, limit: 1 });
       if (page.kind === "reset" || page.changes.length > 0) return "outline";
       return page.sequence > sequence ? "resource-catalog" : "none";

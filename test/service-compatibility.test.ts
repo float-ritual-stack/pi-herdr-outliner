@@ -164,6 +164,27 @@ test("every Tree host, including composed Detail, requires query.expression at s
   expect(new Set(actions)).toEqual(new Set(["ping"]));
 });
 
+test("CLI changes requires changes.since before asking for the feed", async () => {
+  const run = async (capabilities: string[]) => {
+    const { socket, actions } = await fakeService({ protocolVersion: OUTLINER_PROTOCOL_VERSION, capabilities });
+    const root = temporaryDirectory();
+    const child = Bun.spawn([process.execPath, "src/cli.ts", "changes", "--since", "0"], {
+      cwd: join(import.meta.dir, ".."),
+      env: { ...process.env, OUTLINER_REMOTE: "1", OUTLINER_SOCKET_PATH: socket,
+        OUTLINER_WORKSPACE_ROOT: root, OUTLINER_STATE_DIR: join(root, "state") },
+      stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 5_000,
+    });
+    const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+    return { exitCode, stderr, actions };
+  };
+  const without = await run(["blocks.read"]);
+  expect(without.exitCode).toBe(1);
+  expect(without.stderr).toContain("does not support changes.since. Restart the service");
+  expect(without.actions).toEqual(["ping"]);
+  const withCapability = await run(["changes.since"]);
+  expect(withCapability.actions).toEqual(["ping", "changes.since"]);
+});
+
 test("a newer service is accepted; a service below the minimum is rejected", () => {
   const newer: OutlinerServiceStatus = {
     status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION + 3,

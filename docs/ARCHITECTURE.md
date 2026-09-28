@@ -797,8 +797,10 @@ events with action `inbox.changed` or `background`. A content event without a
 `change` reports a request that committed nothing.
 
 `changes.since { sequence, limit? }` returns changes with a greater sequence.
-Services that serve it advertise the `changes.since` capability; the CLI checks
-for it, and Tree falls back to a full reload when the request fails:
+Services that serve it, and that attach `change` records to content events,
+advertise the `changes.since` capability. The CLI requires it; Tree checks it on
+reconnect and falls back to a full reload when it is absent or the request
+fails:
 
 - `{ kind: "changes", changes, nextSequence, completeness, sequence }` ordered by
   sequence, then `changeId`. `limit` defaults to 200 and must be 1–1000. A page
