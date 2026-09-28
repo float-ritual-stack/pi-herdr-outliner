@@ -422,6 +422,7 @@ switch (command) {
     if (values.since === undefined || !Number.isSafeInteger(sequence) || sequence < 0) {
       throw new Error("changes requires --since <sequence>, a non-negative integer");
     }
+    await client.requireCompatibleService(["changes.since"]);
     request = {
       action: "changes.since",
       sequence,

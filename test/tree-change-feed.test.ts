@@ -14,7 +14,7 @@ initTheme(undefined,false);
 const cleanups: (() => Promise<void>)[]=[];
 afterEach(async()=>{for(const cleanup of cleanups.splice(0).reverse())await cleanup();});
 
-async function fixture() {
+async function fixture(options:{unsupported?:string}={}) {
   const dir=mkdtempSync(join(tmpdir(),"outliner-tree-feed-"));
   const store=new OutlinerStore(join(dir,"outline.sqlite"));
   const server=new OutlinerServer(store,join(dir,"outline.sock"));
@@ -31,7 +31,9 @@ async function fixture() {
   cleanups.push(()=>watcher.stop());
   await connected.promise;
   const controller=createTreeController({clientId:"tree",browsingContextId:"tree-context",workspaceRoot:dir,
-    request:(input:RequestInput)=>{requests.push(input.action);return client.request(input);},
+    request:(input:RequestInput)=>{requests.push(input.action);
+      if(input.action===options.unsupported)return Promise.reject(new Error(`Unknown action: ${input.action}`));
+      return client.request(input);},
     navigation:serviceTreeNavigation(client,"tree","tree-context"),
     createDetailPane:async()=>{},openCapturePopup:async()=>{},openVirtualBranchNavigator:async()=>{},
     focusSelf(){},stop(){},invalidate(){},terminalWidth:()=>100,terminalHeight:()=>40,copyText(){}});
@@ -90,6 +92,16 @@ test("Tree reconnects without reloading when the feed reports no outline change"
   await f.settle(1);
   expect(f.indexReads()-before).toBe(1);
   expect(created.id).toBeTruthy();
+});
+
+test("Tree reloads on reconnect when the service lacks the changes.since capability",async()=>{
+  // An older service rejects the unknown action; Tree falls back to a full reload.
+  const f=await fixture({unsupported:"changes.since"});
+  const before=f.indexReads();
+  f.controller.handleDisconnect();
+  await f.controller.handleConnect();
+  expect(f.requests).toContain("changes.since");
+  expect(f.indexReads()-before).toBe(1);
 });
 
 test("Tree refreshes authored links, without reloading, after Resource catalog activity while away",async()=>{

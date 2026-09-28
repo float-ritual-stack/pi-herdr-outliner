@@ -1604,6 +1604,7 @@ export const OUTLINER_MIN_CLIENT_PROTOCOL = 82;
  */
 export const OUTLINER_CAPABILITIES = [
   "blocks.read",
+  "changes.since",
   "properties.preview",
   "query.expression",
   "views.read",

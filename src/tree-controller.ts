@@ -2052,6 +2052,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
    * Asks the change feed what a reconnect missed; any doubt means `outline`.
    * The feed hides sequence advances that change no outline content (Resource
    * catalog bookkeeping), so a later sequence with no visible change is one.
+   * A service without the `changes.since` capability rejects the request, which
+   * falls back to a full reload.
    */
   async function changesSince(sequence: number | null): Promise<"outline" | "resource-catalog" | "none"> {
     if (sequence === null) return "outline";

@@ -620,7 +620,8 @@ exceed the tool budget. `views.read` requires a service that reports the
 Clients that need to follow the outline subscribe with `events.subscribe`;
 content events carry the changed block's parent, revision, change kind and
 declared actor. After a disconnect, `changes.since` returns what was missed, in
-order, or an explicit reset when history is no longer retained. See
+order, or an explicit reset when history is no longer retained. Services that
+support it advertise the `changes.since` capability. See
 [Change feed](docs/ARCHITECTURE.md#change-feed).
 
 The CLI resolves the same workspace-scoped socket and database as the service. `goto` accepts a full UUID, unique short prefix, or unambiguous fuzzy title/content query. Eight-character IDs are convenience labels, not a uniqueness guarantee; ambiguous queries return full-UUID candidates without changing selection. Work-ID configuration is normally one-time; allocation requires the exact block UUID and its latest integer `revision`, available in bounded `list` results. A successful allocation atomically persists both the immutable reservation and the block's `[work-id::…]` property/address; a failed request consumes neither the number nor a reservation.

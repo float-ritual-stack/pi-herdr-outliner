@@ -7,6 +7,7 @@ import { OutlinerClient } from "../src/client";
 import { OutlinerServer } from "../src/server";
 import { OutlinerStore } from "../src/store";
 import type { Block, ChangeFeedPage, OutlinerChange, OutlinerEvent } from "../src/types";
+import { requireCapabilities } from "../src/service-compatibility";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {
@@ -74,6 +75,14 @@ async function readAll(client: OutlinerClient, sequence: number, limit: number):
     sequence = page.nextSequence;
   }
 }
+
+test("the service advertises the changes.since capability", async () => {
+  const { client } = await service(workspace("pi-outliner-change-capability-"));
+  const status = await client.requireCompatibleService(["changes.since"]);
+  expect(status.capabilities).toContain("changes.since");
+  expect(() => requireCapabilities({ ...status, capabilities: ["blocks.read"] }, ["changes.since"]))
+    .toThrow("changes.since");
+});
 
 test("content events carry parent, revision, actor and kind while keeping existing fields", async () => {
   const { client, store } = await service(workspace("pi-outliner-change-events-"));
