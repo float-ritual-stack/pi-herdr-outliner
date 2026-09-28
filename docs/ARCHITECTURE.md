@@ -984,7 +984,9 @@ request errors. The read has no side effects on selection, disclosure or panes.
 
 Tree, the virtual-branch navigator, Detail view embeds, CLI `view` and the
 `outliner_view` agent tool all read membership through `views.read`; they keep
-only presentation (descendant context, disclosure, attention) locally. Older
+only presentation (descendant context, disclosure, attention) locally. Each
+requires the `views.read` capability before its first read, so a service
+without it produces a restart instruction rather than an unknown-action error. Older
 clients that evaluate views from `workspace.snapshot` plus `blocks.query` keep
 working because those actions are unchanged. Two client paths still evaluate
 over `blocks.query`: the Tree's virtual-child admission check, which asks whether

@@ -34,6 +34,7 @@ import type {
   ChecklistSearchCollection,
   ChecklistUpdateReceipt,
   OutlinerClientRegistration,
+  OutlinerServiceStatus,
   RoadmapItemCreateInput,
   SelectionContext,
   VisibleBlockCollection,
@@ -71,8 +72,14 @@ test("saved-view tool reports branch identity and presentation omissions through
   await server.start();
   const fixture = new OutlinerClient(join(root, "service.sock"));
   const original = OutlinerClient.prototype.request;
-  const transport = spyOn(OutlinerClient.prototype, "request").mockImplementation(function<T>(input: RequestInput, timeout?: number): Promise<T> {
-    return original.call(fixture, input, timeout) as Promise<T>;
+  let withholdViewsRead = false;
+  const requests: string[] = [];
+  const transport = spyOn(OutlinerClient.prototype, "request").mockImplementation(async function<T>(input: RequestInput, timeout?: number): Promise<T> {
+    requests.push(input.action);
+    const result = await original.call(fixture, input, timeout) as T;
+    if (input.action !== "ping" || !withholdViewsRead) return result;
+    const status = result as OutlinerServiceStatus;
+    return {...status, capabilities: status.capabilities?.filter(capability => capability !== "views.read")} as T;
   });
   type Tool = {name: string; parameters: TSchema; execute(id: string, params: unknown): Promise<{content: {text?: string}[]; details: any}>};
   const tools = new Map<string, Tool>();
@@ -93,6 +100,11 @@ test("saved-view tool reports branch identity and presentation omissions through
     expect([shown.status, shown.viewId, shown.completeness]).toEqual(["ready", view.id, {kind: "complete"}]);
     expect(shown.presentation).toEqual({returned: 1, presented: 0, omitted: 1});
     expect(bounded.details).toEqual(shown);
+    // A service without views.read is refused before the tool sends the read.
+    withholdViewsRead = true;
+    requests.length = 0;
+    await expect(tool.execute("old-service-view", {viewId: view.id})).rejects.toThrow("does not support views.read");
+    expect(requests).not.toContain("views.read");
   } finally { transport.mockRestore(); await server.close(); store.close(); rmSync(root, {recursive: true, force: true}); }
 });
 
