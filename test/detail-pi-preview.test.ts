@@ -1242,6 +1242,69 @@ describe("Pi Markdown detail preview", () => {
     expect(titleLine()).not.toContain("\x1b[1;97;48;5;24m");
   });
 
+  test("a wrapped comment link is one keyboard stop whose id does not depend on width", () => {
+    const raw = "Title\n\ntarget phrase\n\nafter";
+    const detail = state(raw, raw);
+    detail.context.selected = {...detail.context.selected!, id: "20000000-0000-4000-8000-000000000001"};
+    const target = textTarget(raw, raw.indexOf("target phrase"), raw.indexOf("\n\nafter"));
+    const page = "Seasonal seed ordering and compost rota plan";
+    detail.annotationThreads = [annotationThread("comment-wrap", target, `See [[${page}]] then [[${page}]] again.`)];
+    const layout = expandedPreview(detail, plainMarkdownTheme, true);
+    withInternalLinks(() => layout.render(34));
+    togglePreviewRegionDisclosure(detail.previewRegions,
+      detail.previewRegions.regions.find(candidate => candidate.kind === "annotation")!.id);
+    layout.scrollView.updateLayout(40, 60, () => {});
+    const uri = outlinerLinkUri("page", page);
+    const stops = (width: number) => {
+      withInternalLinks(() => layout.render(width));
+      return detail.previewRegions.regions.filter(region => region.id.startsWith("body-link:comment:") &&
+        region.activation?.type === "link.open" && region.activation.uri === uri).map(region => region.id);
+    };
+    const narrow = stops(34);
+    const lines = withInternalLinks(() => layout.render(34));
+    // The page name wraps at this width, yet each occurrence is a single stop.
+    const rows = new Set(measureRenderedLinks(lines).filter(link => link.uri === uri).map(link => link.row));
+    expect(rows.size).toBeGreaterThan(2);
+    expect(narrow).toHaveLength(2);
+    expect(stops(72)).toEqual(narrow);
+    expect(stops(34)).toEqual(narrow);
+    // Focus highlights every row of the first occurrence and nothing of the second.
+    detail.previewRegions.focusedRegionId = narrow[0]!;
+    const focused = withInternalLinks(() => layout.render(34))
+      .filter(line => line.includes("\x1b[1;97;48;5;24m")).map(stripTerminalSequences);
+    expect(focused.length).toBeGreaterThan(1);
+    expect(focused[0]).toContain("See Seasonal");
+    expect(focused.join(" ")).not.toContain("again");
+  });
+
+  function renderedComment(body: string): string[] {
+    const raw = "Title\n\ntarget phrase\n\nafter";
+    const detail = state(raw, raw);
+    detail.context.selected = {...detail.context.selected!, id: "20000000-0000-4000-8000-000000000001"};
+    const target = textTarget(raw, raw.indexOf("target phrase"), raw.indexOf("\n\nafter"));
+    detail.annotationThreads = [annotationThread("comment-lines", target, body)];
+    const layout = expandedPreview(detail, plainMarkdownTheme, true);
+    withInternalLinks(() => layout.render(72));
+    togglePreviewRegionDisclosure(detail.previewRegions,
+      detail.previewRegions.regions.find(candidate => candidate.kind === "annotation")!.id);
+    layout.scrollView.updateLayout(40, 40, () => {});
+    return withInternalLinks(() => layout.render(72));
+  }
+
+  test("a comment line starting with an autolink links its address, not the closing bracket", () => {
+    const lines = renderedComment(["<https://example.com/a>", "<div>still text</div>"].join("\n"));
+    const uris = measureRenderedLinks(lines).map(link => link.uri);
+    expect(uris).toContain("https://example.com/a");
+    expect(uris.some(uri => uri.endsWith(">"))).toBe(false);
+    expect(lines.map(stripTerminalSequences).join("\n")).toContain("<div>still text</div>");
+  });
+
+  test("a comment line shaped like a reference definition stays visible", () => {
+    const text = renderedComment("Sources:\n\n[1]: https://example.com/ref").map(stripTerminalSequences).join("\n");
+    expect(text).toContain("[1]: https://example.com/ref");
+    expect(text).not.toContain("\\");
+  });
+
   test("comment block syntax that would break the thread box renders as plain lines", () => {
     const raw = "Title\n\ntarget phrase\n\nafter";
     const detail = state(raw, raw);
@@ -2397,6 +2460,15 @@ describe("generated backlink preview", () => {
       type: "backlink.source.disclosure.toggle",
       blockId: "source-target",
     });
+    // A `[` inside a generated link label cannot restart the label.
+    const source = detail.backlinks.collection!.sources[0]!;
+    detail.backlinks.collection!.sources[0] = {...source, title: "Meeting [draft] notes", parentContext: "Project [2026] › Notes"};
+    const labels = measureRenderedLinks(withInternalLinks(() =>
+      new Markdown(renderBacklinksDocument(detail), 0, 0, plainMarkdownTheme).render(160)))
+      .filter(link => link.uri === backlinkUri).map(link => link.label);
+    expect(labels[0]).toBe("Meeting [draft] notes");
+    expect(labels[1]).toStartWith("Project [2026] › Notes · 3 references");
+    detail.backlinks.collection!.sources[0] = source;
     detail.backlinks.expandedSourceIds.clear();
     expect(renderBacklinksDocument(detail)).not.toContain("See ((block-1)) from here");
     detail.backlinks.filter = "missing";

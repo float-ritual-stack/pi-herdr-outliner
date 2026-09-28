@@ -4,7 +4,8 @@ import { outlinerActionLink } from "./outliner-actions";
 import { annotationSourceHash, annotationReferenceContextsEqual, extractAnnotationBody } from "./annotations";
 import type { DetailState } from "./detail-controller";
 import { renderMarkdownLine, sanitizeDynamicText } from "./terminal";
-import type { Block, AnnotationRecord, AnnotationTarget, AnnotationThread } from "./types";
+import { blockReferenceDisplayText, blockReferenceOccurrences } from "./references";
+import type { Block, AnnotationRecord, AnnotationTarget, AnnotationThread, BlockReferenceResolution, ResolvedBlockReferences } from "./types";
 
 /** The displayed evidence needed by both Detail and local Preview comment readers. */
 export interface AnnotationReaderState extends Pick<DetailState,
@@ -19,28 +20,60 @@ export interface AnnotationReaderState extends Pick<DetailState,
   };
 }
 
-/**
- * Resolve block-reference titles in comment and reply text, keyed by the stored
- * text. Only text that can contain `((…))` is resolved; failures keep the
- * stored text, which still links pages, Work IDs and block IDs.
- */
-export function annotationReferenceTexts(threads: readonly AnnotationThread[]): Set<string> {
-  return new Set(threads.flatMap(thread => [thread.body, ...thread.replies.map(reply => reply.body)])
-    .filter(body => body.includes("((")));
+/** A resolve that has not answered by then leaves comments with their linked block IDs. */
+export const ANNOTATION_REFERENCE_TIMEOUT_MS = 1500;
+
+function annotationBodies(threads: readonly AnnotationThread[]): string[] {
+  return [...new Set(threads.flatMap(thread => [thread.body, ...thread.replies.map(reply => reply.body)]))];
 }
 
+/** The distinct `((…))` tokens in comment and reply text, in first-seen order. */
+export function annotationReferenceTokens(threads: readonly AnnotationThread[]): string[] {
+  return [...new Set(annotationBodies(threads).flatMap(body =>
+    blockReferenceOccurrences(body).map(reference => body.slice(reference.start, reference.end))))];
+}
+
+/**
+ * Resolve block-reference titles in comment and reply text, keyed by the stored
+ * text. Every distinct token goes in one `references.resolve` request, and the
+ * titles are substituted locally as the service would. A failed, malformed or
+ * late (after `timeoutMs`) answer keeps the stored text, which still links
+ * pages, Work IDs and block IDs.
+ */
 export async function resolveAnnotationReferences(
   threads: readonly AnnotationThread[],
-  resolve: (text: string) => Promise<{ text: string }>,
+  resolve: (text: string) => Promise<Pick<ResolvedBlockReferences, "references">>,
+  timeoutMs = ANNOTATION_REFERENCE_TIMEOUT_MS,
 ): Promise<Map<string, string>> {
-  const bodies = annotationReferenceTexts(threads);
+  const tokens = annotationReferenceTokens(threads);
   const resolved = new Map<string, string>();
-  await Promise.all([...bodies].map(async body => {
-    try {
-      const result = await resolve(body);
-      if (result.text !== body) resolved.set(body, result.text);
-    } catch { /* The stored text remains readable and linkable. */ }
-  }));
+  if (!tokens.length) return resolved;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let references: BlockReferenceResolution[];
+  try {
+    // Tokens cannot contain a line break, so one resolution comes back per line.
+    const answer = await Promise.race([
+      resolve(tokens.join("\n")),
+      new Promise<null>(done => { timer = setTimeout(() => done(null), timeoutMs); }),
+    ]);
+    if (!answer || answer.references.length !== tokens.length) return resolved;
+    references = answer.references;
+  } catch {
+    return resolved;
+  } finally {
+    clearTimeout(timer);
+  }
+  const titles = new Map(tokens.map((token, index) => [token, blockReferenceDisplayText(references[index]!)]));
+  for (const body of annotationBodies(threads)) {
+    let text = "";
+    let cursor = 0;
+    for (const reference of blockReferenceOccurrences(body)) {
+      text += body.slice(cursor, reference.start) + titles.get(body.slice(reference.start, reference.end))!;
+      cursor = reference.end;
+    }
+    text += body.slice(cursor);
+    if (text !== body) resolved.set(body, text);
+  }
   return resolved;
 }
 

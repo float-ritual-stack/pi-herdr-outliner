@@ -14,6 +14,7 @@ import {documentFolds, revealFoldedLine, type DocumentFold} from './document-fol
 import type {Block} from "./types";
 import {authoredResourceReferenceOccurrences} from "./resource-references";
 import {measureRenderedLinks, withInternalLinks, type RenderedLink} from './rendered-links';
+import {LinkAwareMarkdown} from './link-aware-markdown';
 import { displayedResourceText, detailAnnotationGroups, sourceLineStarts, sourceLineAt, selectedAnnotationThread, annotationScopeLabel, type DetailAnnotationGroup, type AnnotationReaderState } from "./detail-annotations";
 import { detailPropertyInspectorRegions } from "./property-inspector";
 import {
@@ -518,6 +519,12 @@ function escapeGeneratedMarkdown(value: string): string {
     .replace(/([`*_\]<>~])/g, "\\$1");
 }
 
+// Inside `[label](uri)` an unmatched `[` would restart the label, and pi-tui
+// does not read `\\[` as LaTeX there, so labels also escape `[`.
+function escapeGeneratedLinkLabel(value: string): string {
+  return escapeGeneratedMarkdown(value).replaceAll("[", "\\[");
+}
+
 /**
  * A comment is authored note text: references link and inline formatting
  * renders. Only block structure that would break its box (headings, fences,
@@ -546,8 +553,15 @@ function neutralizeCommentBlockSyntax(line: string): string {
   // Setext underlines and thematic breaks.
   if (/^ {0,3}(?:=+|-+|(?:[-*_][ \t]*){3,})[ \t]*$/.test(line)) return line.replace(/[-=*_]/, "\\$&");
   if (line.includes("|") && TABLE_DELIMITER_ROW.test(line)) return line.replaceAll("|", "\\|");
+  // `[1]: https://…` would be read as a reference definition and vanish.
+  const definition = /^ {0,3}\[(?:[^\\[\]]|\\.)+(?=\]:)/.exec(line);
+  if (definition) return `${definition[0]}\\${line.slice(definition[0].length)}`;
+  // An autolink is not an HTML block; escaping its `<` would link `https://…>`.
+  if (COMMENT_AUTOLINK.test(line)) return line;
   return line.replace(/^( {0,3})</, "$1\\<");
 }
+
+const COMMENT_AUTOLINK = /^ {0,3}<(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*|[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)>/;
 
 function backlinkGroupLabel(group: BacklinkReferenceGroup): string {
   if (group.kind === "property") return `${group.propertyKey} property ×${group.count}`;
@@ -643,8 +657,8 @@ export function renderBacklinksDocument(state: Readonly<DetailState>): string {
     lines.push("_No backlinks match the current filter._");
   } else {
     for (const [index, source] of sources.entries()) {
-      const title = escapeGeneratedMarkdown(source.title);
-      const context = escapeGeneratedMarkdown(source.parentContext);
+      const title = escapeGeneratedLinkLabel(source.title);
+      const context = escapeGeneratedLinkLabel(source.parentContext);
       const trash = source.deletedRootId ? " · Trash" : "";
       const count = source.occurrenceCount === 1
         ? "1 reference"
@@ -743,6 +757,8 @@ interface CommentLinking {
   references: ReadonlyMap<string, string> | undefined;
   workIdPrefix: string | null;
   linksEnabled: boolean;
+  /** Mark each link occurrence so a wrapped link measures as one keyboard stop. */
+  trackLinks?: boolean;
 }
 
 function annotationPanelLines(
@@ -787,8 +803,8 @@ function annotationPanelLines(
     const [first = "", ...rest] = commentLines(reply.body);
     body.push("", `**${escapeGeneratedMarkdown(reply.source)}:** ${first}`, ...rest);
   }
-  const rendered = new Markdown(body.join("\n"), 0, 0, theme)
-    .render(Math.max(1, panelWidth - 2));
+  const rendered = (comments.trackLinks ? new LinkAwareMarkdown(body.join("\n"), theme)
+    : new Markdown(body.join("\n"), 0, 0, theme)).render(Math.max(1, panelWidth - 2));
   return [
     annotationBorder(top),
     ...rendered.map((line) => `${annotationBorder("│")} ${line}`),
@@ -807,16 +823,17 @@ class DetailAnnotationPreview implements Component {
     private readonly linksEnabled = false,
   ) {}
 
-  private commentLinking(): CommentLinking {
+  private commentLinking(trackLinks: boolean): CommentLinking {
     return {references: this.state.annotationReferences, workIdPrefix: this.state.workIdPrefix ?? null,
-      linksEnabled: this.linksEnabled};
+      linksEnabled: this.linksEnabled, trackLinks};
   }
 
   setGroups(groups: readonly DetailAnnotationGroup[]): void {
     this.groups = groups;
   }
 
-  renderArrangement(width: number): AnnotationPreviewArrangement {
+  /** `trackLinks` adds zero-width link-occurrence markers for measurement only; never paint those lines. */
+  renderArrangement(width: number, trackLinks = false): AnnotationPreviewArrangement {
     const outerWidth = Math.max(1, Math.floor(width));
     if (this.groups.length === 0) {
       const lines = this.markdown.render(outerWidth);
@@ -871,7 +888,7 @@ class DetailAnnotationPreview implements Component {
           regionId: `annotation-thread:${thread.block.id}`, groupId: group.regionId,
           lines: annotationPanelLines(thread, this.groups.flatMap(group => group.threads).indexOf(thread),
             contentWidth, this.theme, group.placement, selectedAnnotationThread(this.state)?.block.id === thread.block.id, annotationScopeLabel(thread, this.state),
-            this.commentLinking()),
+            this.commentLinking(trackLinks)),
         });
       }
       insertions.set(insertionRow, existing);
@@ -953,7 +970,7 @@ class DetailAnnotationPreview implements Component {
         panelRows.set(`annotation-thread:${thread.block.id}`, lines.length);
         const panel = annotationPanelLines(thread, this.groups.flatMap(group => group.threads).indexOf(thread), outerWidth,
           this.theme, group.placement, selectedAnnotationThread(this.state)?.block.id === thread.block.id, annotationScopeLabel(thread, this.state),
-          this.commentLinking());
+          this.commentLinking(trackLinks));
         lines.push(...panel);
         markdownRows.push(...panel.map(() => null));
       }
@@ -1844,7 +1861,7 @@ export class DetailPiPreviewLayout extends VStack {
     if (this.state.propertyInspector.presentation === "dedicated") return;
     const contentWidth=this.scrollView.getContentWidth(width);
     // Measure comment panels with OSC 8 geometry, as the document's own links are.
-    const annotated=withInternalLinks(()=>this.annotationPreview.renderArrangement(contentWidth));
+    const annotated=withInternalLinks(()=>this.annotationPreview.renderArrangement(contentWidth,true));
     const calloutRows=new Map<string,number>();
     for(const link of this.markdown.renderedLinks){
       if(link.uri.startsWith("pi-outliner-detail:")){
@@ -1870,16 +1887,23 @@ export class DetailPiPreviewLayout extends VStack {
     }
     // Links in comment text follow the same focus and activation path as note links.
     const threadStarts=[...annotated.panelRows].filter(([id])=>id.startsWith("annotation-thread:")).sort((a,b)=>a[1]-b[1]);
+    // A wrapped link keeps its occurrence marker, so its rows form one stop whose id is width-independent.
     const ordinals=new Map<string,number>();
+    const occurrences=new Map<string,string>();
     for(const link of measureRenderedLinks(annotated.lines)){
       if(annotated.markdownRowAt(link.row)!==null || !/^(pi-outliner:|https?:)/.test(link.uri))continue;
+      const {occurrenceId,...span}=link;
+      const occurrence=occurrenceId===undefined?undefined:`${occurrenceId}:${link.uri}`;
+      const existing=occurrence===undefined?undefined:occurrences.get(occurrence);
+      if(existing){this.bodyLinks.get(existing)!.push(span);continue;}
       const thread=threadStarts.filter(([,row])=>row<=link.row).at(-1)?.[0]??"comments";
       const key=`${thread}:${link.uri}`;
       const ordinal=ordinals.get(key)??0;
       ordinals.set(key,ordinal+1);
       const id=`body-link:comment:${key}#${ordinal}`;
+      if(occurrence!==undefined)occurrences.set(occurrence,id);
       this.bodyRegions.push({id,kind:"body-link",sourceSpan:null,parentId:null,childIds:[],focusable:true,disclosure:null,activation:{type:"link.open",uri:link.uri}});
-      this.bodyLinks.set(id,[link]);
+      this.bodyLinks.set(id,[span]);
     }
     const inspector=this.state.context.selected && !(this.options.splitActive?.()??false)?this.inspectorLines(contentWidth):[];
     const arrangement=arrangeInlinePreview(annotated.lines,inspector);
