@@ -373,6 +373,13 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   let physicalBlocksById = new Map<string, TreeIndexBlock>();
   let expandedDocuments = new Map<string, ExpandedTreeDocument>();
   let indexSequence: number | null = null;
+  // True from the start of a row fetch until one completes. A fetch that fails
+  // (e.g. a view-state change while the service is down) leaves the rows stale
+  // even when the change feed later reports no writes.
+  let rowsNeedFetch = false;
+  // The database `ping` reported for the service the loaded rows and
+  // `indexSequence` came from; null when unknown.
+  let serviceDatabase: string | null = null;
   let quickEditSource: Pick<Block, "id" | "revision"> | null = null;
   let projectedChildDraft: { parent: VirtualBranchOccurrenceRow; created?: Block; rowId?: (id: string) => string } | null = null;
   let projectionVisible: TreeIndexBlock[] = [];
@@ -820,6 +827,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     options?: { exactRowIdOnly?: boolean },
   ): Promise<boolean> {
     const currentSelected = rows[selectedIndex];
+    rowsNeedFetch = true;
     const snapshot = await effects.request<TreeIndexSnapshot>({
       action: "tree.index",
       view: activeFilter && !branchFilter
@@ -952,6 +960,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     initialWorkspaceSelectionApplied = true;
     if (lastVisibleCanonicalId) workspaceContextBlockId = lastVisibleCanonicalId;
     refreshPending = false;
+    rowsNeedFetch = false;
     if (connections.needsRefresh) await refreshAuthoredLinks(false);
     return rows.length > 0;
   }
@@ -2032,8 +2041,9 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       targetClientId: effects.clientId,
     });
     await inbox.refresh();
+    const service = await observeService();
     if (mode === "browse") {
-      const missed = await changesSince(indexSequence);
+      const missed = rowsNeedFetch ? "outline" : await changesSince(indexSequence, service);
       if (missed === "outline") {
         if (connections.active) connections.invalidate();
         await reload();
@@ -2049,18 +2059,46 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     effects.invalidate();
   }
 
+  function databaseIdentity(service: OutlinerServiceStatus | undefined): string | null {
+    const location = service?.location;
+    return location ? JSON.stringify([location.hostname, location.workspaceRoot, location.database]) : null;
+  }
+
+  /**
+   * Pings the service and records which database it uses. Returns the status
+   * with whether that database is the one the loaded rows came from; a failed
+   * ping or an unreported location counts as a different database.
+   */
+  async function observeService(): Promise<{ status: OutlinerServiceStatus; sameDatabase: boolean } | null> {
+    let status: OutlinerServiceStatus;
+    try {
+      status = await effects.request<OutlinerServiceStatus>({ action: "ping" });
+    } catch {
+      serviceDatabase = null;
+      return null;
+    }
+    const identity = databaseIdentity(status);
+    const sameDatabase = identity !== null && identity === serviceDatabase;
+    serviceDatabase = identity;
+    return { status, sameDatabase };
+  }
+
   /**
    * Asks the change feed what a reconnect missed; any doubt means `outline`.
    * The feed hides sequence advances that change no outline content (Resource
    * catalog bookkeeping), so a later sequence with no visible change is one.
-   * A service without the `changes.since` capability is not asked; like a
-   * failed request, that falls back to a full reload.
+   * A sequence only means something within one database, so a service now
+   * using a different database, or one that did not answer `ping`, is not
+   * asked. Neither is a service without the `changes.since` capability; like
+   * a failed request, each falls back to a full reload.
    */
-  async function changesSince(sequence: number | null): Promise<"outline" | "resource-catalog" | "none"> {
-    if (sequence === null) return "outline";
+  async function changesSince(
+    sequence: number | null,
+    service: { status: OutlinerServiceStatus; sameDatabase: boolean } | null,
+  ): Promise<"outline" | "resource-catalog" | "none"> {
+    if (sequence === null || !service?.sameDatabase) return "outline";
     try {
-      const service = await effects.request<OutlinerServiceStatus>({ action: "ping" });
-      if (checkServiceCompatibility(service, ["changes.since"])) return "outline";
+      if (checkServiceCompatibility(service.status, ["changes.since"])) return "outline";
       const page = await effects.request<ChangeFeedPage>({ action: "changes.since", sequence, limit: 1 });
       if (page.kind === "reset" || page.changes.length > 0) return "outline";
       return page.sequence > sequence ? "resource-catalog" : "none";
@@ -3226,6 +3264,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
 
   async function initialize(): Promise<void> {
     void navigationDisplay.refresh();
+    await observeService();
     await reload();
     await publishDisplayRowSelection(rows[selectedIndex]);
     await inbox.refresh();
