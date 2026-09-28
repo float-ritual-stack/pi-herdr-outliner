@@ -62,6 +62,8 @@ source evidence or distinguish authored glyphs from controls.
 
 Reuse these seams. Do not add a second property parser, query path, authoritative block cache, or independent persistence layer. A bounded disposable Detail preview cache may retain service-owned revisions but never authorizes writes.
 
+Before adding a feature, look for the renderer, component or action that already does it; every PR review checks this in its [architecture pass](#architecture-pass).
+
 ## Workboard lifecycle
 
 ### Connecting to the running service
@@ -273,6 +275,29 @@ A PR should state:
 - preserved contracts,
 - exact verification commands/results, and
 - live pane proof when applicable.
+
+### Architecture pass
+
+Every review, by the author before opening the PR and by the reviewer, checks
+that the change used the architecture before checking anything else:
+
+- **Reuse:** it builds on the existing renderers, components and actions instead
+  of a parallel implementation: PreviewRegions
+  ([src/detail-preview-regions.ts](src/detail-preview-regions.ts)), the property
+  inspector ([src/property-inspector.ts](src/property-inspector.ts)), reference
+  completion ([src/reference-completion.ts](src/reference-completion.ts)), saved-view
+  reads ([src/saved-view-read.ts](src/saved-view-read.ts), `views.read`) and the
+  action list ([src/outliner-actions.ts](src/outliner-actions.ts)). See also
+  [Source boundaries](#source-boundaries).
+- **Boundary:** the service owns truth and meaning; clients own presentation. A
+  client asks the service what a view contains, what a property means or what
+  changed; it does not re-derive it.
+- **Protocol:** an additive change is a capability, as in
+  [Protocol and schema changes](#protocol-and-schema-changes).
+- **Docs:** a new shared part is named in the docs (Source boundaries or
+  [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) so the next change finds it.
+
+A parallel implementation needs a reason written in the PR.
 
 Address actionable review comments with minimal fixes. Reply with the validating evidence and resolve the review thread. Re-run affected checks after the fix and wait for follow-up review before merging.
 
