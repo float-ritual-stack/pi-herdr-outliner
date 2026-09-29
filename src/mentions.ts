@@ -45,7 +45,7 @@ function excerpt(text:string,reference:Reference):string{
 
 /** Bounded disposable conversation history. Only explicit save/bookmark writes canonical notes. */
 export class MentionRepository {
- constructor(private store:OutlinerStore,private workspaceRoot:string){
+ constructor(private store:OutlinerStore,private workspaceRoot:string,private accepts?:(folder:string)=>boolean){
   store.database.exec(`CREATE TABLE IF NOT EXISTS agent_mention_messages (
    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
    message_key TEXT NOT NULL UNIQUE,
@@ -55,7 +55,9 @@ export class MentionRepository {
  }
  ingest(input:MentionMessage):MentionReceipt{
   if(!input||typeof input!=='object')throw Error('Mention message is required');
-  if(resolve(required(input.workspaceRoot,'workspaceRoot',4096))!==resolve(this.workspaceRoot))throw Error('Mention workspace does not match this Outliner service');
+   // A host's outline also takes mentions from folders bound to it (a project folder that opens this outline).
+  const folder=resolve(required(input.workspaceRoot,'workspaceRoot',4096));
+  if(folder!==resolve(this.workspaceRoot)&&!this.accepts?.(folder))throw Error('Mention workspace does not match this Outliner service');
   required(input.agent,'agent',64);required(input.sessionId,'sessionId');required(input.messageId,'messageId');
   if(typeof input.text!=='string'||input.text.length>MAX_TEXT)throw Error(`Mention text must be at most ${MAX_TEXT} characters`);
   const key=hash(JSON.stringify([input.agent,input.sessionId,input.messageId]));

@@ -593,3 +593,23 @@ test("outliner outlines lists an adopted database once, with a status from the h
   rmSync(realpathSync(hostedOutlinePaths(stateRoot, "uncle").database));
   expect((await list()).filter(row => row.hosted).map(row => [row.name, row.status])).toEqual([["bob", "stopped"], ["uncle", "broken"]]);
 }, 30_000);
+
+test("a hosted outline takes mentions from folders bound to it, and refuses other folders", async () => {
+  const root = scratch();
+  const saved = { XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, OUTLINER_STATE_DIR: process.env.OUTLINER_STATE_DIR };
+  process.env.XDG_CONFIG_HOME = join(root, "config");
+  process.env.OUTLINER_STATE_DIR = join(root, "state");
+  cleanups.push(() => { for (const [k, v] of Object.entries(saved)) v === undefined ? delete process.env[k] : process.env[k] = v; });
+  const host = await startHost(join(root, "state"), "fred");
+  await host.create("fred");
+  const bound = join(root, "projects", "jam-shelf");
+  const other = join(root, "projects", "tin-drawer");
+  mkdirSync(bound, { recursive: true });
+  mkdirSync(other, { recursive: true });
+  writeClientConfig(envFor(root, bound), { mode: "host", workspaceRoot: bound, outline: "fred" });
+  const fred = new OutlinerClient(host.socketPath, 3_000, "fred");
+  const message = (workspaceRoot: string, messageId: string) => ({ workspaceRoot, agent: "claude", sessionId: "fictional-session", messageId, text: "Mentions PIE-1 in passing." });
+  const accepted = await fred.request({ action: "mentions.ingest", message: message(bound, "m1") }).catch((e: Error) => e.message);
+  expect(accepted).not.toBeTypeOf("string");
+  await expect(fred.request({ action: "mentions.ingest", message: message(other, "m2") })).rejects.toThrow("Mention workspace does not match");
+});

@@ -43,6 +43,7 @@ import {
 } from "./resource-presentation";
 import { probeSocket } from "./socket-probe";
 import { WorkflowManager } from "./workflows";
+import { resolveFolderOutline } from "./paths";
 import {
   OUTLINER_CAPABILITIES,
   OUTLINER_HOST_CAPABILITIES,
@@ -199,7 +200,7 @@ export class OutlinerServer {
   ) {
     this.stateDirectory = options.stateDirectory ?? dirname(socketPath);
     this.workflows = new WorkflowManager(store);
-    this.mentions = new MentionRepository(store,store.workspaceRoot);
+    this.mentions = new MentionRepository(store,store.workspaceRoot,folder => this.folderOpensThisOutline(folder));
     this.editRecovery = new EditRecoveryRepository(store);
     this.inboxRepository = new InboxRepository(store);
     this.noteRepository = new NoteAssistanceRepository(store);
@@ -213,6 +214,15 @@ export class OutlinerServer {
   }
 
   /** The host serving this outline; `ping` then reports it and the host's capabilities. */
+  /** On a host, whether a folder resolves to this outline (its binding, or its folder-name guess). */
+  private folderOpensThisOutline(folder: string): boolean {
+    const name = this.hosted ? this.outline?.name : undefined;
+    if (!name) return false;
+    const found = resolveFolderOutline(folder);
+    const outline = found.kind === "bound" ? (found.config as { outline?: unknown }).outline : found.kind === "guess" ? found.outline : undefined;
+    return outline === name;
+  }
+
   setHost(status: () => OutlinerHostStatus): void {
     this.host = status;
   }

@@ -9,6 +9,9 @@ describe('mention-message', () => {
     expect(workspacesOf(' /a/b/, : /c ')).toEqual(['/a/b', '/c'])
     expect(workspacesOf('')).toEqual([])
     expect(workspacesOf('/')).toEqual(['/'])
+    expect(workspacesOf('~/projects/jam-shelf, ~', '/home/sam')).toEqual(['/home/sam/projects/jam-shelf', '/home/sam'])
+    expect(effectiveWorkspaces('~/a', '/env', '/home/sam/')).toEqual(['/home/sam/a'])
+    expect(() => workspacesOf('~/projects/jam-shelf')).toThrow('is not an absolute folder')
     // No silent fallback: a relative path, a non-string or the old folder=name form is an error.
     expect(() => workspacesOf(' /a/b/, relative : /c ')).toThrow('"relative" is not an absolute folder')
     expect(() => workspacesOf(['/a', 3])).toThrow('3 is not a folder path')

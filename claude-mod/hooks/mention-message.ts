@@ -19,11 +19,13 @@ export type MentionMessage = {
  * resolved by the Outliner CLI from that folder's `client.json`, the same way
  * for every client. Any other entry is an error, never skipped.
  */
-export function workspacesOf(value: unknown): string[] {
+export function workspacesOf(value: unknown, home?: string): string[] {
   const parts = Array.isArray(value) ? value : typeof value === 'string' ? value.split(/[:,]/) : []
   return parts.flatMap(part => {
     if (typeof part !== 'string') throw Error(`Outliner workspaces entry ${JSON.stringify(part)} is not a folder path`)
-    const entry = part.trim()
+    const typed = part.trim()
+    // `~` and `~/…` are written by people; expand them when the home folder is known.
+    const entry = home && (typed === '~' || typed.startsWith('~/')) ? home.replace(/\/+$/, '') + typed.slice(1) : typed
     if (entry === '') return []
     if (!entry.startsWith('/') || entry.includes('=')) {
       throw Error(`Outliner workspaces entry "${entry}" is not an absolute folder; list folders only, and bind a folder to an outline in its client.json (the choose-outline action)`)
@@ -37,9 +39,9 @@ export function workspacesOf(value: unknown): string[] {
  * variable. Claude Code passes an unset string option as '', so an empty
  * option cannot be told from an unset one and never overrides the environment.
  */
-export function effectiveWorkspaces(option: unknown, environment: string | undefined): string[] {
-  const configured = workspacesOf(option)
-  return configured.length > 0 ? configured : workspacesOf(environment)
+export function effectiveWorkspaces(option: unknown, environment: string | undefined, home?: string): string[] {
+  const configured = workspacesOf(option, home)
+  return configured.length > 0 ? configured : workspacesOf(environment, home)
 }
 
 /**

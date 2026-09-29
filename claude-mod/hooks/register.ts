@@ -148,7 +148,7 @@ export function register(on: On, options: PluginOptions): void {
     if (!isIngestible(e)) return result
     let workspaces: string[]
     try {
-      workspaces = effectiveWorkspaces(option, await $.env.get('PI_OUTLINER_MENTIONS_WORKSPACES'))
+      workspaces = effectiveWorkspaces(option, await $.env.get('PI_OUTLINER_MENTIONS_WORKSPACES'), await $.env.get('HOME'))
     } catch (error) {
       $.ui.toast(`Outliner recent mentions unavailable: ${error instanceof Error ? error.message : String(error)}`, { timeoutMs: 6000 })
       return result
@@ -252,7 +252,7 @@ async function loadReferences($: EngineInterface, option: unknown): Promise<void
   if (isLoadingReferences) return
   isLoadingReferences = true
   try {
-    const workspaces = effectiveWorkspaces(option, await $.env.get('PI_OUTLINER_MENTIONS_WORKSPACES'))
+    const workspaces = effectiveWorkspaces(option, await $.env.get('PI_OUTLINER_MENTIONS_WORKSPACES'), await $.env.get('HOME'))
     const workspace = workspaceForCwd(await $.session.cwd(), workspaces)
     if (!workspace) {
       references = { workspace: null, prefixes: [] }
