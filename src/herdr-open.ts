@@ -19,7 +19,7 @@ import {
 import { relaunchArgs, relaunchEnvironment } from "./herdr-open-relaunch";
 import { detectOutline, localOutlineOwner, socketAbsent } from "./known-outlines";
 import { resolveClientConfigRoot, resolveStateRoot } from "./paths";
-import { attachHostedOutline, outlineHostClient } from "./outline-host-client";
+import { attachHostedOutline, resolveInvocationPaths, waitForOutlineHost } from "./outline-host-client";
 import type { OutlineChooserContext } from "./outline-chooser";
 import { waitForCompatibleService } from "./service-compatibility";
 import {
@@ -106,12 +106,20 @@ await reportStartupErrors("open", async () => {
     }
   }
 
-  const presence = detectOutline({ ...process.env, OUTLINER_WORKSPACE_ROOT: workspaceRoot });
+  // An action invoked from an outliner pane stays on the outline that pane is on,
+  // even after its folder was rebound or when the pane was opened by name alone.
+  // The chooser's continuation and the switcher resolve the folder afresh.
+  let paneOutline: string | undefined;
+  if (currentPaneId && !chosenRoot && mode !== "choose-outline" && mode !== "service-only") {
+    const invoked = await resolveInvocationPaths({ ...process.env, OUTLINER_WORKSPACE_ROOT: workspaceRoot }, currentPaneId);
+    if (invoked.outlineSource === "pane") paneOutline = invoked.outline;
+  }
+  const presence = detectOutline({ ...process.env, OUTLINER_WORKSPACE_ROOT: workspaceRoot, ...(paneOutline ? { OUTLINER_OUTLINE: paneOutline } : {}) });
   // The switcher always asks; otherwise the chooser gates only a folder with no outline and no host.
   if (presence.kind === "missing" || mode === "choose-outline") {
     // Without a host, opening never creates an outline by itself: ask which one this folder uses.
     if (mode === "service-only") {
-      throw new Error(`No outline for ${presence.paths.workspaceRoot} (resolved from ${rootSource}). Open the Outliner from Herdr in that folder to choose an outline or create one there.`);
+      throw new Error(`No outline for ${presence.paths.workspaceRoot} (resolved from ${rootSource}). ${presence.paths.unnamed ? `${presence.paths.unnamed} ` : ""}Open the Outliner from Herdr in that folder to choose an outline or create one there.`);
     }
     const context: OutlineChooserContext = {
       mode: mode === "choose-outline" ? "open-here" : mode,
@@ -134,20 +142,25 @@ await reportStartupErrors("open", async () => {
     process.stdout.write(`${JSON.stringify({ outline: mode === "choose-outline" ? "switch" : "missing", chooser: "choose-outline", workspaceRoot: presence.paths.workspaceRoot, rootSource })}\n`);
     return;
   }
-  const paths = presence.paths;
+  const paths: typeof presence.paths = paneOutline ? { ...presence.paths, outlineSource: "pane" } : presence.paths;
   // On the outline host a session attaches to its outline by name, creating it
   // when none has the name (like `tmux new -A`); the host itself is systemd's job.
   let attached: { name: string; created: boolean; source: string } | undefined;
   if (paths.mode === "host") {
     const name = paths.outline!;
-    const host = await outlineHostClient(resolveStateRoot(process.env));
+    // A host that is restarting comes back: wait for it as for a remote tunnel, never fall back.
+    const host = await waitForOutlineHost(resolveStateRoot(process.env));
     if (!host) {
       throw new Error(`No outline host answers at ${paths.socket} (outline "${name}" for ${workspaceRoot}). The host runs as a service (\`bun run host\`); start it and retry.`);
     }
-    // Opening a session creates a missing outline; Pi's `service-only` check only attaches.
-    // A name taken from the folder records that folder, so a same-named folder elsewhere is not merged into it.
-    const attachment = await attachHostedOutline(host, name, mode !== "service-only", paths.outlineSource === "folder" ? paths.workspaceRoot : undefined);
-    attached = { name, created: attachment.created, source: { env: "OUTLINER_OUTLINE", bound: "the folder's binding", folder: "the folder's name" }[paths.outlineSource ?? "env"] };
+    // Only the modes that open panes create a missing outline: Pi's `service-only`
+    // check and `focus-existing` open nothing, so they only attach. A created
+    // outline records the folder it is for (bound, repository or invoking folder).
+    const create = mode !== "service-only" && mode !== "focus-existing";
+    const attachment = await attachHostedOutline(host, name, create, paths.workspaceRoot);
+    attached = { name, created: attachment.created, source: {
+      env: "OUTLINER_OUTLINE", bound: "the folder's binding", repository: "the repository's name", folder: "the folder's name", pane: "the invoking pane's outline",
+    }[paths.outlineSource ?? "env"] };
     if (attachment.created) {
       try {
         execFileSync(herdr, ["notification", "show", `Created outline ${name}`, "--body", `New outline "${name}" for ${workspaceRoot} (named after ${attached.source}).`],
@@ -258,7 +271,7 @@ await reportStartupErrors("open", async () => {
     const remote = paths.mode === "remote";
     const hosted = paths.mode === "host";
     await waitForCompatibleService(createOutlinerClient(paths), {
-      timeoutMs: remote ? 60_000 : 15_000,
+      timeoutMs: remote || hosted ? 60_000 : 15_000,
       pingTimeoutMs: remote ? undefined : 300,
     }).catch((error: unknown) => {
       const lastResponse = (error instanceof Error ? error.message : String(error)).replace(/\.$/, "");

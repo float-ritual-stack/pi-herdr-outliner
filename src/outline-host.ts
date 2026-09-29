@@ -1,11 +1,11 @@
 import { Database } from "bun:sqlite";
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readlinkSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { aiPromptDirectory, initializeAiPrompts } from "./ai-prompts";
 import type { HerdrRuntimeRegistry } from "./herdr-registry";
 import { readOutlineDescriptor } from "./known-outlines";
-import { hostedOutlinePaths, OUTLINE_NAME_PATTERN, outlineHostPaths } from "./paths";
+import { hostedOutlinePaths, hostedOutlineRoot, OUTLINE_NAME_PATTERN, outlineHostPaths } from "./paths";
 import { OutlinerServer } from "./server";
 import { OutlinerStore } from "./store";
 import {
@@ -13,6 +13,7 @@ import {
   type HostedOutlineDeletion,
   type HostedOutlineList,
   type HostedOutlineSummary,
+  type HostedPaneOutline,
   OUTLINER_HOST_CAPABILITIES,
   OUTLINER_MIN_CLIENT_PROTOCOL,
   OUTLINER_PROTOCOL_VERSION,
@@ -63,7 +64,7 @@ export interface OutlineHostOptions {
   log?: (message: string) => void;
 }
 
-const HOST_ACTIONS = new Set(["outlines.list", "outlines.create", "outlines.adopt", "outlines.attach", "outlines.close", "outlines.delete"]);
+const HOST_ACTIONS = new Set(["outlines.list", "outlines.create", "outlines.adopt", "outlines.attach", "outlines.close", "outlines.delete", "outlines.pane"]);
 /** A first line longer than this is not a request; the connection is dropped. */
 const MAX_FIRST_LINE = 64 * 1024 * 1024;
 
@@ -117,17 +118,9 @@ function descriptorRoot(database: string): string | undefined {
   return descriptor.kind === "ok" ? resolve(descriptor.descriptor.root) : undefined;
 }
 
-/** `outlines/<name>.json`: what the host records about an outline beside it (its workspace root). */
+/** `outlines/<name>.json`: what the host records about an outline beside it: `{ root }`, its folder. */
 function outlineSettingsPath(stateRoot: string, name: string): string {
   return join(outlineHostPaths(stateRoot).outlines, `${name}.json`);
-}
-
-function readOutlineSettings(stateRoot: string, name: string): { root?: string } {
-  let text: string;
-  try { text = readFileSync(outlineSettingsPath(stateRoot, name), "utf8"); }
-  catch (error) { if (errorCode(error) === "ENOENT") return {}; throw error; }
-  const value = JSON.parse(text) as { root?: unknown };
-  return typeof value.root === "string" && isAbsolute(value.root) ? { root: value.root } : {};
 }
 
 function realOrSelf(path: string): string {
@@ -169,6 +162,8 @@ export class OutlineHost {
    */
   async start(): Promise<void> {
     mkdirSync(dirname(this.socketPath), { recursive: true });
+    // `outlines/` marks the state root as host-served for clients (outlineHostConfigured), running or not.
+    mkdirSync(this.outlinesFolder, { recursive: true });
     this.releaseHostLock = acquireLockFile(join(this.stateRoot, "outliner.host.lock"), "The outline host lock");
     try {
       // Only a host holds the lock, so a socket file here is left by one that died, unless something else answers on it.
@@ -271,12 +266,13 @@ export class OutlineHost {
 
   /**
    * The folder an outline belongs to: the root recorded in `outlines/<name>.json`
-   * (adopt writes it), else for an adopted database its slice-1 descriptor's
-   * root, else a created outline's side folder. Undefined when none is known.
+   * (adopt writes it, and create or attach with `root`), else for an adopted
+   * database its slice-1 descriptor's root, else, for an outline created
+   * without a root, its side folder. Undefined when none is known.
    */
   private workspaceRootFor(name: string, adopted: boolean, database: string): string | undefined {
     let recorded: string | undefined;
-    try { recorded = readOutlineSettings(this.stateRoot, name).root; } catch { recorded = undefined; }
+    try { recorded = hostedOutlineRoot(this.stateRoot, name); } catch { recorded = undefined; }
     if (recorded) return recorded;
     if (adopted) return descriptorRoot(database);
     return hostedOutlinePaths(this.stateRoot, name).sideFolder;
@@ -290,15 +286,18 @@ export class OutlineHost {
 
   /**
    * Creates a new, empty outline and opens it. Refuses a name already in use; never overwrites.
-   * `folder`, when the name was taken from a folder, is recorded in `outlines/<name>.json`
-   * so clients in another folder with the same name do not take this outline (paths.ts).
+   * `root`, the folder the outline is for (session openers pass the invoking,
+   * bound or repository folder), is recorded in `outlines/<name>.json`: the
+   * outline's resources, file links, Inbox and `ping.location` use it, and a
+   * folder-name guess from another folder does not take this outline (paths.ts).
    */
-  async create(nameInput: unknown, folderInput?: unknown): Promise<HostedOutlineSummary> {
+  async create(nameInput: unknown, rootInput?: unknown): Promise<HostedOutlineSummary> {
     const name = requireName(nameInput);
-    if (folderInput !== undefined && (typeof folderInput !== "string" || !isAbsolute(folderInput))) throw new Error("The folder an outline is named after must be an absolute path");
+    if (rootInput !== undefined && (typeof rootInput !== "string" || !isAbsolute(rootInput))) throw new Error("An outline's root must be an absolute folder path");
+    if (typeof rootInput === "string" && !lstatOrUndefined(rootInput)?.isDirectory()) throw new Error(`The outline's root ${rootInput} is not a folder`);
     this.refuseTaken(name);
     const settings = outlineSettingsPath(this.stateRoot, name);
-    if (folderInput !== undefined && lstatOrUndefined(settings)) throw new Error(`${settings} already exists; refusing to reuse it for "${name}"`);
+    if (rootInput !== undefined && lstatOrUndefined(settings)) throw new Error(`${settings} already exists; refusing to reuse it for "${name}"`);
     const paths = hostedOutlinePaths(this.stateRoot, name);
     mkdirSync(this.outlinesFolder, { recursive: true });
     // Claim the name exclusively before anything else, so two creates cannot share a file.
@@ -309,8 +308,8 @@ export class OutlineHost {
     }
     let wroteSettings = false;
     try {
-      if (typeof folderInput === "string") {
-        writeFileSync(settings, `${JSON.stringify({ folder: resolve(folderInput) }, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+      if (typeof rootInput === "string") {
+        writeFileSync(settings, `${JSON.stringify({ root: resolve(rootInput) }, null, 2)}\n`, { flag: "wx", mode: 0o600 });
         wroteSettings = true;
       }
       mkdirSync(paths.sideFolder);
@@ -386,14 +385,15 @@ export class OutlineHost {
   /**
    * Opens an outline by name, as a client session starts: like `tmux new -A`,
    * it creates the outline first when `create` is set and none has the name.
-   * A plain read never creates; only a session opener asks for `create`.
+   * A plain read never creates; only a session opener asks for `create`, and
+   * passes `root`, the folder a created outline records.
    */
-  async attach(nameInput: unknown, create: boolean, folder?: unknown): Promise<HostedOutlineAttachment> {
+  async attach(nameInput: unknown, create: boolean, root?: unknown): Promise<HostedOutlineAttachment> {
     const name = requireName(nameInput);
     if (!lstatOrUndefined(hostedOutlinePaths(this.stateRoot, name).database)) {
       if (!create) throw new Error(`No outline named "${name}" in ${this.outlinesFolder}; create it with \`outliner outline create ${name}\``);
       try {
-        return { outline: await this.create(name, folder), created: true };
+        return { outline: await this.create(name, root), created: true };
       } catch (error) {
         // Another session created it a moment ago: attach to that one.
         if (!lstatOrUndefined(hostedOutlinePaths(this.stateRoot, name).database)) throw error;
@@ -403,7 +403,12 @@ export class OutlineHost {
     return { outline: this.summary(name), created: false };
   }
 
-  /** Stops serving one outline and releases its database; its next request opens it again. */
+  /**
+   * Stops serving one outline and releases its database. It is not a lock:
+   * its next request opens it again, and live panes reconnect at once, so an
+   * outline with open panes reopens right away. Close the panes first to keep
+   * it closed.
+   */
   async closeOutline(nameInput: unknown): Promise<HostedOutlineSummary> {
     const name = requireName(nameInput);
     await this.opening.get(name)?.catch(() => undefined);
@@ -450,6 +455,20 @@ export class OutlineHost {
     } finally {
       this.deleting.delete(name);
     }
+  }
+
+  /**
+   * The outline a live pane is registered on (`hostname` + Herdr `paneId`), so
+   * a Herdr action invoked from that pane uses its outline rather than
+   * re-resolving the folder. Only open outlines have live panes. Reads only.
+   */
+  paneOutline(paneInput: unknown, hostInput: unknown): HostedPaneOutline {
+    if (typeof paneInput !== "string" || !paneInput || typeof hostInput !== "string" || !hostInput) throw new Error("outlines.pane needs a paneId and a hostname");
+    for (const outline of this.opened.values()) {
+      const client = outline.server.liveClients().find(candidate => candidate.runtime?.paneId === paneInput && candidate.runtime.hostname === hostInput);
+      if (client) return { outline: outline.name, clientId: client.clientId, role: client.role };
+    }
+    return {};
   }
 
   /** Opens an outline on first use and keeps it open. A failure is that outline's alone and is retried next time. */
@@ -594,9 +613,10 @@ export class OutlineHost {
   private handleHostAction(request: Record<string, unknown>): Promise<unknown> | unknown {
     switch (request.action) {
       case "outlines.list": return this.list();
-      case "outlines.create": return this.create(request.name);
+      case "outlines.create": return this.create(request.name, request.root);
       case "outlines.adopt": return this.adopt(request.path, request.name, request.root);
-      case "outlines.attach": return this.attach(request.name, request.create === true, request.folder);
+      case "outlines.attach": return this.attach(request.name, request.create === true, request.root);
+      case "outlines.pane": return this.paneOutline(request.paneId, request.hostname);
       case "outlines.close": return this.closeOutline(request.name);
       case "outlines.delete": return this.delete(request.name);
       default: throw new Error(`Unsupported host action: ${String(request.action)}`);

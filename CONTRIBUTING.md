@@ -73,6 +73,12 @@ source evidence or distinguish authored glyphs from controls.
   reading each database's `outline.json`); the outline chooser, the launcher and
   `outliner outlines` use it. `writeClientConfig` in `src/paths.ts`
   is the one writer of a project `client.json`.
+- `resolveFolderOutline` in `src/paths.ts` owns the folder rule (nearest bound
+  folder, else repository name, else folder name, never `$HOME`, `/` or `/tmp`);
+  `resolveClientPaths` uses it and the door mirrors it, rather than guessing names
+  themselves. `resolveInvocationPaths` in `src/outline-host-client.ts` owns
+  which outline a Herdr action invoked from a pane uses (the pane's registered
+  outline first).
 - `src/outline-names.ts` owns every write of an outline's identity: the
   descriptor, the `by-name/<name>.sock` link, `OUTLINER_OUTLINE` resolution for
   the service, and `outline rename|set-root`. A name addresses an outline; the

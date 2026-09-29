@@ -18,10 +18,21 @@ export interface OutlinerPaths {
  */
 export interface OutlinerClientPaths extends OutlinerPaths {
   mode: "local" | "remote" | "host";
-  /** The outline every request names. Always set in host mode; optional for a remote host. */
+  /** The outline every request names. Set in host mode unless `unnamed`; optional for a remote host. */
   outline?: string;
-  /** How `outline` was chosen: `OUTLINER_OUTLINE`, the folder's config (bound), or the folder's name. */
-  outlineSource?: "env" | "bound" | "folder";
+  /**
+   * How `outline` was chosen: `OUTLINER_OUTLINE`, the nearest bound folder's
+   * config, a guess from the repository's or the folder's name, or the
+   * outline the invoking pane is registered on (Herdr actions).
+   */
+  outlineSource?: "env" | "bound" | "repository" | "folder" | "pane";
+  /** The `client.json` that chose this endpoint: the folder's own, or its nearest bound ancestor's. */
+  configPath?: string;
+  /**
+   * Host mode with no outline: the folder needs an explicit name (see
+   * `resolveFolderOutline`). Says why; a client for these paths refuses every request.
+   */
+  unnamed?: string;
 }
 
 export type OutlinerClientConfig =
@@ -109,21 +120,110 @@ export function hostedOutlinePaths(stateRoot: string, name: string): { database:
 }
 
 /**
- * Whether `outlines/<name>.json` ties a host outline to a folder other than
- * `workspaceRoot`: the `folder` it was named after, else an adopted `root`.
- * False when nothing is recorded; an unreadable record counts as elsewhere.
+ * Whether an outline host is set up under this state root: its `outlines/`
+ * folder exists (the host makes it when it starts). It does not ask whether the
+ * host answers right now, so resolution does not flip while the host restarts.
  */
-function hostedOutlineBelongsElsewhere(stateRoot: string, name: string, workspaceRoot: string): boolean {
+export function outlineHostConfigured(stateRoot: string): boolean {
+  return existsSync(outlineHostPaths(stateRoot).outlines);
+}
+
+/**
+ * The folder `outlines/<name>.json` records for a host outline (`root`), or
+ * undefined when none is recorded. An unreadable record throws.
+ */
+export function hostedOutlineRoot(stateRoot: string, name: string): string | undefined {
   let text: string;
   try { text = readFileSync(join(outlineHostPaths(stateRoot).outlines, `${name}.json`), "utf8"); }
-  catch (error) { return (error as NodeJS.ErrnoException).code !== "ENOENT"; }
-  let recorded: unknown;
-  try {
-    const value = JSON.parse(text) as { folder?: unknown; root?: unknown };
-    recorded = value.folder ?? value.root;
-  } catch { return true; }
-  if (recorded === undefined) return false;
-  return typeof recorded !== "string" || resolve(recorded) !== resolve(workspaceRoot);
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  const value = JSON.parse(text) as { root?: unknown };
+  if (value.root === undefined) return undefined;
+  if (typeof value.root !== "string" || !isAbsolute(value.root)) throw new Error(`${name}.json records a root that is not an absolute folder`);
+  return resolve(value.root);
+}
+
+/** A folder whose `client.json` chose its outline, and that choice. */
+export interface FolderBinding {
+  folder: string;
+  configPath: string;
+  config: OutlinerClientConfig;
+}
+
+/**
+ * The nearest folder, from `folder` up to `/`, that has a `client.json` (an
+ * `outline` binding, or a `local` or `remote` choice). Reads only.
+ */
+export function nearestFolderBinding(folder: string, env: NodeJS.ProcessEnv = process.env): FolderBinding | undefined {
+  const { OUTLINER_CONFIG_PATH: _explicit, ...folderEnv } = env;
+  for (let current = resolve(folder); ; current = dirname(current)) {
+    const configPath = resolveClientConfigPath({ ...folderEnv, OUTLINER_WORKSPACE_ROOT: current });
+    const config = readClientConfig(configPath, current);
+    if (config) return { folder: current, configPath, config };
+    if (dirname(current) === current) return undefined;
+  }
+}
+
+/** The nearest folder, from `folder` up, holding `.git` (a folder, or a worktree's file). */
+function repositoryRoot(folder: string): string | undefined {
+  for (let current = folder; ; current = dirname(current)) {
+    if (existsSync(join(current, ".git"))) return current;
+    if (dirname(current) === current) return undefined;
+  }
+}
+
+/** `$HOME`, `/` and a folder directly under `/` (`/tmp`, `/opt`) never give their name to an outline. */
+function tooBroadToName(folder: string, home: string): boolean {
+  const parent = dirname(folder);
+  return folder === home || parent === folder || dirname(parent) === parent;
+}
+
+/**
+ * Which outline a folder uses, by the one rule every opener shares (the door
+ * mirrors it):
+ *
+ * 1. The nearest bound folder, walking up from `folder`: a `client.json` with
+ *    an `outline`, or a `local` or `remote` choice. Its binding is used.
+ * 2. Otherwise, inside a git work tree, a guess: the repository root's name.
+ * 3. Otherwise a guess: the folder's own name.
+ * 4. Never a guess for `$HOME`, `/` or a folder directly under `/`: those are
+ *    `unnamed` and need an explicit name. A repository rooted there falls
+ *    through to rule 3.
+ *
+ * A guess whose outline records another folder (`outlines/<name>.json`) is
+ * `unnamed` too: two folders with one name are never merged silently. A guess
+ * only attaches, or creates the outline when a session is opened; a read never
+ * creates. The chooser's explicit "New outline here" starts from the same name
+ * and adds a suffix when it is taken (`newHostedOutlineName`).
+ */
+export type FolderOutline =
+  | ({ kind: "bound" } & FolderBinding)
+  | { kind: "guess"; folder: string; outline: string; from: "repository" | "folder" }
+  | { kind: "unnamed"; folder: string; reason: string };
+
+export function resolveFolderOutline(folderInput: string, env: NodeJS.ProcessEnv = process.env): FolderOutline {
+  const folder = resolve(folderInput);
+  const binding = nearestFolderBinding(folder, env);
+  if (binding) return { kind: "bound", ...binding };
+  const home = resolve(env.HOME?.trim() || homedir());
+  const repository = repositoryRoot(folder);
+  const candidate = repository && !tooBroadToName(repository, home)
+    ? { folder: repository, from: "repository" as const }
+    : { folder, from: "folder" as const };
+  const how = "Bind it with the choose-outline action, or name one with OUTLINER_OUTLINE / --outline";
+  if (tooBroadToName(candidate.folder, home)) {
+    return { kind: "unnamed", folder, reason: `${folder} is too broad to name an outline after. ${how}.` };
+  }
+  const outline = slugifyOutlineName(basename(candidate.folder));
+  let recorded: string | undefined;
+  try { recorded = hostedOutlineRoot(resolveStateRoot(env), outline); }
+  catch { recorded = ""; }
+  if (recorded !== undefined && recorded !== candidate.folder) {
+    return { kind: "unnamed", folder, reason: `The outline "${outline}" belongs to ${recorded || "a folder its record does not say"}, not ${candidate.folder}. ${how}.` };
+  }
+  return { kind: "guess", folder: candidate.folder, outline, from: candidate.from };
 }
 
 function readableWorkspaceName(workspaceRoot: string): string {
@@ -335,11 +435,15 @@ export function resolvePaths(env: NodeJS.ProcessEnv = process.env): OutlinerPath
  *    host there is asked for `OUTLINER_OUTLINE`, if set). `OUTLINER_REMOTE=0`
  *    forces this machine.
  * 2. `OUTLINER_OUTLINE=<name>`: this machine's outline host, that outline.
- * 3. The folder's `client.json`: an `outline` binds it to a host outline;
- *    `remote` and `local` choices are kept as before.
- * 4. Nothing chosen, an outline host running under the state root, and no
- *    hash database for the folder: the host outline named after the folder,
- *    unless `outlines/<name>.json` ties that outline to another folder.
+ * 3. `OUTLINER_CONFIG_PATH`, else the nearest bound folder's `client.json`
+ *    (`resolveFolderOutline` rule 1): an `outline` binds it to a host outline;
+ *    `remote` and `local` choices are kept. `workspaceRoot` is the bound
+ *    folder. A folder's own hash database wins over an ancestor's binding.
+ * 4. Nothing chosen and no hash database for the folder, with an outline host
+ *    set up under the state root (`outlineHostConfigured`, not whether it
+ *    answers now): the guessed outline (rules 2-3; `workspaceRoot` is the
+ *    guessed folder), or host mode `unnamed` (rule 4). Never local: a client
+ *    whose host is restarting waits for it.
  * 5. Otherwise the folder's hash socket, as before.
  */
 export function resolveClientPaths(
@@ -350,13 +454,23 @@ export function resolveClientPaths(
   const requestedOutline = env.OUTLINER_OUTLINE?.trim() || undefined;
   const envOutline = requestedOutline === undefined ? undefined : requireOutlineName(requestedOutline, "OUTLINER_OUTLINE");
   const explicitConfigPath = env.OUTLINER_CONFIG_PATH?.trim();
-  const configPath = resolveClientConfigPath(env);
-  const config = envRemote === undefined && envOutline === undefined
-    ? readClientConfig(configPath, paths.workspaceRoot)
-    : undefined;
-  if (envRemote === undefined && envOutline === undefined && config === undefined && !explicitConfigPath) {
-    rejectLegacyClientConfig(env, configPath);
+  const readsConfig = envRemote === undefined && envOutline === undefined;
+  let binding: FolderBinding | undefined;
+  if (readsConfig && explicitConfigPath) {
+    const config = readClientConfig(explicitConfigPath, paths.workspaceRoot);
+    if (config) binding = { folder: paths.workspaceRoot, configPath: explicitConfigPath, config };
+  } else if (readsConfig) {
+    binding = nearestFolderBinding(paths.workspaceRoot, env);
+    // A folder's own hash database is its outline; an ancestor's binding does not take it over.
+    if (binding && binding.folder !== paths.workspaceRoot && existsSync(paths.database)) binding = undefined;
   }
+  const config = binding?.config;
+  if (readsConfig && config === undefined && !explicitConfigPath) {
+    rejectLegacyClientConfig(env, resolveClientConfigPath(env));
+  }
+  const bound = binding && binding.folder !== paths.workspaceRoot
+    ? { ...resolvePaths({ ...env, OUTLINER_WORKSPACE_ROOT: binding.folder }), configPath: binding.configPath }
+    : { ...paths, ...(binding ? { configPath: binding.configPath } : {}) };
   const remote = envRemote ?? (config?.mode === "remote" ? "1" : "0");
   const configuredSocket = (
     env.OUTLINER_SOCKET_PATH ??
@@ -371,23 +485,33 @@ export function resolveClientPaths(
       throw new Error("OUTLINER_SOCKET_PATH requires OUTLINER_REMOTE=1");
     }
     const stateRoot = resolveStateRoot(env);
-    const host = (outline: string, outlineSource: "env" | "bound" | "folder"): OutlinerClientPaths => ({
-      workspaceRoot: paths.workspaceRoot,
+    const host = (outline: string, outlineSource: NonNullable<OutlinerClientPaths["outlineSource"]>, workspaceRoot: string, configPath?: string): OutlinerClientPaths => ({
+      workspaceRoot,
       stateDir: hostedOutlineClientDir(stateRoot, outline),
       database: hostedOutlinePaths(stateRoot, outline).database,
       socket: outlineHostPaths(stateRoot).socket,
       mode: "host",
       outline,
       outlineSource,
+      ...(configPath ? { configPath } : {}),
     });
-    if (envOutline) return host(envOutline, "env");
-    if (config?.mode === "host") return host(config.outline, "bound");
-    if (
-      config === undefined && !explicitConfigPath && envRemote === undefined &&
-      existsSync(outlineHostPaths(stateRoot).socket) && !existsSync(paths.database)
-    ) {
-      const guess = slugifyOutlineName(basename(paths.workspaceRoot));
-      if (!hostedOutlineBelongsElsewhere(stateRoot, guess, paths.workspaceRoot)) return host(guess, "folder");
+    if (envOutline) return host(envOutline, "env", paths.workspaceRoot);
+    if (config?.mode === "host") return host(config.outline, "bound", bound.workspaceRoot, bound.configPath);
+    if (config) return { ...bound, mode: "local" };
+    if (!explicitConfigPath && envRemote === undefined && !existsSync(paths.database) && outlineHostConfigured(stateRoot)) {
+      const folder = resolveFolderOutline(paths.workspaceRoot, env);
+      if (folder.kind === "guess") {
+        // A repository whose root still has its own hash database keeps using it.
+        const guessed = resolvePaths({ ...env, OUTLINER_WORKSPACE_ROOT: folder.folder });
+        if (folder.folder !== paths.workspaceRoot && existsSync(guessed.database)) return { ...guessed, mode: "local" };
+        return host(folder.outline, folder.from, folder.folder);
+      }
+      if (folder.kind === "unnamed") {
+        return {
+          workspaceRoot: paths.workspaceRoot, stateDir: join(resolve(stateRoot), "clients"), database: "",
+          socket: outlineHostPaths(stateRoot).socket, mode: "host", unnamed: folder.reason,
+        };
+      }
     }
     return { ...paths, mode: "local" };
   }
@@ -399,7 +523,7 @@ export function resolveClientPaths(
   }
   const remoteOutline = envOutline ?? (config?.mode === "remote" ? config.outline : undefined);
   return {
-    ...paths, mode: "remote", socket: configuredSocket,
+    ...(envRemote === undefined ? bound : paths), mode: "remote", socket: configuredSocket,
     ...(remoteOutline ? { outline: remoteOutline, outlineSource: envOutline ? "env" as const : "bound" as const } : {}),
   };
 }
@@ -407,22 +531,24 @@ export function resolveClientPaths(
 /**
  * Where the single-outline service keeps its outline: the folder's hash
  * directory. `OUTLINER_OUTLINE` keeps its service meaning (slice 1, see
- * `resolveOutlineServicePaths`), and the host's folder-name guess does not
- * apply; a folder bound to a host outline is refused.
+ * `resolveOutlineServicePaths`). A folder that resolves to the outline host
+ * (bound, guessed or unnamed) is refused: while a host is set up the service
+ * never makes a hash database for such a folder, even while the host restarts.
  */
 export function resolveServicePaths(
   env: NodeJS.ProcessEnv = process.env,
 ): OutlinerPaths {
   const { OUTLINER_OUTLINE: _serviceSelection, ...clientEnv } = env;
-  const { mode, outline, outlineSource, ...paths } = resolveClientPaths(clientEnv);
+  const { mode, outline, outlineSource, configPath: _configPath, unnamed, ...paths } = resolveClientPaths(clientEnv);
   if (mode === "remote") {
     throw new Error(
       "The Outliner service cannot start in remote client mode; start the canonical service on the remote host",
     );
   }
   if (mode === "host") {
-    if (outlineSource === "folder") return resolvePaths(clientEnv);
-    throw new Error(`${paths.workspaceRoot} is bound to the outline "${outline}" on the outline host; the single-outline service does not serve it`);
+    throw new Error(outlineSource === "bound"
+      ? `${paths.workspaceRoot} is bound to the outline "${outline}" on the outline host; the single-outline service does not serve it`
+      : `${paths.workspaceRoot} belongs to the outline host (${unnamed ?? `outline "${outline}"`}); the single-outline service does not start a database for it. Open it from Herdr, or start the host.`);
   }
   return paths;
 }

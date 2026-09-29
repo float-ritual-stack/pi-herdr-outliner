@@ -1,12 +1,11 @@
 import type { EngineInterface, On, PluginOptions } from 'claude-code'
 
 import {
-  effectiveWorkspaceBindings,
+  effectiveWorkspaces,
   failureReasonOf,
   isIngestible,
   type MentionMessage,
   mentionMessageOf,
-  outlinerEnvironment,
   workspaceForCwd,
 } from './mention-message'
 import {
@@ -28,9 +27,12 @@ import { WORK_TOOLS } from './work-tools'
 type ReferenceContext = { workspace: string | null; prefixes: string[] }
 let references: ReferenceContext | undefined
 let isLoadingReferences = false
-/** The configured workspaces and the host outline each is bound to (`/folder=name`), as last read. */
-let bindings: { root: string; outline?: string }[] = []
-const envFor = (workspace: string) => outlinerEnvironment(workspace, bindings)
+/**
+ * The environment an Outliner CLI run or pane gets for one workspace: its
+ * folder only. The CLI and the pane resolve the outline from the folder's
+ * client.json themselves, so every client lands on the same outline.
+ */
+const envFor = (workspace: string) => ({ OUTLINER_WORKSPACE_ROOT: workspace })
 /** The pane id Herdr gave the last Detail this session split, until it registers. */
 let splitScratchPane: string | undefined
 /** Shows run one at a time, so concurrent clicks and tool calls split one pane. */
@@ -144,11 +146,13 @@ export function register(on: On, options: PluginOptions): void {
     // A module reloaded mid-session never sees its session.start.
     if (!references) $.clock.after(0, () => void loadReferences($, option))
     if (!isIngestible(e)) return result
-    bindings = effectiveWorkspaceBindings(
-      option,
-      await $.env.get('PI_OUTLINER_MENTIONS_WORKSPACES'),
-    )
-    const workspaces = bindings.map(binding => binding.root)
+    let workspaces: string[]
+    try {
+      workspaces = effectiveWorkspaces(option, await $.env.get('PI_OUTLINER_MENTIONS_WORKSPACES'))
+    } catch (error) {
+      $.ui.toast(`Outliner recent mentions unavailable: ${error instanceof Error ? error.message : String(error)}`, { timeoutMs: 6000 })
+      return result
+    }
     if (workspaces.length === 0) return result
     const [id, cwd] = await Promise.all([$.session.id(), $.session.cwd()])
     const message = mentionMessageOf(e, { id, cwd }, workspaces)
@@ -248,8 +252,7 @@ async function loadReferences($: EngineInterface, option: unknown): Promise<void
   if (isLoadingReferences) return
   isLoadingReferences = true
   try {
-    bindings = effectiveWorkspaceBindings(option, await $.env.get('PI_OUTLINER_MENTIONS_WORKSPACES'))
-    const workspaces = bindings.map(binding => binding.root)
+    const workspaces = effectiveWorkspaces(option, await $.env.get('PI_OUTLINER_MENTIONS_WORKSPACES'))
     const workspace = workspaceForCwd(await $.session.cwd(), workspaces)
     if (!workspace) {
       references = { workspace: null, prefixes: [] }
@@ -335,7 +338,7 @@ async function showNow($: EngineInterface, workspace: string, uri: string): Prom
   if (resolved.exitCode !== 0) throw Error(failureReasonOf(resolved.stderr) || 'the target did not resolve')
   const { id, title, fragmentId } = JSON.parse(resolved.stdout) as { id: string; title?: string; fragmentId?: string }
   const opened = await $.process.run(
-    detailSplitArgv({ paneId, workspace, sessionId, blockId: id, ...(fragmentId ? { fragmentId } : {}), ...(envFor(workspace).OUTLINER_OUTLINE ? { outline: envFor(workspace).OUTLINER_OUTLINE } : {}) }),
+    detailSplitArgv({ paneId, workspace, sessionId, blockId: id, ...(fragmentId ? { fragmentId } : {}) }),
     { timeoutMs: 15_000 },
   )
   if (opened.exitCode !== 0) throw Error(failureReasonOf(opened.stderr) || 'Herdr could not open a Detail')

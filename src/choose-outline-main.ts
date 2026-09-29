@@ -67,7 +67,8 @@ async function choose(): Promise<void> {
       if (!host) throw new Error("The outline host stopped answering; nothing was created");
       chooser.status = `Creating outline ${plan.createOutline}…`;
       draw();
-      await host.request({ action: "outlines.create", name: plan.createOutline });
+      // The new outline records the folder it was made for.
+      await host.request({ action: "outlines.create", name: plan.createOutline, root: context.workspaceRoot });
     }
     if (plan.startServiceFor) {
       chooser.status = `Starting the outline for ${plan.startServiceFor}…`;

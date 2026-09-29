@@ -127,8 +127,6 @@ export function detailSplitArgv(split: {
   sessionId: string
   blockId: string
   fragmentId?: string
-  /** The host outline the workspace is bound to, passed so the pane lands on it. */
-  outline?: string
 }): string[] {
   const target = { kind: 'block', blockId: split.blockId, ...(split.fragmentId ? { fragmentId: split.fragmentId } : {}) }
   return [
@@ -141,7 +139,6 @@ export function detailSplitArgv(split: {
     '--no-focus',
     '--cwd', split.workspace,
     '--env', `OUTLINER_WORKSPACE_ROOT=${split.workspace}`,
-    ...(split.outline ? ['--env', `OUTLINER_OUTLINE=${split.outline}`] : []),
     '--env', `OUTLINER_BROWSING_CONTEXT_ID=${split.sessionId}`,
     '--env', `OUTLINER_DETAIL_TARGET=${encodeURIComponent(JSON.stringify(target))}`,
   ]

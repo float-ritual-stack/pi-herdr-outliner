@@ -464,12 +464,14 @@ one folder, and no outline is created without `outlines.create`:
 <state root>/outliner.sock          the host's socket
 <state root>/outlines/<name>.sqlite a database, or a symlink to an adopted one
 <state root>/outlines/<name>/       a created outline's side files (prompts/, assistant-sessions/)
-<state root>/outlines/<name>.json   an adopted outline's recorded root: { "root": "<folder>" }
+<state root>/outlines/<name>.json   the outline's recorded folder: { "root": "<folder>" } (adopt, or create/attach with root)
 <state root>/outliner.host.lock     held by the running host; never unlinked
 ```
 
 Names are slugs (`[a-z0-9][a-z0-9-]{0,31}`). Whatever `<name>.sqlite` is in
-`outlines/` exists; the host keeps no other list.
+`outlines/` exists; the host keeps no other list. The host makes `outlines/`
+when it starts, and its presence is what tells clients a host is set up under
+the state root (`outlineHostConfigured`), running or not.
 
 **Routing.** Each connection carries one request or one subscription, so the
 host reads only its first line. That line's `outline` names the outline; without
@@ -480,6 +482,10 @@ service serves its own connections: subscribers, change feed, Inbox and note
 assistance stay per outline. Later lines on the same connection stay with the
 same outline; a later line naming a different `outline` is refused. The
 Herdr registry mirrors one machine's panes and is shared.
+
+**Faults.** One outline's uncaught error is logged and contained, so the others
+keep serving. Five contained faults within a minute mean the host itself is
+unwell: `host-main` then stops and exits with 1, and systemd restarts it clean.
 
 **Starting.** The host takes `outliner.host.lock` (a second host on the same
 state root is refused, so two hosts cannot unlink each other's socket), opens
@@ -493,8 +499,9 @@ host and other outlines keep serving, and the next request tries again.
 
 **Host requests** are answered by the host, whatever `outline` says:
 `outlines.list` (name, database, adopted, open, default; creates nothing),
-`outlines.create { name }` (refuses a taken name or a leftover `<name>/`; claims
-the file exclusively, never overwrites) and `outlines.adopt { path, name }`.
+`outlines.create { name, root? }` (refuses a taken name or a leftover `<name>/`;
+claims the file exclusively, never overwrites; `root`, an existing folder, is
+recorded in `<name>.json`) and `outlines.adopt { path, name }`.
 `ping` without `outline` on a host with no default answers for the host alone;
 otherwise the outline answers and adds `host: { socket, defaultOutline?,
 outlines }`. The host's capabilities (`OUTLINER_HOST_CAPABILITIES`) are
@@ -512,7 +519,10 @@ never a guess. Adopting the default outline opens it at once. Lock files
 adopted outline's side files stay beside its database: its folder is the
 outline's state directory (prompts, assistant sessions), so it keeps its prompt
 edits and history, and a standalone service could serve it again unchanged once
-the host lets go. A created outline's root is its side folder.
+the host lets go. A created outline's root is the `root` it was created with
+(session openers always pass one), else, for one created without, its side
+folder. The root is what `ping.location`, resources, file links and the Inbox
+use.
 
 **Clients name their outline** (step 3). `OutlinerClient` takes an `outline`;
 every request line and every subscribe line then carries it. Before relying on
@@ -523,38 +533,93 @@ decides the endpoint, like Herdr's `herdr` / `herdr --session <name>`:
 
 1. `OUTLINER_REMOTE=1` + `OUTLINER_SOCKET_PATH`: that socket (a remote host is
    asked for `OUTLINER_OUTLINE`, or a remote config's `outline`);
-2. `OUTLINER_OUTLINE=<name>` (the CLI's `--outline <name>`): the host, that outline;
-3. the folder's `client.json`: `{ "workspaceRoot", "outline": "<name>" }` binds
-   it to a host outline; `local` and `remote` choices are kept;
-4. nothing chosen, a host socket under the state root, and no hash database for
-   the folder: the outline named after the folder (its basename as a slug);
-5. otherwise the folder's hash socket, as before.
+2. `OUTLINER_OUTLINE=<name>` (the CLI's global `outliner --outline <name> <command>`,
+   taken only before the command so it is never another flag's value): the
+   host, that outline;
+3. `OUTLINER_CONFIG_PATH`, else the folder rule below, which every opener
+   shares (`resolveFolderOutline`; the door mirrors it);
+4. otherwise the folder's hash socket, as before.
+
+**The folder rule.**
+
+1. Walk up from the folder to the nearest **bound** folder: a `client.json`
+   with `outline`, or a `local` or `remote` choice. Its binding is used, and
+   the bound folder is the client's workspace root. A folder's own hash
+   database wins over an ancestor's binding.
+2. Otherwise, inside a git work tree (a `.git` folder or file, found by walking
+   up; nothing is run), guess the **repository root's** name.
+3. Otherwise guess the folder's own name.
+4. Never guess for `$HOME`, `/` or a folder directly under `/` (`/tmp`,
+   `/opt`); a repository rooted there falls through to rule 3. Such a folder
+   is host mode `unnamed`: a client for it refuses every request (rather than
+   reach the default outline), Ctrl-b u shows the chooser, and a read says how
+   to name one.
+
+Guesses (2-3) apply only with a host set up and no hash database for the folder
+(or for the repository root). A guess whose outline records another folder in
+`<name>.json` is `unnamed` too: two folders with one name are never merged
+silently. **Naming, one rule:** a guess and the chooser's "New outline here"
+both start from the folder's name as a slug; the guess attaches to an outline
+with that name (and a session opener creates it), while the chooser's explicit
+"new" never attaches and takes the first free `-2`, `-3`… suffix.
+
+**Host set up, not host answering.** Host mode depends on `outlines/` existing,
+not on the socket answering, so resolution does not flip while the host
+restarts. A client whose host socket is momentarily absent waits and retries
+like a remote client (panes reconnect; `herdr-open` and Pi wait up to 60 s for
+the host); it never falls back to a local hash database and never starts
+`server-main` (Pi's headless path included), and `resolveServicePaths` refuses
+any folder that resolves to the host.
 
 In host mode a client's own files (editor drafts) live in
 `<state root>/clients/<name>/`. `doctor` prints the host, the outline name and
-how it was chosen (env, bound, or folder guess).
+how it was chosen (env, bound, repository or folder guess, the invoking pane),
+or why none is.
 
-**Opening creates, reading never does.** `outlines.attach { name, create }`
+**Panes and Herdr actions.** A pane's subscription registers the outline it is
+on (`OutlinerWatcher` adds `outline` to the registration; a hosted outline
+stamps its own name and refuses another). A Herdr action invoked from a pane,
+ensure-detail, focus-existing and the other opens, link clicks
+(`herdr-link-open`) and comment on selection, asks the host which outline that
+pane is registered on (`outlines.pane { paneId, hostname }`, read-only) and uses
+it before resolving the folder (`resolveInvocationPaths`). So a Tree left open
+after **choose-outline** rebound its folder keeps getting its own Detail, and a
+Detail opened by name in a folder with no binding comments on its own outline.
+`OUTLINER_OUTLINE` still wins; the chooser's continuation and the switcher
+resolve the folder afresh.
+
+**Opening creates, reading never does.** `outlines.attach { name, create, root? }`
 opens an outline and, with `create`, makes it first when none has the name
-(`tmux new -A`). Only session openers pass `create`: `herdr-open` (Ctrl-b u and
-the other open actions; its `service-only` check for Pi only attaches) and the
-door. Plain CLI commands, `doctor` and panes never create. When `herdr-open`
-creates an outline it says so in a Herdr notification ("Created outline
-jam-shelf"). In host mode it opens no service pane (the host is systemd's job),
-the stopped-alias restart does not apply, and it passes `OUTLINER_OUTLINE` to
-every pane it opens; every other pane opener forwards it too, so all panes of a
-session land on one outline. With a host running the outline chooser is not on
-Ctrl-b u's path; the **choose-outline** action opens it as a switcher (it lists
-`outlines.list`, "New outline here" creates the folder's name, and a choice
-replaces the folder's binding). Without a host, Ctrl-b u and the chooser behave
-as before.
+(`tmux new -A`), recording `root`. Only session openers pass `create`, and only
+in the modes that open panes: `herdr-open` (Ctrl-b u and the other open actions;
+`focus-existing` and Pi's `service-only` check only attach) and the door. They
+pass the folder the outline is for: the bound folder, the repository root or
+the invoking folder. Plain CLI commands, `doctor` and panes never create. When
+`herdr-open` creates an outline it says so in a Herdr notification ("Created
+outline jam-shelf"). In host mode it opens no service pane (the host is
+systemd's job), the stopped-alias restart does not apply, and it passes
+`OUTLINER_OUTLINE` to every pane it opens; every other pane opener forwards it
+too, so all panes of a session land on one outline. With a host set up the
+outline chooser is on Ctrl-b u's path only for an `unnamed` folder; the
+**choose-outline** action opens it as a switcher (it lists `outlines.list`,
+"New outline here" creates a suffixed name with the folder as its root, and a
+choice replaces the folder's binding). Without a host, Ctrl-b u and the chooser
+behave as before.
 
 Host requests for session tools: `outlines.list`, `outlines.attach`,
-`outlines.create`, `outlines.adopt { path, name, root? }`, `outlines.close`
-(stop serving one outline and release its database) and `outlines.delete`
+`outlines.create`, `outlines.adopt { path, name, root? }`, `outlines.pane`,
+`outlines.close` (stop serving one outline and release its database; it is not
+a lock: its next request reopens it, so live panes, which reconnect at once,
+reopen it right away; close them first to keep it closed) and `outlines.delete`
 (an adopted outline's link and root record are removed and its database left
 where it lies; a created outline's files move to `<state root>/deleted/`;
 nothing is erased; the default is refused).
+
+`outliner outlines` lists the slice-1 stored outlines and then the host's. A
+stored outline whose database a hosted outline has adopted (same real path) is
+listed once, as the hosted row. A hosted row's `status` comes from the host:
+`running` when open, `stopped` when not open, `broken` with a `problem` (its
+adopted database is missing).
 
 [`resolveClientPaths()`](../src/paths.ts) adds an explicit local/remote endpoint
 mode without changing canonical workspace storage paths. Normal configuration

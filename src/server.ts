@@ -499,6 +499,11 @@ export class OutlinerServer {
       throw new Error(`Invalid client role: ${String(registration.role)}`);
     }
     const contextId = this.normalizeContextId(registration.contextId);
+    // A hosted outline records its own name on every pane; a pane that says another outline is refused.
+    if (registration.outline !== undefined && this.hosted && registration.outline !== this.outline?.name) {
+      throw new Error(`This connection serves the outline "${this.outline?.name}", not "${String(registration.outline)}"`);
+    }
+    const outline = this.hosted ? this.outline?.name : undefined;
     this.pruneDestroyedSubscribers();
     if (this.subscribers.has(socket)) {
       throw new Error("Socket already owns a client registration");
@@ -525,6 +530,7 @@ export class OutlinerServer {
       clientId,
       role: registration.role,
       contextId,
+      ...(outline ? { outline } : {}),
       ...(currentTarget ? { currentTarget } : {}),
       ...(runtime ? { runtime } : {}),
       ...(resourcePresentation ? { resourcePresentation } : {}),
@@ -634,6 +640,11 @@ export class OutlinerServer {
           (registry.focusedTabId === null || registry.focusedTabId === pane.tab_id),
       },
     };
+  }
+
+  /** The live pane registrations, as `clients.list` answers them (the outline host looks up panes by them). */
+  liveClients(): OutlinerClientRegistration[] {
+    return this.listClients();
   }
 
   private listClients(role?: OutlinerClientRole): OutlinerClientRegistration[] {
@@ -1487,6 +1498,7 @@ export class OutlinerServer {
         case "outlines.attach":
         case "outlines.close":
         case "outlines.delete":
+        case "outlines.pane":
           throw new Error(`${action} is answered by an outline host; this service runs one outline`);
         case "blocks.query":
           result = request.fields === undefined

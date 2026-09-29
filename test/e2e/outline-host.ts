@@ -11,7 +11,8 @@ import type { OutlinerClientRegistration } from "../../src/types";
 import { runHerdrScenario } from "./herdr-runner";
 
 // PIE-457 step 3: with an outline host running, Ctrl-b u opens the folder's outline by name.
-// An unbound folder gets the outline named after it (created on first open); a bound folder opens its outline.
+// An unbound folder gets the outline named after it (created on first open); a bound folder opens its outline;
+// a subfolder of a bound folder opens the bound outline; a git repository's subfolder opens the repository's.
 let host: OutlineHost | undefined;
 const result = await runHerdrScenario({
   name: "outline-host",
@@ -31,6 +32,11 @@ const result = await runHerdrScenario({
 
     const [jam, fredFolder] = ["jam-shelf", "fred-folder"].map(name => join(runRoot, name));
     for (const folder of [jam, fredFolder]) await mkdir(folder!);
+    // A subfolder of the bound folder, and a fictional git repository with a subfolder.
+    const fredDrafts = join(fredFolder!, "notes", "drafts");
+    const repository = join(runRoot, "code", "lantern-lab");
+    const repositorySubfolder = join(repository, "src", "widgets");
+    for (const folder of [fredDrafts, join(repository, ".git"), repositorySubfolder]) await mkdir(folder, { recursive: true });
     writeClientConfig({ ...configEnv, OUTLINER_WORKSPACE_ROOT: fredFolder }, { mode: "host", workspaceRoot: fredFolder!, outline: "fred" });
     const terminal = await s.attachClient();
     await terminal.resize(160, 48);
@@ -77,10 +83,34 @@ const result = await runHerdrScenario({
     assert.deepEqual(await liveOn("bob", "detail"), []);
     await s.checkpoint("01-bound-folder-opened-fred");
 
-    // Neither folder got a hash database, and no service pane was opened for them.
-    for (const folder of [jam!, fredFolder!]) assert.equal(existsSync(resolvePaths({ ...configEnv, OUTLINER_WORKSPACE_ROOT: folder }).stateDir), false);
+    // 3. A subfolder of the folder bound to fred: Ctrl-b u walks up to the binding and opens fred, creating nothing.
+    const fredTreesBefore = (await liveOn("fred", "tree")).map(client => client.clientId);
+    await ctrlBU(fredDrafts, "drafts$");
+    const [draftsTree] = await s.waitFor("subfolder: a new Tree on fred", async () => (await liveOn("fred", "tree")).filter(client => !fredTreesBefore.includes(client.clientId)), clients => clients.length > 0, 30_000);
+    assert.ok(draftsTree, "a second Tree opened on fred");
+    assert.deepEqual(host.list().outlines.map(outline => outline.name), ["bob", "fred", "jam-shelf"]);
+    assert.deepEqual(await liveOn("bob", "tree"), []);
+    await s.record("drafts-tree", draftsTree);
+    await s.checkpoint("02-subfolder-of-bound-folder-opened-fred");
+
+    // 4. A git repository's subfolder: Ctrl-b u opens (and creates) the outline named after the repository root.
+    await ctrlBU(repositorySubfolder, "widgets$");
+    const labViews = await openedOn("lantern-lab", "repository subfolder");
+    const lab = host.list().outlines.find(outline => outline.name === "lantern-lab");
+    assert.equal(lab?.root, repository, "the created outline records the repository root as its folder");
+    assert.deepEqual(host.list().outlines.map(outline => outline.name), ["bob", "fred", "jam-shelf", "lantern-lab"]);
+    const labTree = await s.adoptDetached(labViews.tree.clientId, "tree", outlineClient("lantern-lab"));
+    await s.waitVisible(labTree, "Tree");
+    await s.record("lantern-lab-views", labViews);
+    await s.checkpoint("03-repository-subfolder-opened-lantern-lab");
+
+    // No folder got a hash database, and no service pane was opened for them.
+    for (const folder of [jam!, fredFolder!, fredDrafts, repository, repositorySubfolder]) {
+      assert.equal(existsSync(resolvePaths({ ...configEnv, OUTLINER_WORKSPACE_ROOT: folder }).stateDir), false);
+    }
+    assert.ok(!host.list().outlines.some(outline => ["drafts", "widgets", "src", "notes"].includes(outline.name)), "no outline named after a subfolder");
     const logs = await s.pluginActionLogs();
-    assert.equal(logs.filter(log => log.actionId === "open-here" && log.status === "succeeded").length >= 2, true, JSON.stringify(logs));
+    assert.equal(logs.filter(log => log.actionId === "open-here" && log.status === "succeeded").length >= 4, true, JSON.stringify(logs));
     await s.record("state-after", { entries: readdirSync(stateRoot).sort(), outlines: host.list() });
   },
 });

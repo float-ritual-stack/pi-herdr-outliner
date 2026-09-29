@@ -13,12 +13,26 @@ import { resolveStateRoot } from "./paths";
  */
 // One outline's fault must not take the others down: log it and keep serving.
 // A request's own failure is already answered as an error to that request.
-process.on("uncaughtException", error => {
-  console.error(`Outline host: uncaught error, contained: ${error.stack ?? error.message}`);
-});
-process.on("unhandledRejection", reason => {
-  console.error(`Outline host: unhandled rejection, contained: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}`);
-});
+// Faults that keep coming mean the host itself is unwell: after
+// FAULT_LIMIT within FAULT_WINDOW_MS it exits with 1, so systemd restarts it clean.
+const FAULT_LIMIT = 5;
+const FAULT_WINDOW_MS = 60_000;
+const faults: number[] = [];
+let stopHost: ((failure: number) => Promise<void>) | undefined;
+function contain(kind: string, detail: string): void {
+  console.error(`Outline host: ${kind}, contained: ${detail}`);
+  const now = Date.now();
+  faults.push(now);
+  while (faults.length > 0 && faults[0]! <= now - FAULT_WINDOW_MS) faults.shift();
+  if (faults.length < FAULT_LIMIT) return;
+  console.error(`Outline host: ${faults.length} contained faults within ${FAULT_WINDOW_MS / 1_000}s; exiting for a clean restart.`);
+  if (stopHost) void stopHost(1);
+  else process.exit(1);
+  // A stop that hangs must not keep an unwell host alive.
+  setTimeout(() => process.exit(1), 10_000).unref();
+}
+process.on("uncaughtException", error => contain("uncaught error", error.stack ?? error.message));
+process.on("unhandledRejection", reason => contain("unhandled rejection", reason instanceof Error ? reason.stack ?? reason.message : String(reason)));
 
 try {
   const stateRoot = resolveStateRoot();
@@ -67,6 +81,7 @@ try {
     }
     process.exit(exitCode);
   }
+  stopHost = stop;
   process.on("SIGINT", () => void stop());
   process.on("SIGTERM", () => void stop());
   process.on("SIGHUP", () => void stop());

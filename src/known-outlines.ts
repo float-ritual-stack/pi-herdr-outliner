@@ -4,6 +4,7 @@ import { OutlinerClient } from "./client";
 import { probeSocket } from "./socket-probe";
 import {
   OUTLINE_NAME_PATTERN,
+  nearestFolderBinding,
   type OutlinerClientPaths,
   readClientConfig,
   resolveClientConfigPath,
@@ -25,21 +26,25 @@ export type OutlinePresence =
 export function detectOutline(env: NodeJS.ProcessEnv): OutlinePresence {
   const paths = resolveClientPaths(env);
   if (paths.mode === "remote") return { kind: "present", paths, because: "remote" };
-  // A host outline is named (by env, a binding or the folder's name); opening attaches to it, creating it if needed.
-  if (paths.mode === "host") return { kind: "present", paths, because: "host" };
+  // A host outline is named (by env, a binding or a guess); opening attaches to it, creating it if needed.
+  // A folder too broad to guess a name for ($HOME, /tmp) gets the chooser.
+  if (paths.mode === "host") {
+    return paths.outline
+      ? { kind: "present", paths, because: "host" }
+      : { kind: "missing", paths, configPath: resolveClientConfigPath(env) };
+  }
   // An explicit config path is the user's own choice, whether or not the file exists.
   if (env.OUTLINER_CONFIG_PATH?.trim()) return { kind: "present", paths, because: "config" };
-  const configPath = resolveClientConfigPath(env);
-  if (existsSync(configPath)) {
-    // resolveClientPaths reads the project config only when OUTLINER_REMOTE is unset.
-    if (env.OUTLINER_REMOTE?.trim() === undefined) return { kind: "present", paths, because: "config" };
-    // OUTLINER_REMOTE=0 forces local mode; it does not undo a recorded local choice.
-    let config;
-    try { config = readClientConfig(configPath, paths.workspaceRoot); } catch { config = undefined; }
-    if (config?.mode === "local") return { kind: "present", paths, because: "config" };
+  if (paths.configPath) return { kind: "present", paths, because: "config" };
+  // resolveClientPaths reads no config under OUTLINER_REMOTE=0, which forces
+  // local mode; it does not undo a recorded local choice here or above.
+  if (env.OUTLINER_REMOTE?.trim() !== undefined) {
+    let binding;
+    try { binding = nearestFolderBinding(paths.workspaceRoot, env); } catch { binding = undefined; }
+    if (binding?.config.mode === "local" && binding.folder === paths.workspaceRoot) return { kind: "present", paths, because: "config" };
   }
   if (existsSync(paths.database)) return { kind: "present", paths, because: "database" };
-  return { kind: "missing", paths, configPath };
+  return { kind: "missing", paths, configPath: resolveClientConfigPath(env) };
 }
 
 export { OUTLINE_NAME_PATTERN } from "./paths";

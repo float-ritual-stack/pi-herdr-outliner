@@ -1,23 +1,19 @@
 import { describe, expect, test, tier } from 'claude-code/testing'
 
-import { effectiveWorkspaceBindings, effectiveWorkspaces, failureReasonOf, outlinerEnvironment, workspacesOf } from '../hooks/mention-message'
+import { effectiveWorkspaces, failureReasonOf, workspacesOf } from '../hooks/mention-message'
 
 tier('user')
 
 describe('mention-message', () => {
-  test('an entry may bind its folder to a host outline by name', async () => {
-    const bindings = effectiveWorkspaceBindings('', '/work/fred-folder=fred,/work/jam-shelf/,/work/odd=Not A Name')
-    expect(bindings).toEqual([{ root: '/work/fred-folder', outline: 'fred' }, { root: '/work/jam-shelf' }, { root: '/work/odd' }])
-    expect(effectiveWorkspaces('', '/work/fred-folder=fred')).toEqual(['/work/fred-folder'])
-    expect(outlinerEnvironment('/work/fred-folder', bindings)).toEqual({ OUTLINER_WORKSPACE_ROOT: '/work/fred-folder', OUTLINER_OUTLINE: 'fred' })
-    expect(outlinerEnvironment('/work/jam-shelf', bindings)).toEqual({ OUTLINER_WORKSPACE_ROOT: '/work/jam-shelf' })
-  })
-
-  test('workspaces split on either separator and keep absolute paths only', async () => {
-    expect(workspacesOf(' /a/b/, relative : /c ')).toEqual(['/a/b', '/c'])
-    expect(workspacesOf(['/a', 3, 'x'])).toEqual(['/a'])
+  test('workspaces split on either separator; entries are absolute folders only', async () => {
+    expect(workspacesOf(' /a/b/, : /c ')).toEqual(['/a/b', '/c'])
     expect(workspacesOf('')).toEqual([])
     expect(workspacesOf('/')).toEqual(['/'])
+    // No silent fallback: a relative path, a non-string or the old folder=name form is an error.
+    expect(() => workspacesOf(' /a/b/, relative : /c ')).toThrow('"relative" is not an absolute folder')
+    expect(() => workspacesOf(['/a', 3])).toThrow('3 is not a folder path')
+    expect(() => workspacesOf('/work/fred-folder=fred')).toThrow('bind a folder to an outline in its client.json')
+    expect(() => effectiveWorkspaces('', '/work/jam-shelf,jam')).toThrow('"jam" is not an absolute folder')
   })
 
   test('a CLI failure reports its error line, not the Bun trailer', async () => {

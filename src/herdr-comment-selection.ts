@@ -4,7 +4,7 @@ import { hostname } from "node:os";
 import { listLiveClients, sendClientCommand } from "./client-target";
 import { createOutlinerClient, OutlinerClient } from "./client";
 import { pluginInvocationWorkspaceRoot } from "./pane-control";
-import { resolveClientPaths } from "./paths";
+import { resolveInvocationPaths } from "./outline-host-client";
 import type { OutlinerClientRegistration, RenderedSelectionCapture } from "./types";
 
 interface HerdrSelectionContext {
@@ -185,8 +185,10 @@ export async function dispatchNativeSelectionComment(options: {
   const invocation = nativeSelectionInvocation(env);
   const invokingHostname = hostname();
   const workspaceRoot = pluginInvocationWorkspaceRoot(env);
-  const paths = resolveClientPaths({ ...env, OUTLINER_WORKSPACE_ROOT: workspaceRoot });
-  const client = options.client ?? createOutlinerClient(paths);
+  // The selection is in a Detail: comment on the outline that pane is on.
+  const client = options.client ?? createOutlinerClient(
+    await resolveInvocationPaths({ ...env, OUTLINER_WORKSPACE_ROOT: workspaceRoot }, invocation.paneId),
+  );
   const detail = requireInvokingDetail(
     await listLiveClients(client, "detail"),
     invocation.paneId,

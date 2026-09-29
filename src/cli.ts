@@ -1,6 +1,7 @@
 import { createBlockComment } from "./block-comments";
 import { readSavedView } from "./saved-view-read";
 import {inspectWorkspaceConnection} from './workspace-diagnostics';
+import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs, type ParseArgsOptionsConfig } from "node:util";
 import { normalizePropertyQueryScope, parsePropertyFilterClause } from "./block-query";
@@ -10,7 +11,7 @@ import {
 } from "./block-focus";
 import { createOutlinerClient, OutlinerRequestError, type RequestInput } from "./client";
 import { requireClientIdForRole } from "./client-target";
-import { outlineHostPaths, resolveClientConfigRoot, resolveClientPaths, resolveStateRoot } from "./paths";
+import { outlineHostPaths, resolveClientConfigRoot, resolveClientPaths, resolveStateRoot, stateDirPaths } from "./paths";
 import { listKnownOutlines, type KnownOutline } from "./known-outlines";
 import { outlineHostClient } from "./outline-host-client";
 import { renameOutline, setOutlineRoot } from "./outline-names";
@@ -30,20 +31,19 @@ import {
 } from "./work-tools";
 
 /**
- * `--outline <name>` anywhere on the line is `OUTLINER_OUTLINE=<name>`: the
- * command talks to that outline on the outline host. Plain commands never
- * create it; only a session opener (herdr-open, the door) attaches with create.
+ * `outliner --outline <name> <command> …` (or `--outline=<name>`) is
+ * `OUTLINER_OUTLINE=<name>`: the command talks to that outline on the outline
+ * host. Like `tmux -L` or `herdr --session`, it is a global flag before the
+ * command, so it is never taken from another flag's value (`--text --outline`).
+ * Plain commands never create the outline; only a session opener (herdr-open,
+ * the door) attaches with create.
  */
-for (let index = 2; index < process.argv.length; index++) {
-  const argument = process.argv[index]!;
-  if (argument === "--") break;
-  if (argument === "--outline" || argument.startsWith("--outline=")) {
-    const value = argument === "--outline" ? process.argv[index + 1] : argument.slice("--outline=".length);
-    if (!value) throw new Error("--outline requires an outline name");
-    process.env.OUTLINER_OUTLINE = value;
-    process.argv.splice(index, argument === "--outline" ? 2 : 1);
-    index--;
-  }
+while (process.argv[2] === "--outline" || process.argv[2]?.startsWith("--outline=")) {
+  const argument = process.argv[2]!;
+  const value = argument === "--outline" ? process.argv[3] : argument.slice("--outline=".length);
+  if (!value || value.startsWith("-")) throw new Error("--outline requires an outline name");
+  process.env.OUTLINER_OUTLINE = value;
+  process.argv.splice(2, argument === "--outline" ? 2 : 1);
 }
 if(process.argv[2]==='doctor'){
  const report=await inspectWorkspaceConnection();
@@ -76,16 +76,31 @@ function describeHostedOutline(outline: HostedOutlineSummary): string {
   ].join("\n");
 }
 
-/** One row of `outlines`: a slice-1 stored outline (`hosted: false`) or an outline host's (`hosted: true`). */
+/**
+ * One row of `outlines`: a slice-1 stored outline (`hosted: false`) or an
+ * outline host's (`hosted: true`). A hosted row's status is `running` when
+ * the host has it open, `stopped` when not yet opened or closed, and `broken`
+ * when its database is missing (see `problem`).
+ */
 type ListedOutline =
   | (KnownOutline & { hosted: false })
-  | (KnownOutline & { hosted: true } & Omit<HostedOutlineSummary, "name" | "root">);
+  | (Omit<KnownOutline, "status"> & { hosted: true; status: "running" | "stopped" | "broken" } & Omit<HostedOutlineSummary, "name" | "root">);
 
 function hostedRow(outline: HostedOutlineSummary, socket: string): ListedOutline {
   return {
     ...outline, hosted: true, socket, label: outline.name, name: outline.name, aliases: [],
-    location: "local", status: "running",
+    location: "local", status: outline.problem ? "broken" : outline.open ? "running" : "stopped",
   };
+}
+
+function realOrSelf(path: string): string {
+  try { return realpathSync(path); } catch { return resolve(path); }
+}
+
+/** Stored (slice-1) outlines whose database a hosted outline has adopted are listed once, as the hosted row. */
+function notAdopted(stored: readonly KnownOutline[], hosted: readonly HostedOutlineSummary[]): KnownOutline[] {
+  const served = new Set(hosted.map(outline => realOrSelf(outline.database)));
+  return stored.filter(outline => !outline.stateDir || !served.has(realOrSelf(stateDirPaths(outline.stateDir).database)));
 }
 
 
@@ -104,7 +119,7 @@ async function runOutlinesCommand(group: "outlines" | "outline", args: string[])
       // One listing either way: slice-1 stored outlines, then a running host's.
       const host = await outlineHostClient(stateRoot);
       const hosted = host ? await host.request<HostedOutlineList>({ action: "outlines.list" }) : undefined;
-      const stored = await listKnownOutlines({ stateRoot, configRoot: resolveClientConfigRoot() });
+      const stored = notAdopted(await listKnownOutlines({ stateRoot, configRoot: resolveClientConfigRoot() }), hosted?.outlines ?? []);
       const outlines: ListedOutline[] = [
         ...stored.map(outline => ({ ...outline, hosted: false as const })),
         ...(host && hosted ? hosted.outlines.map(outline => hostedRow(outline, host.socketPath)) : []),
@@ -126,11 +141,11 @@ async function runOutlinesCommand(group: "outlines" | "outline", args: string[])
     const { values, positionals } = parseArgs({ args: operands, allowPositionals: true, strict: true, options: { json: { type: "boolean" }, root: { type: "string" } } });
     if (operation === "create" || operation === "adopt") {
       const wanted = operation === "create" ? 1 : 2;
-      if (positionals.length !== wanted) throw new Error(operation === "create" ? "outline create expects: <name>" : "outline adopt expects: <database path> <name> [--root <folder>]");
+      if (positionals.length !== wanted) throw new Error(operation === "create" ? "outline create expects: <name> [--root <folder>]" : "outline adopt expects: <database path> <name> [--root <folder>]");
       const host = await outlineHostClient(stateRoot);
       if (!host) throw new Error(`No outline host is running at ${outlineHostPaths(stateRoot).socket}; start it with \`bun run host\``);
       const created = operation === "create"
-        ? await host.request<HostedOutlineSummary>({ action: "outlines.create", name: positionals[0]! })
+        ? await host.request<HostedOutlineSummary>({ action: "outlines.create", name: positionals[0]!, ...(values.root ? { root: resolve(values.root) } : {}) })
         : await host.request<HostedOutlineSummary>({
           action: "outlines.adopt", path: resolve(positionals[0]!), name: positionals[1]!,
           ...(values.root ? { root: resolve(values.root) } : {}),
@@ -144,7 +159,7 @@ async function runOutlinesCommand(group: "outlines" | "outline", args: string[])
     } else if (operation === "rename" && positionals.length === 2) {
       descriptor = await renameOutline({ stateRoot, from: positionals[0]!, to: positionals[1]! });
     } else {
-      throw new Error("outline expects: create <name> | adopt <database path> <name> [--root <folder>] | set-root <name|storage-key> <path> | rename <name|storage-key> <new-name>");
+      throw new Error("outline expects: create <name> [--root <folder>] | adopt <database path> <name> [--root <folder>] | set-root <name|storage-key> <path> | rename <name|storage-key> <new-name>");
     }
     console.log(values.json ? JSON.stringify(descriptor, null, 2) : `${descriptor.name}  ${descriptor.root}`);
     return 0;

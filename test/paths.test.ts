@@ -70,6 +70,7 @@ test("only the configured project uses its remote endpoint", () => {
       ...resolvePaths(projectAEnvironment),
       mode: "remote",
       socket: remoteSocket,
+      configPath: resolveClientConfigPath(projectAEnvironment),
     });
     expect(resolveClientPaths(projectBEnvironment)).toEqual({
       ...resolvePaths(projectBEnvironment),

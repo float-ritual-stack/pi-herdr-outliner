@@ -24,12 +24,12 @@ type Run = { argv: readonly string[]; init?: ProcessRunInit }
 /**
  * A session in `cwd` whose host commands answer from `answer`, recording each.
  */
-function sessionIn(on: On, cwd: string, answer: (run: Run) => ProcessRunResult) {
+function sessionIn(on: On, cwd: string, answer: (run: Run) => ProcessRunResult, workspaces = `${WORKSPACE}/`) {
   const runs: Run[] = []
   const toasts: string[] = []
   const clock = mock.clock(on)
   mock.env(on, {
-    PI_OUTLINER_MENTIONS_WORKSPACES: `${WORKSPACE}/`,
+    PI_OUTLINER_MENTIONS_WORKSPACES: workspaces,
     HERDR_PANE_ID: 'w:p9',
     HERDR_TAB_ID: 'w:t1',
     HERDR_WORKSPACE_ID: 'w',
@@ -191,6 +191,20 @@ describe('register', () => {
     expect(text).toBe(ANSWER.answer)
     expect(session.toasts).toEqual([
       'Outliner recent mentions unavailable: mentions ingest failed: connect ENOENT outliner.sock',
+    ])
+  })
+
+  test('an invalid workspaces entry is one toast, and nothing is ingested or bound by name', async ($, on) => {
+    const session = sessionIn(on, WORKSPACE, succeeding, `${WORKSPACE}=fred`)
+    await session.begin(() => $.session.start(START))
+
+    const { text } = await $.turn.complete(ANSWER)
+    await session.clock.settle()
+
+    expect(text).toBe(ANSWER.answer)
+    expect(session.runs.filter(run => run.argv.includes('ingest'))).toEqual([])
+    expect(session.toasts).toEqual([
+      `Outliner recent mentions unavailable: Outliner workspaces entry "${WORKSPACE}=fred" is not an absolute folder; list folders only, and bind a folder to an outline in its client.json (the choose-outline action)`,
     ])
   })
 

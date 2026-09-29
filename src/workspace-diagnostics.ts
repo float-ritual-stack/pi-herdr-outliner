@@ -36,8 +36,8 @@ export async function inspectWorkspaceConnection(env:NodeJS.ProcessEnv=process.e
   const hostSocket=outlineHostPaths(resolveStateRoot(env)).socket;
   const stateRootSource=env.OUTLINER_STATE_DIR?'state root from OUTLINER_STATE_DIR':'default state root';
   field('Host',hostSocket,`${presence(hostSocket)}; ${stateRootSource}; ${paths.mode==='host'?'used':paths.outline?'not used: remote socket':'not used'}`);
-  const how={env:'OUTLINER_OUTLINE',bound:"bound: the folder's client.json",folder:"folder guess: the folder's name, as a host is running and nothing else is chosen"} as const;
-  field('Outline name',paths.outline??'none (the endpoint serves one outline)',paths.outline?how[paths.outlineSource??'env']:undefined);
+  const how={env:'OUTLINER_OUTLINE',bound:`bound: ${paths.configPath??"the folder's client.json"}`,repository:"repository guess: the git repository root's name, as a host is set up and nothing else is chosen",folder:"folder guess: the folder's name, as a host is set up and nothing else is chosen",pane:"the invoking pane's outline"} as const;
+  field('Outline name',paths.outline??(paths.unnamed?'none: this folder needs an explicit name':'none (the endpoint serves one outline)'),paths.outline?how[paths.outlineSource??'env']:paths.unnamed);
  }
  if(env.OUTLINER_REMOTE!==undefined)note('Connection mode selected by OUTLINER_REMOTE; project client.json is bypassed.');
  else if(env.OUTLINER_OUTLINE?.trim())note('Outline selected by OUTLINER_OUTLINE; project client.json is bypassed.');

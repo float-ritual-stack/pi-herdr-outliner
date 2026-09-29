@@ -11,6 +11,10 @@ UUIDs in the answer then show up in Tree/Detail `?` → **Recent mentions**.
   The nearest configured ancestor wins, so a separately configured nested project
   retains its own database. Similar path prefixes do not match. Paths are normalized
   lexically; symlink aliases and sibling Git worktrees need explicit configuration.
+- Each entry is an absolute folder. The outline it feeds is resolved by the
+  Outliner CLI from that folder's `client.json`, as for every other client (bind
+  a folder with the **choose-outline** action). Any other entry, such as a
+  relative path or `folder=name`, is an error shown as a toast, never skipped.
 - Herdr discovers the Outliner (`herdr plugin list --plugin float.pi-outliner`),
   and the mod calls the installed CLI's `mentions ingest`. It never starts a service.
   Failures show as one toast and leave the answer untouched.

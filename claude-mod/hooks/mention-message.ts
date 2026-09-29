@@ -13,55 +13,33 @@ export type MentionMessage = {
 }
 
 /**
- * The workspaces option as configured: one path or several separated by ':'
- * or ','. Trailing slashes are dropped so `/a/b/` matches a cwd of `/a/b`.
- * An entry may bind its folder to an outline on the outline host by name:
- * `/work/fred-folder=fred`.
+ * The workspaces option as configured: one absolute folder or several,
+ * separated by ':' or ','. Trailing slashes are dropped so `/a/b/` matches a
+ * cwd of `/a/b`. An entry names a folder only: which outline it feeds is
+ * resolved by the Outliner CLI from that folder's `client.json`, the same way
+ * for every client. Any other entry is an error, never skipped.
  */
-export function workspaceBindingsOf(value: unknown): { root: string; outline?: string }[] {
-  const parts = Array.isArray(value)
-    ? value.filter((part): part is string => typeof part === 'string')
-    : typeof value === 'string'
-      ? value.split(/[:,]/)
-      : []
-  return parts
-    .map(part => {
-      const [path = '', outline] = part.trim().split('=', 2)
-      const root = path.trim().replace(/(?<=.)\/+$/, '')
-      const name = outline?.trim()
-      return name && /^[a-z0-9][a-z0-9-]{0,31}$/.test(name) ? { root, outline: name } : { root }
-    })
-    .filter(binding => binding.root.startsWith('/'))
-}
-
 export function workspacesOf(value: unknown): string[] {
-  return workspaceBindingsOf(value).map(binding => binding.root)
+  const parts = Array.isArray(value) ? value : typeof value === 'string' ? value.split(/[:,]/) : []
+  return parts.flatMap(part => {
+    if (typeof part !== 'string') throw Error(`Outliner workspaces entry ${JSON.stringify(part)} is not a folder path`)
+    const entry = part.trim()
+    if (entry === '') return []
+    if (!entry.startsWith('/') || entry.includes('=')) {
+      throw Error(`Outliner workspaces entry "${entry}" is not an absolute folder; list folders only, and bind a folder to an outline in its client.json (the choose-outline action)`)
+    }
+    return [entry.replace(/(?<=.)\/+$/, '')]
+  })
 }
 
 /**
- * The workspaces in force: the option when it names any, else the environment
+ * The option when it names at least one workspace, otherwise the environment
  * variable. Claude Code passes an unset string option as '', so an empty
  * option cannot be told from an unset one and never overrides the environment.
  */
-export function effectiveWorkspaceBindings(option: unknown, environment: string | undefined): { root: string; outline?: string }[] {
-  const configured = workspaceBindingsOf(option)
-  return configured.length > 0 ? configured : workspaceBindingsOf(environment)
-}
-
 export function effectiveWorkspaces(option: unknown, environment: string | undefined): string[] {
-  return effectiveWorkspaceBindings(option, environment).map(binding => binding.root)
-}
-
-/**
- * The environment an Outliner CLI run or pane gets for one workspace: its
- * folder, and the outline it is bound to when the entry names one.
- */
-export function outlinerEnvironment(
-  workspace: string,
-  bindings: readonly { root: string; outline?: string }[],
-): Record<string, string> {
-  const outline = bindings.find(binding => binding.root === workspace)?.outline
-  return { OUTLINER_WORKSPACE_ROOT: workspace, ...(outline ? { OUTLINER_OUTLINE: outline } : {}) }
+  const configured = workspacesOf(option)
+  return configured.length > 0 ? configured : workspacesOf(environment)
 }
 
 /**

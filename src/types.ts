@@ -1102,6 +1102,8 @@ export interface OutlinerClientRegistration {
   clientId: string;
   role: OutlinerClientRole;
   contextId: string;
+  /** The host outline this pane is on; a hosted outline stamps its own name. */
+  outline?: string;
   navigationProtection?: string | null;
   currentTarget?: OutlinerNavigationTarget;
   previewTarget?: OutlinerNavigationTarget;
@@ -1666,7 +1668,7 @@ export const OUTLINER_HOST_CAPABILITIES = [
   "outlines.adopt",
   /** `outlines.attach`: open an outline by name, creating it when asked (like `tmux new -A`). */
   "outlines.attach",
-  /** `outlines.close`: stop serving an open outline and release its database. */
+  /** `outlines.close`: stop serving an open outline and release its database; live panes reopen it. */
   "outlines.close",
   /** `outlines.create`: a new outline is born only here or through `outlines.attach` with `create`. */
   "outlines.create",
@@ -1674,6 +1676,8 @@ export const OUTLINER_HOST_CAPABILITIES = [
   "outlines.delete",
   /** `outlines.list`: the outlines in the host's `outlines/` folder. */
   "outlines.list",
+  /** `outlines.pane`: the outline a live Herdr pane is registered on. */
+  "outlines.pane",
   /** `ping` reports `host`: its socket, default outline and outline names. */
   "ping.host",
   /** A request may carry `outline: <name>`; the host routes its connection to that outline. */
@@ -1727,6 +1731,13 @@ export interface HostedOutlineSummary {
 export interface HostedOutlineAttachment {
   outline: HostedOutlineSummary;
   created: boolean;
+}
+
+/** `outlines.pane`: the outline and client a live pane is registered on; empty when none is. */
+export interface HostedPaneOutline {
+  outline?: string;
+  clientId?: string;
+  role?: OutlinerClientRole;
 }
 
 /** `outlines.delete`: where the outline's files went (an adopted outline's database is left where it lies). */
@@ -1784,9 +1795,10 @@ export type OutlinerRequestAction =
   | { id: string; action: "ping" }
   /** Answered by the outline host itself (capabilities `outlines.*`); a single-outline service refuses them. */
   | { id: string; action: "outlines.list" }
-  | { id: string; action: "outlines.create"; name: string }
+  | { id: string; action: "outlines.create"; name: string; root?: string }
   | { id: string; action: "outlines.adopt"; path: string; name: string; root?: string }
-  | { id: string; action: "outlines.attach"; name: string; create?: boolean; folder?: string }
+  | { id: string; action: "outlines.attach"; name: string; create?: boolean; root?: string }
+  | { id: string; action: "outlines.pane"; paneId: string; hostname: string }
   | { id: string; action: "outlines.close"; name: string }
   | { id: string; action: "outlines.delete"; name: string }
   | { id: string; action: "blocks.query"; query: BlockSearchQuery; fields?: BlockReadField[] }

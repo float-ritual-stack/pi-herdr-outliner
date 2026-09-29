@@ -2030,15 +2030,26 @@ bun run cli outlines                               # lists through the host when
 
 A request names its outline with `"outline": "<name>"`; without it, it reaches
 the default. Clients pick their outline like `herdr --session <name>`:
-`OUTLINER_OUTLINE=<name>` (or the CLI's `--outline <name>`), else the folder's
-binding in its `client.json` (`{ "workspaceRoot": "/work/fred", "outline": "fred" }`),
-else, while a host runs and the folder has no hash database, the outline named
-after the folder. Ctrl-b u in an unbound folder opens that outline, creating it
-on first open ("Created outline jam-shelf"); **Outliner: choose this folder's
-outline** switches a folder to another. Reads (`list`, `read`, `doctor`) never
-create an outline. Claude's `PI_OUTLINER_MENTIONS_WORKSPACES` entries may bind a
-folder to an outline: `/work/fred=fred`. The single-outline service
-(`bun run server`) is unchanged.
+`OUTLINER_OUTLINE=<name>` (or the CLI's global `outliner --outline <name> <command>`),
+else one folder rule (`resolveFolderOutline` in `src/paths.ts`):
+
+1. the nearest bound folder, walking up: its `client.json`
+   (`{ "workspaceRoot": "/work/fred", "outline": "fred" }`, or a local or remote choice);
+2. otherwise, inside a git work tree, a guess: the repository root's name;
+3. otherwise a guess: the folder's own name;
+4. never a guess for `$HOME`, `/` or a folder directly under `/` (`/tmp`, `/opt`):
+   those need an explicit name, and Ctrl-b u shows the chooser there.
+
+A guess applies once a host is set up (its `outlines/` folder exists), even
+while it restarts, and never takes an outline that records another folder.
+Ctrl-b u opens the guessed outline, creating it on first open ("Created outline
+jam-shelf") with that folder as its root; **Outliner: choose this folder's
+outline** switches a folder to another, and its "New outline here" takes a free
+`-2` suffix rather than attach. Herdr actions invoked from an outliner pane stay
+on that pane's outline. Reads (`list`, `read`, `doctor`) never create an
+outline. Claude's `PI_OUTLINER_MENTIONS_WORKSPACES` entries are folders; their
+outline comes from the same rule. The single-outline service (`bun run server`)
+does not start for a folder that belongs to the host.
 
 ### Outline names
 

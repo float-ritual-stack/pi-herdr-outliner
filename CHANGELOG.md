@@ -7,16 +7,25 @@ This file records notable user-facing changes. The project remains active dogfoo
 - Clients name their outline on the outline host (PIE-457 step 3).
   `OutlinerClient` sends `outline` on every request and subscription, and
   refuses a single-outline service when a name is asked for. The endpoint is
-  `OUTLINER_OUTLINE` (CLI `--outline`), else a folder binding
-  `{ workspaceRoot, outline }` in `client.json`, else, while a host runs, the
-  outline named after the folder. `outlines.attach { name, create, folder? }`
-  opens by name and creates on request (capability `outlines.attach`); Ctrl-b u
-  creates an unbound folder's outline on first open, records the folder in
-  `outlines/<name>.json`, and notifies. A same-named folder elsewhere is not
-  merged into it: it gets the chooser instead. Herdr panes all get
-  `OUTLINER_OUTLINE`; no service pane in host mode. New host requests
-  `outlines.close` and `outlines.delete`; new action **choose-outline** (the
-  switcher). `doctor` shows the host and how the outline was chosen.
+  `OUTLINER_OUTLINE` (global CLI flag `outliner --outline <name> <command>`),
+  else one folder rule (`resolveFolderOutline`): the nearest bound folder
+  walking up (`client.json`), else the git repository root's name, else the
+  folder's name, never `$HOME`, `/` or `/tmp`-like folders (those need a name;
+  Ctrl-b u shows the chooser). A guess applies once a host is set up
+  (`outlines/` exists), also while it restarts: such a client waits for the host
+  and never falls back to a hash database. `outlines.attach { name, create,
+  root? }` and `outlines.create { name, root? }` record the outline's folder in
+  `outlines/<name>.json`; its resources, file links and Inbox use it, and a
+  guess from another same-named folder does not take it. Only the opens that
+  open panes create (not `focus-existing`, not Pi's check). Panes register
+  their outline; Herdr actions invoked from a pane (ensure-detail,
+  focus-existing, link clicks, comment on selection) use it through the host's
+  new `outlines.pane`. Herdr panes all get `OUTLINER_OUTLINE`; no service pane
+  in host mode. New host requests `outlines.close` and `outlines.delete`; new
+  action **choose-outline** (the switcher). `outliner outlines` lists an
+  adopted database once, with `running`/`stopped`/`broken` from the host.
+  `doctor` shows the host and how the outline was chosen. The host exits after
+  5 contained faults within a minute, for systemd to restart it.
 
 - One outline host per user and machine (PIE-457, steps 1 and 2). `bun run host`
   (`src/host-main.ts`) listens on `<state root>/outliner.sock` and serves every

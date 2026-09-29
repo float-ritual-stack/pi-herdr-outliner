@@ -169,7 +169,12 @@ export function renderChooserFrame(chooser: OutlineChooser, width: number, heigh
   return output.slice(0, height);
 }
 
-/** The name "New outline here" gives on a host: the folder's name, with a suffix if taken. */
+/**
+ * The name "New outline here" gives on a host. One rule with the folder-name
+ * guess (`resolveFolderOutline`): both start from the folder's name as a slug.
+ * The guess attaches to an outline that already has the name; this explicit
+ * "new" never does: it takes the first free `-2`, `-3`… suffix instead.
+ */
 export function newHostedOutlineName(workspaceRoot: string, taken: ReadonlySet<string>): string {
   const base = slugifyOutlineName(basename(workspaceRoot));
   if (!taken.has(base)) return base;

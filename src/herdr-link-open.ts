@@ -9,6 +9,7 @@ import {
   pluginInvocationPaneId,
   pluginInvocationWorkspaceRoot,
 } from "./pane-control";
+import { resolveInvocationPaths } from "./outline-host-client";
 import { resolveClientPaths } from "./paths";
 
 if (process.env.HERDR_ENV !== "1") {
@@ -30,10 +31,11 @@ if (!clickedUrl) {
   process.stdout.write(output);
 } else {
   const workspaceRoot = pluginInvocationWorkspaceRoot();
-  const paths = resolveClientPaths({ ...process.env, OUTLINER_WORKSPACE_ROOT: workspaceRoot });
-  const client = createOutlinerClient(paths);
   const paneId = pluginInvocationPaneId();
   if (!paneId) throw new Error("Herdr plugin link context has no source pane");
+  // The link was clicked in a pane: follow it on the outline that pane is on.
+  const paths = await resolveInvocationPaths({ ...process.env, OUTLINER_WORKSPACE_ROOT: workspaceRoot }, paneId);
+  const client = createOutlinerClient(paths);
   const localHostname = hostname();
   const source = (await listLiveClients(client)).find(
     (registration) =>
