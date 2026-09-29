@@ -4,6 +4,14 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+- Rename or remove a page by editing its text. Changing `[page::x]` to
+  `[page::y]` in Detail, Tree, `outliner update` or any client renames the page
+  (`[[x]]` stays an alias, so links keep resolving; renaming back promotes it);
+  deleting the token frees the address. Saves were refused before with "requires
+  pages.rename" / "requires pages.remove". An address another note owns is
+  refused as `[[y]] is already the page of block <id>; pick another name`, and
+  nothing is saved. Work IDs stay immutable.
+
 - Fragment completion searches every note (PIE-424; fixes PIE-295's
   "Searched only 500 blocks"). `fragments.candidates` finds `((note#heading` /
   `((note^anchor` targets across all active notes by the service's fragment

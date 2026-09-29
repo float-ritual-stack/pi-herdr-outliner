@@ -2255,7 +2255,7 @@ Second paragraph`;
 
     expect(store.resolvePageAddress("οσ").block?.id).toBe(owner.id);
     expect(() => store.create("Collision [page::οσ]")).toThrow(
-      `Page address already belongs to block ${owner.id}`,
+      `[[οσ]] is already the page of block ${owner.id}; pick another name`,
     );
   });
   test("does not create on parse or save and creates one stub only on follow", async () => {
@@ -2298,7 +2298,7 @@ Second paragraph`;
     const count = store.readWorkspaceSnapshot().physical.blocks.length;
 
     expect(() => store.create("Collision [page::pie-132]")).toThrow(
-      `Page address already belongs to block ${owner.id}`,
+      `[[pie-132]] is already the Work ID of block ${owner.id}; pick another name`,
     );
     expect(store.readWorkspaceSnapshot().physical.blocks).toHaveLength(count);
     expect(() => store.create("Duplicate [page::One] [page::Two]")).toThrow(
@@ -2326,19 +2326,78 @@ Second paragraph`;
     expect(store.resolvePageAddress("pie").status).toBe("missing");
   });
 
-  test("page removal through text remains guarded for stale edits, agents and Work IDs", () => {
+  test("page removal through text is revision-guarded, open to every author, and keeps Work IDs", () => {
     const store = makeStore();
     store.configureWorkIdPrefix("PIE");
     const page = store.create("Scratch [page::pie] [work-id::PIE-132]");
-    for (const author of ["agent", "system"] as const) {
-      expect(() => store.update(page.id, "Scratch [work-id::PIE-132]", page.revision, {author, actorId: "fixture"})).toThrow("pages.remove");
-    }
-    expect(() => store.update(page.id, "Scratch", page.revision + 1, {author: "user"})).toThrow("Block changed");
+    expect(() => store.update(page.id, "Scratch [work-id::PIE-132]", page.revision + 1, {author: "user"})).toThrow("Block changed");
     expect(() => store.update(page.id, "Scratch", page.revision, {author: "user"})).toThrow("immutable");
     expect(store.require(page.id).text).toBe(page.text);
     expect(store.require(page.id).revision).toBe(page.revision);
     expect(store.resolvePageAddress("pie").block?.id).toBe(page.id);
+
+    const updated = store.update(page.id, "Scratch [work-id::PIE-132]", page.revision, {author: "agent", actorId: "fixture"});
+    expect(updated.text).toBe("Scratch [work-id::PIE-132]");
+    expect(store.resolvePageAddress("pie").status).toBe("missing");
     expect(store.resolvePageAddress("PIE-132").block?.id).toBe(page.id);
+  });
+
+  test("editing [page::…] in the text renames the page and keeps [[old]] resolving", () => {
+    const store = makeStore();
+    const page = store.create("Lantern notes [page::Lantern]");
+    const linker = store.create("See [[Lantern]] for the plan");
+    const before = store.sequence;
+
+    const renamed = store.update(page.id, "Lantern notes [page::Beacon]", page.revision, {author: "agent", actorId: "cli"});
+    expect(renamed.id).toBe(page.id);
+    expect(store.sequence).toBeGreaterThan(before);
+    expect(store.resolvePageAddress("beacon")).toMatchObject({status: "resolved", kind: "page", block: {id: page.id}});
+    expect(store.resolvePageAddress("lantern")).toMatchObject({status: "resolved", kind: "alias", block: {id: page.id}});
+    expect(store.require(linker.id).text).toBe("See [[Lantern]] for the plan");
+
+    // Round trip: the old address is the block's own alias, so it is promoted back.
+    const back = store.update(page.id, "Lantern notes [page::Lantern]", renamed.revision);
+    expect(store.resolvePageAddress("lantern")).toMatchObject({kind: "page", block: {id: page.id}});
+    expect(store.resolvePageAddress("beacon")).toMatchObject({kind: "alias", block: {id: page.id}});
+    expect(back.text).toBe("Lantern notes [page::Lantern]");
+
+    // Case-only edits keep the page and update its label.
+    store.update(page.id, "Lantern notes [page::LANTERN]", back.revision);
+    expect(store.resolvePageAddress("lantern")).toMatchObject({kind: "page", registeredAddress: "LANTERN"});
+  });
+
+  test("a text rename to an address another note owns is refused and nothing is saved", () => {
+    const store = makeStore();
+    store.configureWorkIdPrefix("PIE");
+    const page = store.create("Lantern notes [page::Lantern]");
+    const other = store.create("Harbor notes [page::Harbor]");
+    const work = store.create("Fix the lamp [work-id::PIE-107]");
+    store.addPageAlias(other.id, "Dock");
+
+    expect(() => store.update(page.id, "Lantern notes [page::harbor]", page.revision)).toThrow(
+      `[[harbor]] is already the page of block ${other.id}; pick another name`,
+    );
+    expect(() => store.update(page.id, "Lantern notes [page::Dock]", page.revision)).toThrow(
+      `[[Dock]] is already an alias of block ${other.id}; pick another name`,
+    );
+    expect(() => store.update(page.id, "Lantern notes [page::PIE-107]", page.revision)).toThrow(
+      `[[PIE-107]] is already the Work ID of block ${work.id}; pick another name`,
+    );
+    expect(() => store.renamePageAddress(page.id, "Harbor", page.revision)).toThrow(
+      `[[Harbor]] is already the page of block ${other.id}; pick another name`,
+    );
+    expect(store.require(page.id)).toMatchObject({text: page.text, revision: page.revision});
+    expect(store.resolvePageAddress("lantern")).toMatchObject({kind: "page", block: {id: page.id}});
+    expect(store.resolvePageAddress("harbor").block?.id).toBe(other.id);
+  });
+
+  test("removing [page::…] from the text frees the address for another note", () => {
+    const store = makeStore();
+    const page = store.create("Lantern notes [page::Lantern]");
+    store.update(page.id, "Lantern notes", page.revision, {author: "agent", actorId: "cli"});
+    expect(store.resolvePageAddress("lantern").status).toBe("missing");
+    const taker = store.create("New lantern [page::Lantern]");
+    expect(store.resolvePageAddress("lantern").block?.id).toBe(taker.id);
   });
 
   test("renames pages explicitly while preserving old and added aliases", () => {
@@ -2368,9 +2427,10 @@ Second paragraph`;
 
     const updated = store.update(page.id, "Knowledge revised [page::New Address]", store.require(page.id).revision);
     expect(updated.text).toContain("Knowledge revised");
-    expect(() => store.update(page.id, "Knowledge [page::Third Address]", updated.revision)).toThrow(
-      "changes require pages.rename",
-    );
+    const third = store.update(page.id, "Knowledge revised [page::Third Address]", updated.revision);
+    expect(store.resolvePageAddress("third address")).toMatchObject({kind: "page", block: {id: page.id}});
+    expect(store.resolvePageAddress("new address")).toMatchObject({kind: "alias", block: {id: page.id}});
+    store.renamePageAddress(page.id, "New Address", third.revision);
     expect(store.addPageAlias(page.id, "Knowledge Hub")).toEqual({
       address: "Knowledge Hub",
       normalizedAddress: "knowledge hub",
@@ -2592,7 +2652,7 @@ Second paragraph`;
     store.database.query("DELETE FROM metadata WHERE key = 'page_address_registry_version'").run();
     store.close();
 
-    expect(() => new OutlinerStore(path)).toThrow("Page address already belongs to block");
+    expect(() => new OutlinerStore(path)).toThrow("is already the page of block");
     stores.pop();
     rmSync(directory, { recursive: true, force: true });
   });

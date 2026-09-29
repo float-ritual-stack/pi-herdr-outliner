@@ -1729,6 +1729,36 @@ test("serves mutations and property queries over the local socket", async () => 
     action: "pages.resolve",
     address: "Protocol Page",
   })).toMatchObject({ status: "resolved", kind: "alias", block: { id: followedPage.block!.id } });
+  const beforeTextRename = await client.request<Block>({ action: "get", blockId: followedPage.block!.id });
+  const textRenamed = await client.request<Block>({
+    action: "update",
+    blockId: beforeTextRename.id,
+    text: beforeTextRename.text.replace("[page::Renamed Protocol Page]", "[page::Protocol Handbook]"),
+    expectedRevision: beforeTextRename.revision,
+    mutation: { author: "agent", actorId: "protocol-fixture" },
+  });
+  expect(textRenamed.text).toContain("[page::Protocol Handbook]");
+  expect(await client.request<PageAddressResolution>({
+    action: "pages.resolve",
+    address: "protocol handbook",
+  })).toMatchObject({ status: "resolved", kind: "page", block: { id: followedPage.block!.id } });
+  expect(await client.request<PageAddressResolution>({
+    action: "pages.resolve",
+    address: "Renamed Protocol Page",
+  })).toMatchObject({ status: "resolved", kind: "alias", block: { id: followedPage.block!.id } });
+  const takenRename = server.handle({
+    id: "taken-page-rename",
+    action: "update",
+    blockId: block.id,
+    text: `${block.text} [page::Protocol Handbook]`,
+    expectedRevision: store.require(block.id).revision,
+    mutation: { author: "user" },
+  } as OutlinerRequest);
+  expect(takenRename).toMatchObject({
+    ok: false,
+    error: `[[Protocol Handbook]] is already the page of block ${followedPage.block!.id}; pick another name`,
+  });
+  expect(store.require(block.id).text).not.toContain("[page::");
   const invalidPatch = server.handle({
     id: "invalid-patch",
     action: "properties.patch",
