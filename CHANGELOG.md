@@ -4,6 +4,20 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+- Outlines have names (PIE-457, service side). Each database describes itself
+  in `outline.json` (`name`, `root`, optional `label`, `host`, `created`,
+  `updated`), written by the service on start. A new outline is named by
+  `OUTLINER_OUTLINE_NAME` or its folder's basename, with a numeric suffix on
+  collision; a name is unique in the state root, and a service refuses to start
+  when another outline, running or stopped, has its name. While running, the
+  service publishes `<state root>/by-name/<name>.sock` and `ping` reports
+  `outline` (capability `ping.outline`). `outliner outlines [--json]` lists
+  outlines by scanning; `outline rename` and `outline set-root` change a
+  stopped outline explicitly, and `OUTLINER_OUTLINE=<name>` starts the service
+  on a moved outline's existing database. Starting by folder at a root another
+  outline already claims is refused instead of creating a second database.
+  Clients still address local outlines by hash until they resolve names.
+
 - Who moved, trashed or restored a block: `move`, `delete` and `trash.restore`
   accept an optional `mutation` (capability `mutations.provenance`), recorded
   like an update's in the change feed's `actor` and in activity, as `move`,

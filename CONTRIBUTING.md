@@ -69,9 +69,14 @@ source evidence or distinguish authored glyphs from controls.
   resolving context themselves.
 - `pi-extension/index.ts` is a host adapter, not a second implementation of the service.
 - `src/known-outlines.ts` owns whether a folder has an outline (`detectOutline`)
-  and the read-only list of outlines on this machine (`listKnownOutlines`); the
-  outline chooser and the launcher use it. `writeClientConfig` in `src/paths.ts`
+  and the read-only list of outlines on this machine (`listKnownOutlines`,
+  reading each database's `outline.json`); the outline chooser, the launcher and
+  `outliner outlines` use it. `writeClientConfig` in `src/paths.ts`
   is the one writer of a project `client.json`.
+- `src/outline-names.ts` owns every write of an outline's identity: the
+  descriptor, the `by-name/<name>.sock` link, `OUTLINER_OUTLINE` resolution for
+  the service, and `outline rename|set-root`. A name addresses an outline; the
+  hash directory is storage. Derive lists of outlines by scanning; never keep one.
 - `src/work-tools.ts` owns agent workboard operations (create, stage/set, PR delivery
   and delivery keys, completion with proof across all of an item's deliveries,
   delivery stage, note sections, item bodies) over the existing RPCs. The CLI
@@ -88,6 +93,9 @@ Before adding a feature, look for the renderer, component or action that already
 
 Resolve the endpoint through `resolveClientPaths()` in `src/paths.ts`, so the
 CLI and agent requests use the same project configuration and environment.
+`bun src/cli.ts outlines` lists every outline in the state root by name, with
+its status, root, by-name socket and storage directory (`--json` for agents).
+While a service runs, `<state root>/by-name/<name>.sock` reaches it.
 Remote clients connect to the configured SSH-forwarded socket; see
 [remote client mode](README.md#remote-client-mode).
 

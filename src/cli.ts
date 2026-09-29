@@ -9,7 +9,9 @@ import {
 } from "./block-focus";
 import { createOutlinerClient, OutlinerRequestError, type RequestInput } from "./client";
 import { requireClientIdForRole } from "./client-target";
-import { resolveClientPaths } from "./paths";
+import { resolveClientConfigRoot, resolveClientPaths, resolveStateRoot } from "./paths";
+import { listKnownOutlines, type KnownOutline } from "./known-outlines";
+import { renameOutline, setOutlineRoot } from "./outline-names";
 import { navigateOutlinerLink, parseOutlinerLinkUri, resolveOutlinerLinkTarget } from "./outliner-links";
 import { blockDisplayTitle } from "./references";
 import type { BlockActivityKind, BlockReadField, BlockSearchQuery, CaptureReceipt, MutationProvenance, RoadmapItemCreateInput } from "./types";
@@ -30,7 +32,54 @@ if(process.argv[2]==='doctor'){
  console.log(process.argv.includes('--json')?JSON.stringify(report,null,2):report.lines.join('\n'));
  process.exit(report.ok?0:1);
 }
+if (process.argv[2] === "outlines" || process.argv[2] === "outline") {
+  process.exit(await runOutlinesCommand(process.argv[2], process.argv.slice(3)));
+}
 const paths = resolveClientPaths();
+
+function describeOutline(outline: KnownOutline): string {
+  const name = outline.name ?? (outline.descriptor === "missing" ? "(no descriptor yet)" : outline.descriptor === "invalid" ? "(descriptor unreadable)" : "(no name)");
+  const lines = [`${name}  ${outline.status}  ${outline.location}${outline.label !== outline.name ? `  "${outline.label}"` : ""}`];
+  lines.push(`  root     ${outline.root ?? "unknown"}`);
+  if (outline.name) lines.push(`  address  ${outline.byNameSocket}`);
+  lines.push(`  socket   ${outline.socket}`);
+  if (outline.stateDir) lines.push(`  storage  ${outline.stateDir}`);
+  for (const alias of outline.aliases) lines.push(`  alias    ${alias}`);
+  return lines.join("\n");
+}
+
+/**
+ * `outlines [--json]` lists outlines by scanning the state root and client
+ * configs; `outline set-root|rename` change a descriptor explicitly. None of
+ * them needs the invoking folder's own outline, so they run before it resolves.
+ */
+async function runOutlinesCommand(group: "outlines" | "outline", args: string[]): Promise<number> {
+  const stateRoot = resolveStateRoot();
+  try {
+    if (group === "outlines") {
+      const { values } = parseArgs({ args, strict: true, options: { json: { type: "boolean" } } });
+      const outlines = await listKnownOutlines({ stateRoot, configRoot: resolveClientConfigRoot() });
+      if (values.json) console.log(JSON.stringify({ stateRoot, outlines }, null, 2));
+      else console.log(outlines.length ? outlines.map(describeOutline).join("\n\n") : `No outlines in ${stateRoot}.`);
+      return 0;
+    }
+    const [operation, ...operands] = args;
+    const { values, positionals } = parseArgs({ args: operands, allowPositionals: true, strict: true, options: { json: { type: "boolean" } } });
+    let descriptor;
+    if (operation === "set-root" && positionals.length === 2) {
+      descriptor = await setOutlineRoot({ stateRoot, name: positionals[0]!, root: positionals[1]! });
+    } else if (operation === "rename" && positionals.length === 2) {
+      descriptor = await renameOutline({ stateRoot, from: positionals[0]!, to: positionals[1]! });
+    } else {
+      throw new Error("outline expects: set-root <name> <path> | rename <old> <new>");
+    }
+    console.log(values.json ? JSON.stringify(descriptor, null, 2) : `${descriptor.name}  ${descriptor.root}`);
+    return 0;
+  } catch (error) {
+    console.error(`error: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+}
 /** `--author` for writes and filters: who made the change, as the service records it. */
 function parseAuthor(value: string | undefined): "user" | "agent" | "system" {
   if (value === "user" || value === "agent" || value === "system") return value;

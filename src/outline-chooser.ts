@@ -97,7 +97,7 @@ export function chooserMouse(chooser: OutlineChooser, sequence: string, width: n
 
 function describe(outline: KnownOutline): { title: string; detail: string } {
   const status = outline.status === "running" ? "\x1b[32mrunning\x1b[0m" : "\x1b[2mstopped\x1b[0m";
-  const where = outline.root ?? `root unknown · ${outline.stateKey ?? outline.socket}`;
+  const where = `${outline.name && outline.name !== outline.label ? `${outline.name} · ` : ""}${outline.root ?? `root unknown · ${outline.stateKey ?? outline.socket}`}`;
   const aliases = outline.aliases.length ? ` · also ${outline.aliases.map(alias => sanitizeDynamicText(alias)).join(", ")}` : "";
   return {
     title: `${sanitizeDynamicText(outline.label)}  ${status}${outline.location === "remote" ? "  \x1b[2mremote socket\x1b[0m" : ""}`,

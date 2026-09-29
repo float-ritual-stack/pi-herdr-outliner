@@ -413,10 +413,35 @@ Persistence, protocol, and rendering do not depend on the agent process survivin
 ${OUTLINER_STATE_DIR:-~/.local/state/pi-herdr-outliner}/<workspace-hash>/
 ```
 
-The directory contains the SQLite database, Unix socket, and remembered
-**service-pane** metadata. Every process must resolve the same workspace root;
-Herdr pane commands explicitly pass the invoking pane's foreground working
-directory to new plugin panes.
+The directory contains the SQLite database, Unix socket, the outline
+descriptor, and remembered **service-pane** metadata. Every process must resolve
+the same workspace root; Herdr pane commands explicitly pass the invoking pane's
+foreground working directory to new plugin panes.
+
+The hash is storage, not identity. An outline is addressed by the **name** in
+its descriptor, `outline.json` beside `outliner.sqlite`
+(`{ name, root, label?, host, created, updated }`). Only the service and the
+explicit `outliner outline rename|set-root` commands write it
+([`src/outline-names.ts`](../src/outline-names.ts)); reading and listing it
+belong to [`src/known-outlines.ts`](../src/known-outlines.ts). On start the
+service:
+
+1. resolves its state directory: by `OUTLINER_OUTLINE=<name>` (the database
+   whose descriptor has that name) or, as before, by the root's hash. A root
+   that another descriptor already claims is refused rather than given a second
+   database;
+2. decides its name (the existing descriptor's, else `OUTLINER_OUTLINE_NAME`,
+   else the root's basename with a numeric suffix on collision) and refuses when
+   another descriptor in the state root has it, live or stopped;
+3. after it owns the database and socket, writes the descriptor atomically with
+   the current root and points `<state root>/by-name/<name>.sock` at its socket,
+   replacing only a link to itself or to a socket nobody serves.
+
+A clean stop removes the by-name link only if it still points at this service.
+`ping` adds `outline: { name, descriptorPath, byNameSocket }` under the
+`ping.outline` capability. `listKnownOutlines` derives every list of outlines by
+scanning descriptors and client configs; no registry is kept by hand.
+Clients still resolve local outlines by hash in this slice.
 
 [`resolveClientPaths()`](../src/paths.ts) adds an explicit local/remote endpoint
 mode without changing canonical workspace storage paths. Normal configuration

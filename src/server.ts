@@ -46,6 +46,7 @@ import {
   OUTLINER_CAPABILITIES,
   OUTLINER_MIN_CLIENT_PROTOCOL,
   OUTLINER_PROTOCOL_VERSION,
+  type OutlinerServiceOutline,
   type OutlinerViewAddress,
   type NavigationLinkState,
   type OutlinerNavigationResolution,
@@ -179,6 +180,7 @@ export class OutlinerServer {
   private readonly attentionTimers = new Map<string, Timer>();
   private readonly workflows: WorkflowManager;
   private readonly hostname = systemHostname();
+  private outline: OutlinerServiceOutline | undefined;
 
   constructor(
     readonly store: OutlinerStore,
@@ -193,6 +195,11 @@ export class OutlinerServer {
     this.noteRepository = new NoteAssistanceRepository(store);
     // Baseline before accepting edits or awaiting provider configuration.
     this.noteRepository.initialize();
+  }
+
+  /** The named outline this service runs, reported by `ping`. */
+  setOutline(outline: OutlinerServiceOutline | undefined): void {
+    this.outline = outline;
   }
 
   async start(): Promise<void> {
@@ -1449,7 +1456,7 @@ export class OutlinerServer {
           break;
         }
         case "ping":
-          result = { status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION, minClientProtocol: OUTLINER_MIN_CLIENT_PROTOCOL, capabilities: [...OUTLINER_CAPABILITIES], location:{hostname:this.hostname,workspaceRoot:this.store.workspaceRoot,database:this.store.database.filename,stateDirectory:dirname(this.store.database.filename)} };
+          result = { status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION, minClientProtocol: OUTLINER_MIN_CLIENT_PROTOCOL, capabilities: [...OUTLINER_CAPABILITIES], location:{hostname:this.hostname,workspaceRoot:this.store.workspaceRoot,database:this.store.database.filename,stateDirectory:dirname(this.store.database.filename)}, ...(this.outline ? { outline: { ...this.outline } } : {}) };
           break;
         case "blocks.query":
           result = request.fields === undefined

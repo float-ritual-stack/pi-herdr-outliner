@@ -5,38 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OutlinerClient, type OutlinerWatcher } from "../src/client";
 import { resolvePaths } from "../src/paths";
+import { launchService as launchScratchService, scratchServiceEnv } from "./service-process";
 import { TUI_RESOURCE_PRESENTATION_CONTEXT } from "../src/resource-presentation";
 import type { InternResourceReceipt, ResourceSource } from "../src/types";
 
 function launchService(root: string) {
-  const child = Bun.spawn([process.execPath, join(import.meta.dir, "../src/server-main.ts")], {
-    env: {
-      PATH: process.env.PATH,
-      OUTLINER_WORKSPACE_ROOT: join(root, "project"),
-      OUTLINER_STATE_DIR: join(root, "state"),
-      OUTLINER_REMOTE: "0",
-      XDG_CONFIG_HOME: join(root, "config"),
-    },
-    stdout: "pipe", stderr: "pipe", stdin: "ignore",
-    timeout: 15_000, killSignal: "SIGKILL",
-  });
-  const stderr = new Response(child.stderr).text();
-  async function startup(): Promise<boolean> {
-    const reader = child.stdout.getReader();
-    const decoder = new TextDecoder();
-    let output = "";
-    try {
-      for (;;) {
-        const chunk = await reader.read();
-        if (chunk.done) return false;
-        output += decoder.decode(chunk.value, { stream: true });
-        if (output.includes('"status":"ready"')) return true;
-      }
-    } finally {
-      reader.releaseLock();
-    }
-  }
-  return { child, stderr, startup };
+  const service = launchScratchService(scratchServiceEnv(root));
+  return { ...service, startup: async () => (await service.startup()) !== null };
 }
 
 for (const phase of ["startup", "shutdown"] as const) {
