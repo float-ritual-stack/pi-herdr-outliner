@@ -43,7 +43,8 @@ const result = await runHerdrScenario({
   },
   async run(s) {
     const terminal = await s.attachClient();
-    await terminal.resize(180, 55);
+    // Wide enough that Detail's status line shows a whole refresh failure.
+    await terminal.resize(400, 55);
     const detail = s.panes.detail;
     const destination = (await s.registrations()).find(
       (c) => c.runtime?.paneId === detail,
@@ -106,14 +107,25 @@ const result = await runHerdrScenario({
         25000,
       );
       // A failed refresh reloads Detail; wait out loading, then scan down a line
-      // at a time (a key can move the reading focus without scrolling).
-      await s.waitFor("Detail reloaded after refresh", () => s.visible(detail), (f) => !f.includes("Loading target"), 20000);
-      await s.keys(detail, ...Array(80).fill("up"));
-      for (let step = 0, frame = await s.visible(detail); !frame.includes(message) && step < 400; step++, frame = await s.visible(detail)) {
-        if (frame.includes("Loading target")) await Bun.sleep(100);
+      // at a time (a key can move the reading focus without scrolling). The
+      // message may wrap, so compare with whitespace collapsed.
+      const shows = (frame: string) => frame.replace(/\s+/g, " ").includes(message);
+      // First the status line the refresh leaves; then the document's Local status.
+      let seen = await s.waitFor("refresh status", () => s.visible(detail), shows, 5000).then(() => true, () => false);
+      if (!seen) {
+        await s.waitFor("Detail reloaded after refresh", () => s.visible(detail), (f) => !f.includes("Loading target"), 20000);
+        await s.keys(detail, ...Array(80).fill("up"));
+      }
+      const scanned: string[] = [];
+      for (let step = 0; step < 400 && !seen; step++) {
+        const frame = await s.visible(detail);
+        scanned.push(frame);
+        if (shows(frame)) seen = true;
+        else if (frame.includes("Loading target")) await Bun.sleep(100);
         else await s.keys(detail, "down");
       }
-      await s.waitVisible(detail, message);
+      if (!seen) await s.record("unseen-failure-scan", { message, frames: scanned });
+      assert.ok(seen, `Detail shows the refresh failure: ${message}`);
     };
     installation.providers.jira.enabled = false;
     await writeFile(configPath, JSON.stringify(installation));
