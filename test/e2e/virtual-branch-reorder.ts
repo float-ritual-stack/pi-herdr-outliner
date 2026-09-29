@@ -49,7 +49,15 @@ const result = await runHerdrScenario({
     await s.waitFor("pointer selects nested candidate", s.registrations, entries => entries.some(entry =>
       entry.runtime?.paneId === tree && entry.previewTarget?.kind === "block" &&
       entry.previewTarget.blockId === second.id));
+    // Compact chrome (the default since PIE-385) hides breadcrumbs; show them to
+    // confirm the nested appearance is selected, then return to compact.
+    const density = async (label: string) => {
+      await s.keys(tree, "?"); await s.text(tree, label); await s.keys(tree, "enter");
+    };
+    await density("Expanded layout");
     await s.waitVisible(tree, "View index › ◇ Candidate list › ◇ BRAVO candidate");
+    await density("Compact layout");
+    await s.waitFor("compact Tree", () => s.visible(tree), text => !text.includes("View index › ◇"));
     await s.keys(tree, "alt+down");
     await s.waitVisible(tree, "Moved down within virtual branch");
     assert.deepEqual(await ordered(), [first.id, second.id]);

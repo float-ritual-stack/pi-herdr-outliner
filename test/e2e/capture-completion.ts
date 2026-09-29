@@ -11,7 +11,9 @@ const result=await runHerdrScenario({name:'capture-completion',commandKeys:[{key
  await s.revealTree(s.panes.tree,reader.id);await s.keys(s.panes.tree,'enter');await s.waitVisible(s.panes.detail,'READER STAYS');
  const screen=(text:string)=>s.waitFor(text,terminal.visible,f=>f.includes(text));
  const closed=()=>s.waitFor('capture closed',terminal.visible,f=>!f.includes('Quick capture'));
- const open=async()=>{await closed();await terminal.write('\x02');await screen('PREFIX');await terminal.write('C');await screen('Quick capture');};
+ // A narrow client collapses Herdr's sidebar («), which hides the PREFIX cue;
+ // the prefix and the command still arrive in order on the same terminal.
+ const open=async()=>{await closed();await terminal.write('\x02');await s.waitFor('PREFIX',terminal.visible,f=>f.includes('PREFIX')||f.includes('«'));await terminal.write('C');await screen('Quick capture');};
  const paste=(text:string)=>terminal.write(`\x1b[200~${text}\x1b[201~`);
  await open();await paste('CAPTURE COMPLETION\n\nPage [[alpha-capture');await screen('References 1/1');
  await terminal.write('\r');await screen('[[alpha-capture]]');

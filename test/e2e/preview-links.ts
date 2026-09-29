@@ -38,7 +38,8 @@ const result=await runHerdrScenario({
   const terminal=await session.attachClient();
   const point=(text:string,label:string)=>{
    const lines=text.split('\n');const row=lines.findIndex(line=>line.includes(label));
-   const anchorText=text.includes('Inbox agent')?'Inbox agent':'Outliner  ';
+   // Compact chrome (PIE-385): the Tree header reads "● Tree [Note] …" in both frames.
+   const anchorText=text.includes('Inbox agent')?'Inbox agent':'Tree [Note]';
    const anchor=lines.findIndex(line=>line.includes(anchorText));
    if(row<0||anchor<0)return null;
    const column=visibleWidth(lines[row]!.slice(0,lines[row]!.indexOf(label)))+1;

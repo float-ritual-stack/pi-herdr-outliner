@@ -11,14 +11,17 @@ const result=await runHerdrScenario({name:composed?'local-markdown-composed':'lo
  const terminal=await s.attachClient();await terminal.resize(220,65);
  const target=await s.client.request<Block>({action:'create',text:'FILE LINK TARGET [page::FILE LINK TARGET]\n\nArrived from Markdown.'});
  const source=await s.client.request<Block>({action:'create',text:'DAILY NOTE\n\nPersonal thoughts before the reference.\n\nRead [file::project.md] alongside this note.\n\nContinue writing here.'});
- await s.revealTree(s.panes.tree,source.id);await s.keys(s.panes.tree,'enter');await s.waitVisible(s.panes.detail,'Continue writing here.');await s.focus(s.panes.detail);
+ // Enter keeps Tree focus since PIE-364; Alt+Enter opens and focuses Detail.
+ await s.revealTree(s.panes.tree,source.id);await s.keys(s.panes.tree,'alt+enter');await s.waitVisible(s.panes.detail,'Continue writing here.');await s.focus(s.panes.detail);
+ if(composed)await s.waitFor('Detail region focused',s.registrations,entries=>entries.some(c=>c.runtime?.paneId===s.panes.detail&&c.focusedRegion==='detail'));
  const detail=(await s.registrations()).find(c=>c.runtime?.paneId===s.panes.detail)!;
  const click=async(label:string)=>{
   const frame=await s.waitFor('native '+label,terminal.visible,t=>t.includes(label)),lines=frame.split('\n');
   // Choose the Detail occurrence to the right of a same-named Tree row.
-  const currentRow=lines.findIndex(line=>line.includes('Current · DAILY NOTE'));
+  // Compact chrome (PIE-385) puts the title in the frame; the header reads "● Current".
+  const currentRow=lines.findIndex(line=>/[●○] Current( ·| \[)/u.test(line));
   assert.ok(currentRow>=0);
-  const currentCol=visibleWidth(lines[currentRow]!.slice(0,lines[currentRow]!.indexOf('Current · DAILY NOTE')))-2;
+  const currentCol=visibleWidth(lines[currentRow]!.slice(0,lines[currentRow]!.search(/[●○] Current( ·| \[)/u)))-2;
   const match=lines.flatMap((line,row)=>line.includes(label)?[{row,col:visibleWidth(line.slice(0,line.lastIndexOf(label)))+2}]:[])
    .filter(point=>composed?point.col>=currentCol:point.row>=currentRow)
    .sort((a,b)=>b.col-a.col||b.row-a.row)[0]!;

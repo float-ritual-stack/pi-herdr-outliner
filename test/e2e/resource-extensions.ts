@@ -105,12 +105,14 @@ const result = await runHerdrScenario({
           !!d.remoteStatus.lastError?.includes(message),
         25000,
       );
-      for (
-        let page = 0;
-        page < 30 && !(await s.visible(detail)).includes(message);
-        page++
-      )
-        await s.keys(detail, "down", "down", "down");
+      // A failed refresh reloads Detail; wait out loading, then scan down a line
+      // at a time (a key can move the reading focus without scrolling).
+      await s.waitFor("Detail reloaded after refresh", () => s.visible(detail), (f) => !f.includes("Loading target"), 20000);
+      await s.keys(detail, ...Array(80).fill("up"));
+      for (let step = 0, frame = await s.visible(detail); !frame.includes(message) && step < 400; step++, frame = await s.visible(detail)) {
+        if (frame.includes("Loading target")) await Bun.sleep(100);
+        else await s.keys(detail, "down");
+      }
       await s.waitVisible(detail, message);
     };
     installation.providers.jira.enabled = false;

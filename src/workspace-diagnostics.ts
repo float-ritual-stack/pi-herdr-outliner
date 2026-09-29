@@ -27,7 +27,7 @@ export async function inspectWorkspaceConnection(env:NodeJS.ProcessEnv=process.e
  const finish=(ok:boolean):WorkspaceReport=>({ok,entries,lines:entries.map(entry=>sanitizeDynamicText(entry.kind==='section'?`\n${entry.title}`:entry.kind==='note'?entry.text:`${entry.label}: ${entry.value}${entry.note?` (${entry.note})`:''}`))});
  section('Client');
  field('Workspace',resolvePaths(env).workspaceRoot);
- field('Client host',hostname());field('Bun',process.execPath);field('Client protocol',`${OUTLINER_PROTOCOL_VERSION} (needs service ≥ ${OUTLINER_MIN_SERVICE_PROTOCOL})`);field('Config',resolveClientConfigPath(env));
+ field('Client host',hostname());field('Bun',process.execPath);field('Client protocol',String(OUTLINER_PROTOCOL_VERSION),`needs service ≥ ${OUTLINER_MIN_SERVICE_PROTOCOL}`);field('Config',resolveClientConfigPath(env));
  let paths;
  try{paths=resolveClientPaths(env);}catch(error){note(`Configuration error: ${error instanceof Error?error.message:String(error)}`);note('Fix the named configuration before launching; no state or database was created.');return finish(false);}
  section('Connection');

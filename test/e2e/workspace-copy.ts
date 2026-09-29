@@ -98,7 +98,7 @@ const result=await runHerdrScenario({
     await focusField(tree,'Local database');
     await copied(()=>session.keys(tree,'c'),service.location!.database);
     await session.keys(tree,'escape');
-    await session.waitFor('returned to Tree',()=>session.visible(tree),frame=>!frame.includes('Workspace and connection')&&frame.includes('Outliner'));
+    await session.waitFor('returned to Tree',()=>session.visible(tree),frame=>!frame.includes('Workspace and connection')&&/[●○] Tree \[/u.test(frame));
     assert.deepEqual(session.database.query('SELECT id,text,revision FROM blocks ORDER BY id').all(),baseline);
 
     // Feed the terminal clipboard payload into the real editor and verify exact persisted bytes.

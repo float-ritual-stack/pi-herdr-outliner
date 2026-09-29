@@ -1115,7 +1115,9 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
         const tree = await open("outliner", ownedPanes.launcher);
         await poll({ label: "remote Tree first populated frame", timeoutMs: STARTUP_TIMEOUT_MS,
           signal: abort.signal, artifacts, read: () => paneRead(tree, "visible", "text"),
-          accept: text => text.includes("Workspace") && text.includes("Notes"),
+          // A populated Tree shows the root and at least one child row; the seeded
+          // documentation can push later roots such as Notes below a short pane.
+          accept: text => text.includes("Workspace") && /\n\s+[▾▸•◇] \S/u.test(text),
         });
         const firstTreeFrameMs = performance.now() - started;
         const detail = await open("detail", tree);
