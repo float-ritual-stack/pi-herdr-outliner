@@ -23,6 +23,8 @@ const result=await runHerdrScenario({name:'inbox-routing',allowInboxAgent:true,a
  await session.waitFor('directed reconsideration',state,value=>!value.current&&value.results.some(item=>item.id!==receipt.id&&item.sourceId===filler.block.id),150000);
  const retry=(await state()).results.find(item=>item.id!==receipt.id&&item.sourceId===filler.block.id)!;
  assert.equal(retry.state,'applied');assert.equal(retry.routing?.route,'editorial');assert.equal(retry.attempt?.trigger,'reconsider');
+ // The Tree list refreshes after the service records the retry; move up only once it shows both.
+ await session.waitVisible(pane,'Recent results: 1–2');
  await session.keys(pane,'up');await session.keys(pane,'A');await session.waitVisible(pane,'Route: editorial');await session.checkpoint('03-steering-escalates-to-editor');
  const shopping=await create('routing-shopping','Grocery list\n- milk\n- coffee\n- rice');
  await session.waitFor('useful short note',state,value=>!value.current&&value.results.some(item=>item.sourceId===shopping.block.id),120000);
