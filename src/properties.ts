@@ -1,4 +1,5 @@
 import { protectedCodeRanges } from "./markdown-code-ranges";
+import { blockReferenceEnvelopeRanges } from "./reference-envelopes";
 import type {
   BlockProperty,
   PropertyFilter,
@@ -335,11 +336,10 @@ function hashtagCandidates(
   if (!text.includes("#")) return [];
   // Tags are prose, not the fragments or labels inside a link. Property values
   // already have an owner; a hash inside one must not create another property.
-  const excluded = [...literalRanges, ...protectedCodeRanges(text), ...properties];
+  const excluded = [...literalRanges, ...protectedCodeRanges(text), ...properties, ...blockReferenceEnvelopeRanges(text)];
   for (const pattern of [
     createPropertyPattern(),
     /\[\[[^\]\r\n]*\]\]/g,
-    /\(\((?:(?!\)\))[\s\S])*\)\)/g,
     /!?\[[^\]\r\n]*\]\((?:\\.|[^\\)\r\n])*\)/g,
     /^[ \t]{0,3}\[[^\]\r\n]+\]:[^\r\n]*/gm,
     /\b(?:[a-z][a-z0-9+.-]*:\/\/|www\.)[^\s<>]+/gi,

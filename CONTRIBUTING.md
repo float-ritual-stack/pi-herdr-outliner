@@ -69,6 +69,12 @@ source evidence or distinguish authored glyphs from controls.
   per-document limit, the read budget) and what each failure is called.
   `fragments.read` and `transclusions.read` serve it; Detail's embeds use its
   limit and wording. A client asks rather than re-deriving slices.
+- `src/reference-envelopes.ts` owns where a `((…))` ends: parentheses inside a
+  label or title balance, so `((uuid|Label (x)))` and `((Title (x)))` close
+  after `(x)`. `src/references.ts` parses with it, and envelope checks (links,
+  hashtags, completion) use `blockReferenceEnvelopeRanges`. Resolved text is
+  never re-parsed to find a reference: `linkOutlinerDocument` places each
+  presented `((Title))` by the authored text around it.
 - `src/fragment-search.ts` owns fragment completion across every note
   (`fragments.candidates`) and `fragments.ensure` writes a heading's anchor.
   Every client's `((note#…` / `((note^…` completion asks it (Detail, Tree,

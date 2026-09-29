@@ -1,4 +1,5 @@
 import type { PageAddressMatch } from "./types";
+import { referenceEnvelopeEnd } from "./reference-envelopes";
 import { workIdReferences } from "./work-ids";
 
 export type CompletionTargetKind = "page" | "block" | "file";
@@ -105,7 +106,10 @@ export function completionTargetAtCursor(
 
     if (start < 0) continue;
     if (!target || start > target.start) {
-      const closing = line.indexOf(syntax.closing, end);
+      // A block title may carry its own parentheses: `((Rough edges (x)))` closes after `(x)`.
+      const closing = syntax.kind === "block"
+        ? Math.max(-1, referenceEnvelopeEnd(line, start + syntax.opening.length, true, end) - syntax.closing.length)
+        : line.indexOf(syntax.closing, end);
       const intervening = closing >= 0 ? line.slice(end, closing) : "";
       const replacementEnd = closing >= 0 && !/[\[\]\r\n]|\(\(|\)\)/.test(intervening)
         ? closing + syntax.closing.length : end;

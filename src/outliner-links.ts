@@ -626,61 +626,61 @@ function renderLinkSpans(
 }
 
 
-function resolvedReferenceEnd(text: string, start: number): number {
-  let depth = 1;
-  let cursor = start + 2;
-  while (cursor < text.length - 1) {
-    if (text.startsWith("((", cursor)) {
-      depth += 1;
-      cursor += 2;
-      continue;
-    }
-    if (text.startsWith("))", cursor)) {
-      depth -= 1;
-      cursor += 2;
-      if (depth === 0) return cursor;
-      continue;
-    }
-    cursor += 1;
-  }
-  return -1;
-}
-
+/**
+ * Map each authored reference to its presentation in resolved text. Only the
+ * references change; the text between them is authored and unchanged, so it
+ * places each presented `((Title))` even when the title has its own `))`,
+ * as in `((Smile :)))`. Titles are never re-parsed as reference syntax.
+ */
 function resolvedReferenceSpans(rawText: string, resolvedText: string): LinkSpan[] {
-  const spans: LinkSpan[] = [];
-  let rawCursor = 0;
-  let resolvedCursor = 0;
-  for (const reference of blockReferenceOccurrences(rawText)) {
-    resolvedCursor += reference.start - rawCursor;
+  const references = blockReferenceOccurrences(rawText);
+  const between = references.map((reference, index) =>
+    rawText.slice(reference.end, references[index + 1]?.start ?? rawText.length));
+  const leading = rawText.slice(0, references[0]?.start ?? rawText.length);
+  // Resolved text may be clipped: authored text that runs to its end still matches.
+  const follows = (literal: string, at: number) => resolvedText.startsWith(literal, at) ||
+    (resolvedText.length - at < literal.length && literal.startsWith(resolvedText.slice(at)));
+  if (!follows(leading, 0)) return [];
+  const lineEnd = (from: number) => {
+    const ends = [resolvedText.indexOf("\n", from), resolvedText.indexOf("\r", from)].filter(end => end >= 0);
+    return ends.length ? Math.min(...ends) : resolvedText.length;
+  };
+  const failed = new Set<string>();
+  const place = (index: number, start: number): LinkSpan[] | null => {
+    const reference = references[index];
+    if (!reference || start >= resolvedText.length) return [];
+    if (failed.has(`${index}:${start}`)) return null;
     const authored = rawText.slice(reference.start, reference.end);
-    if (resolvedText.startsWith(authored, resolvedCursor)) {
-      if (reference.label !== undefined) {
-        spans.push({
-          start: resolvedCursor,
-          end: resolvedCursor + authored.length,
-          uri: null,
-          presentation: `${reference.label} · Missing target`,
-        });
-      }
-      rawCursor = reference.end;
-      resolvedCursor += authored.length;
-      continue;
+    const candidates: Array<{end: number; span: LinkSpan | null}> = [];
+    if (resolvedText.startsWith(authored, start)) {
+      candidates.push({end: start + authored.length, span: reference.label === undefined ? null : {
+        start, end: start + authored.length, uri: null, presentation: `${reference.label} · Missing target`,
+      }});
     }
-    if (!resolvedText.startsWith("((", resolvedCursor)) return [];
-    const end = resolvedReferenceEnd(resolvedText, resolvedCursor);
-    if (end < 0) return [];
-    spans.push({
-      start: resolvedCursor,
-      end,
-      uri: outlinerLinkUri("block", reference.blockId, {
-        fragmentId: reference.fragmentId,
-      }),
-      presentation: resolvedText.slice(resolvedCursor + 2, end - 2),
-    });
-    rawCursor = reference.end;
-    resolvedCursor = end;
-  }
-  return spans;
+    if (resolvedText.startsWith("((", start)) {
+      const limit = lineEnd(start);
+      for (let close = resolvedText.indexOf("))", start + 2); close >= 0 && close + 2 <= limit;
+        close = resolvedText.indexOf("))", close + 1)) {
+        candidates.push({end: close + 2, span: {
+          start, end: close + 2,
+          uri: outlinerLinkUri("block", reference.blockId, {fragmentId: reference.fragmentId}),
+          presentation: resolvedText.slice(start + 2, close),
+        }});
+      }
+    }
+    for (const {end, span} of candidates) {
+      const literal = between[index]!;
+      if (!follows(literal, end)) continue;
+      const rest = place(index + 1, end + literal.length);
+      if (rest) return span ? [span, ...rest] : rest;
+    }
+    // A presentation cut off by the end of clipped text links nothing, and costs nothing earlier.
+    if (lineEnd(start) === resolvedText.length &&
+      (resolvedText.startsWith("((", start) || authored.startsWith(resolvedText.slice(start)))) return [];
+    failed.add(`${index}:${start}`);
+    return null;
+  };
+  return place(0, leading.length) ?? [];
 }
 
 export function linkOutlinerMarkdown(
