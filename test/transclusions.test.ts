@@ -113,6 +113,30 @@ test("depth is bounded (the caller's depth clamped to the ceiling); the per-docu
   expect(statuses).toContain("budget");
 });
 
+test("embed syntax inside fenced or indented code is shown as written: no load, no dependency, no budget", () => {
+  const guide = block("guide001", [
+    "How to embed",
+    "## Syntax ^syntax",
+    "!((leaf0001))",
+    "```md",
+    "!((ghost001))",
+    "```",
+    "",
+    "    !((ghost002^t-ghost))",
+    "",
+    "## After",
+  ].join("\n"));
+  const loaded: string[] = [];
+  const byId = outline([guide, block("leaf0001", "Leaf")]);
+  const r = readTransclusions(id => { loaded.push(id); return byId(id); }, [{ blockId: "guide001" }, { blockId: "guide001", fragmentId: "syntax" }]);
+  const [whole, section] = r.results;
+  expect(section).toMatchObject({ status: "ready", kind: "fragment", fragment: { startLine: 1, endLine: 8 } });
+  for (const node of [whole!, section!]) expect(node.embeds!.map(e => [e.blockId, e.status])).toEqual([["leaf0001", "ready"]]);
+  expect(new Set(r.dependencies)).toEqual(new Set(["guide001", "leaf0001"]));
+  expect(loaded).not.toContain("ghost001");
+  expect(loaded).not.toContain("ghost002");
+});
+
 test("missing, trashed, missing and duplicate fragments, and a virtual branch are said, not guessed", () => {
   const view = block("view0001", "Open steps\n[type::virtual-branch] [query::status=open]", { properties: [{ key: "type", value: "virtual-branch" }] } as never);
   const load = outline([block("gone0001", "Gone", { effectiveDeletedRootId: "gone0001" } as never), block("garden01", garden), view]);

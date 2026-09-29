@@ -87,8 +87,8 @@ export function isFragmentId(value: string): boolean {
   return new RegExp(`^${FRAGMENT_ID_SOURCE}$`).test(value);
 }
 
-/** The lines inside fenced or indented code: no anchor, heading or boundary lives there (PIE-424). */
-function codeLineSet(text: string): Set<number> {
+/** The lines inside fenced or indented code: no anchor, heading, boundary or embed lives there (PIE-424). */
+export function codeLineSet(text: string): Set<number> {
   const codeLines = new Set<number>();
   const excludeCode = (nodes: MarkdownSourceToken[]): void => {
     for (const node of nodes) {

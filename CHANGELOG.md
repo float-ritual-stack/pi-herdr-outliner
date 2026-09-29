@@ -22,7 +22,9 @@ This file records notable user-facing changes. The project remains active dogfoo
   Both are additive capabilities; no protocol bump. A heading's section no
   longer ends at a `#` line inside a code fence, and fragment completion no
   longer offers headings inside code. Detail's embeds take their limit and
-  wording from the same module (`src/transclusions.ts`).
+  wording from the same module (`src/transclusions.ts`), and neither Detail
+  nor `transclusions.read` expands `!((…))` written inside fenced or indented
+  code.
 
 - Clients name their outline on the outline host (PIE-457 step 3).
   `OutlinerClient` sends `outline` on every request and subscription, and

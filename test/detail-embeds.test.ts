@@ -270,6 +270,27 @@ test("renders ordinary block Markdown without loading a workspace snapshot or ne
   expect(requester.calls).not.toContainEqual({ action: "get", blockId: "nested-target" });
 });
 
+test("embed syntax inside fenced or indented host code stays as written and is never loaded", async () => {
+  const ordinary = block("ordinary-block", "Ordinary");
+  const requester = new FakeRequester(new Map([[ordinary.id, ordinary]]), new Map());
+  const host = [
+    "Before",
+    "!((ordinary-block))",
+    "```md",
+    "!((fenced-target))",
+    "```",
+    "",
+    "    !((indented-target^step))",
+  ].join("\n");
+
+  const projection = await projectDetailRead(requester, host);
+
+  expect(projection.embeds).toEqual([{ blockId: ordinary.id, status: "ready", count: 1 }]);
+  expect(projection.text).toContain("```md\n!((fenced-target))\n```\n\n    !((indented-target^step))");
+  expect(requester.calls.filter(({ action }) => action === "get")).toEqual([{ action: "get", blockId: ordinary.id }]);
+  expect(detailEmbedIds(host)).toEqual([ordinary.id]);
+});
+
 test("renders exact fragment slices with explicit fragment failures and no recursion", async () => {
   const target = block(
     "fragment-target",

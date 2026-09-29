@@ -4,7 +4,7 @@ import {atomicDocument, concatDocuments, observeDocument, sourceDocument, sliceD
 import type { RequestInput } from "./client";
 import {isChecklistView,projectChecklistView} from './checklist-views';
 import { resolveFragmentSlice, stripFragmentAnchors } from "./fragments";
-import { embedPattern, MAX_EMBEDS_PER_DOCUMENT, TRANSCLUSION_WORDING } from "./transclusions";
+import { embedMatches, MAX_EMBEDS_PER_DOCUMENT, TRANSCLUSION_WORDING } from "./transclusions";
 import { propertyReferenceOccurrences } from "./reference-occurrences";
 import { blockDisplayTitle } from "./references";
 import { propertySummarySegments } from "./property-summary";
@@ -29,9 +29,8 @@ import {
   parseVirtualBranchConfig,
 } from "./virtual-branches";
 
-// The syntax, the per-document limit and the wording are the service's (src/transclusions.ts), so Detail
-// and every other client that asks `transclusions.read` agree.
-const DETAIL_EMBED_PATTERN = embedPattern();
+// The syntax (never inside code), the per-document limit and the wording are the service's
+// (src/transclusions.ts), so Detail and every other client that asks `transclusions.read` agree.
 const MAX_DETAIL_EMBEDS = MAX_EMBEDS_PER_DOCUMENT;
 const MAX_ERROR_LENGTH = 240;
 
@@ -626,7 +625,7 @@ function insertResourceProjections(
 }
 
 export function detailEmbedIds(text: string): string[] {
-  return [...text.matchAll(DETAIL_EMBED_PATTERN)].map((match) => match[1]!);
+  return embedMatches(text).map((match) => match[1]!);
 }
 
 export async function projectDetailRead(
@@ -641,7 +640,7 @@ export async function projectDetailRead(
   const pendingProjections = options.hostBlockId
     ? readDetailResourceProjections(requester, text, options.hostBlockId, options.hostRevision)
     : Promise.resolve(null);
-  const matches = [...projectedSource.matchAll(DETAIL_EMBED_PATTERN)];
+  const matches = embedMatches(projectedSource, text);
   if (matches.length === 0 && !isChecklistView(text)) {
     const projections = await pendingProjections;
     if (!projections?.length) return { text: projectedSource, provenance: source, embeds: [], embedRanges: [] };

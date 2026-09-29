@@ -3,7 +3,7 @@
 // contract's limits and wording). Clients ask (`fragments.read`, `transclusions.read`) instead of
 // re-deriving; Detail's own embed projection (detail-embeds.ts) takes its limits and wording from here.
 import { checklistItems } from "./checklist-items";
-import { fragmentPresentationText, isFragmentId, resolveFragmentSlice, type FragmentKind } from "./fragments";
+import { codeLineSet, fragmentPresentationText, isFragmentId, resolveFragmentSlice, type FragmentKind } from "./fragments";
 import { blockDisplayTitle } from "./references";
 import type { Block, ChecklistItem } from "./types";
 import { isVirtualBranchDefinition } from "./virtual-branches";
@@ -20,6 +20,23 @@ export const TRANSCLUSION_MAX_NODES = 64;
 /** `!((id))` and `!((id^fragment))`: Detail's transclusion syntax (no label). */
 export const EMBED_PATTERN_SOURCE = String.raw`!\(\(([A-Za-z0-9_-]{8,})(?:\^([A-Za-z0-9][A-Za-z0-9_-]{0,63}))?\)\)`;
 export const embedPattern = () => new RegExp(EMBED_PATTERN_SOURCE, "g");
+
+/**
+ * The embeds a reader expands in `text`, in order. Fenced and indented code shows `!((…))` as written,
+ * so it never embeds. `text` is line for line with `note` from `firstLine` (a fragment's slice), and code
+ * is judged in the note, where the slice is read.
+ */
+export function embedMatches(text: string, note = text, firstLine = 0) {
+  const matches = [...text.matchAll(embedPattern())];
+  if (matches.length === 0) return matches;
+  const code = codeLineSet(note);
+  const starts = lineStarts(text);
+  let line = 0;
+  return matches.filter(m => {
+    while (line + 1 < starts.length && starts[line + 1]! <= m.index) line++;
+    return !code.has(firstLine + line);
+  });
+}
 
 export type TransclusionStatus =
   | "ready" | "missing" | "deleted" | "failed" | "fragment-missing" | "fragment-duplicate"
@@ -194,7 +211,7 @@ export function readTransclusions(
       return { ...found, status: "ready", kind: "view" };
     }
     const checklist = checklistItems(block.text).filter(item => item.span.startLine >= shown.startLine && item.span.startLine <= shown.endLine);
-    const inner = [...shown.text.matchAll(embedPattern())].map(m => ({ blockId: m[1]!, ...(m[2] ? { fragmentId: m[2] } : {}) }));
+    const inner = embedMatches(shown.text, block.text, shown.startLine).map(m => ({ blockId: m[1]!, ...(m[2] ? { fragmentId: m[2] } : {}) }));
     const here = [...path, refKey(t)];
     const embeds = inner.map((child, index): TransclusionNode => {
       const at = { blockId: child.blockId, ...(child.fragmentId ? { fragmentId: child.fragmentId } : {}), depth: depth + 1 };
