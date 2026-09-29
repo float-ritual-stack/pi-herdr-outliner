@@ -178,10 +178,20 @@ export function pluginInvocationWorkspaceRoot(
   env: NodeJS.ProcessEnv = process.env,
   fallback = process.cwd(),
 ): string {
+  return pluginInvocationWorkspaceRootSource(env, fallback).root;
+}
+
+/** The invocation root plus where it came from, for explaining the choice to the user. */
+export function pluginInvocationWorkspaceRootSource(
+  env: NodeJS.ProcessEnv = process.env,
+  fallback = process.cwd(),
+): { root: string; source: "pane" | "workspace" | "fallback" } {
   const context = pluginContext(env);
-  return context.focused_pane_cwd?.trim() ||
-    context.workspace_cwd?.trim() ||
-    fallback;
+  const pane = context.focused_pane_cwd?.trim();
+  if (pane) return { root: pane, source: "pane" };
+  const workspace = context.workspace_cwd?.trim();
+  if (workspace) return { root: workspace, source: "workspace" };
+  return { root: fallback, source: "fallback" };
 }
 
 export function pluginClickedUrl(

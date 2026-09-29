@@ -34,7 +34,9 @@ herdr plugin action invoke open-here --plugin float.pi-outliner
 
 `ensure-detail` focuses or creates a Detail for the Tree selected from the
 invoking pane/tab. `open-here` always creates a new linked Tree/Detail browsing
-context beside the invoking pane. Tree and Detail
+context beside the invoking pane. None of them creates an outline: a folder
+without a project `client.json` or database gets the **Choose outline** popup
+(`src/choose-outline-main.ts`), and only its **New outline here** creates one. Tree and Detail
 `Option+Shift+Right` / `Option+Shift+Down` create ordinary independent right/down Details.
 All pane identities come from live Herdr topology rather than labels or
 remembered pane IDs.
@@ -66,6 +68,10 @@ source evidence or distinguish authored glyphs from controls.
   slice of PIE-408; resource projections and later soft links use it rather than
   resolving context themselves.
 - `pi-extension/index.ts` is a host adapter, not a second implementation of the service.
+- `src/known-outlines.ts` owns whether a folder has an outline (`detectOutline`)
+  and the read-only list of outlines on this machine (`listKnownOutlines`); the
+  outline chooser and the launcher use it. `writeClientConfig` in `src/paths.ts`
+  is the one writer of a project `client.json`.
 - `src/work-tools.ts` owns agent workboard operations (create, stage/set, PR delivery
   and delivery keys, completion with proof across all of an item's deliveries,
   delivery stage, note sections, item bodies) over the existing RPCs. The CLI
@@ -107,7 +113,9 @@ restarts, socket removal, and writable database access are not connection probes
 If a Herdr launch fails, Outliner reports the cause with a Herdr notification
 (when notification delivery is enabled) and retains the most recent failure in
 `service-startup-error.log` or `open-startup-error.log` in the resolved workspace
-state directory. These files include a timestamp; an old error is not evidence
+state directory. Opening never creates that directory: when it does not exist
+yet, `open-startup-error.log` goes to the state root (`OUTLINER_STATE_DIR`), or
+only to stderr and the notification when the state root is missing too. These files include a timestamp; an old error is not evidence
 that the current process failed. Action output is also available through
 `herdr plugin log list --plugin float.pi-outliner --limit 3`.
 

@@ -41,6 +41,14 @@ height = "88%"
 command = ["/bin/sh", "scripts/run-bun.sh", "run", "src/goto-main.ts"]
 
 [[panes]]
+id = "choose-outline"
+title = "Choose outline"
+placement = "popup"
+width = "80%"
+height = "70%"
+command = ["/bin/sh", "scripts/run-bun.sh", "run", "src/choose-outline-main.ts"]
+
+[[panes]]
 id = "capture"
 title = "Quick Capture"
 placement = "popup"

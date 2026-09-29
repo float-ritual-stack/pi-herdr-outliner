@@ -43,7 +43,8 @@
     "test:e2e:detail-progressive": "bun run test/e2e/detail-progressive.ts && bun run test/e2e/detail-progressive.ts --forwarded",
     "test:e2e:composed": "bun run test/e2e/composed-surface.ts && bun run test/e2e/composed-boundaries.ts && bun run test/e2e/reference-annotations.ts --composed && bun run test/e2e/annotation-threads.ts --composed",
     "test:e2e:resource-occurrences": "bun run test/e2e/resource-occurrences.ts && bun run test/e2e/resource-occurrences.ts --ansi",
-    "test:e2e:reference-annotations": "bun run test/e2e/reference-annotations.ts"
+    "test:e2e:reference-annotations": "bun run test/e2e/reference-annotations.ts",
+    "test:e2e:outline-chooser": "bun run test/e2e/outline-chooser.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.84.2",

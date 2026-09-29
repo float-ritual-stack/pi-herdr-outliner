@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { resolvePaths } from "../src/paths";
@@ -68,7 +68,9 @@ test("opening errors survive a failed Herdr notification without exposing forwar
   expect(code).toBe(1);
   expect(stderr).toContain("Invalid outliner open mode: <REDACTED>");
   expect(stderr).not.toContain(secret);
-  const log = readFileSync(join(resolvePaths({ ...env, OUTLINER_WORKSPACE_ROOT: join(directory, "invoking-project") }).stateDir, "open-startup-error.log"), "utf8");
+  // Opening must not create the invoking folder's state directory; the log goes to the state root.
+  expect(existsSync(resolvePaths({ ...env, OUTLINER_WORKSPACE_ROOT: join(directory, "invoking-project") }).stateDir)).toBe(false);
+  const log = readFileSync(join(directory, "open-startup-error.log"), "utf8");
   expect(log).toContain("Invalid outliner open mode: <REDACTED>");
   expect(log).not.toContain(secret);
 });

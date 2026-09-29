@@ -1418,7 +1418,18 @@ broadcasts attention to sibling panes.
 ## Herdr lifecycle
 
 [`src/herdr-open.ts`](../src/herdr-open.ts) enforces service-first startup for
-the three pane-routing actions exported by the plugin manifest:
+the three pane-routing actions exported by the plugin manifest. Before any of
+them starts a service it asks `detectOutline`
+([`src/known-outlines.ts`](../src/known-outlines.ts)) whether the resolved folder
+has an outline: remote mode, a project `client.json`, or an existing database.
+If not, it creates no state and opens the `choose-outline` popup
+([`src/choose-outline-main.ts`](../src/choose-outline-main.ts), with its list,
+keys, mouse and frame in [`src/outline-chooser.ts`](../src/outline-chooser.ts),
+drawn like the goto popup). The popup lists `listKnownOutlines` without creating
+anything, records the choice with `writeClientConfig` (remote socket for an
+existing outline, local for **New outline here**), then re-runs the same
+launcher mode for the same pane and folder (`OUTLINER_OPEN_WORKSPACE_ROOT`).
+`service-only` refuses a folder without an outline.
 - `open` reuses or opens the service, then focuses the Tree selected by invoking
   pane, unambiguous current tab, workspace, or project. If none exists, it runs
   the same pair creation as `open-here`; ambiguity is an error.

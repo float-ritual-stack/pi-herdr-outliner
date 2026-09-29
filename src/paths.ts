@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 export interface OutlinerPaths {
   stateDir: string;
@@ -14,7 +14,7 @@ export interface OutlinerClientPaths extends OutlinerPaths {
   mode: "local" | "remote";
 }
 
-type OutlinerClientConfig =
+export type OutlinerClientConfig =
   | {
     mode: "local";
     workspaceRoot?: string;
@@ -34,13 +34,27 @@ const CLIENT_CONFIG_KEYS: Readonly<Record<string, true>> = {
   label: true,
 };
 
-function workspaceKey(workspaceRoot: string): string {
+export function workspaceKey(workspaceRoot: string): string {
   return createHash("sha256").update(workspaceRoot).digest("hex").slice(0, 12);
 }
 
 function readableWorkspaceName(workspaceRoot: string): string {
   const name = basename(workspaceRoot) || "root";
   return name.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "workspace";
+}
+
+/** Where per-workspace state directories live; the hash-named directories sit beneath it. */
+export function resolveStateRoot(env: NodeJS.ProcessEnv = process.env): string {
+  return env.OUTLINER_STATE_DIR ?? join(homedir(), ".local", "state", "pi-herdr-outliner");
+}
+
+/** The directory holding one `<name>--<key>/client.json` per configured workspace. */
+export function resolveClientConfigRoot(env: NodeJS.ProcessEnv = process.env): string {
+  return join(
+    env.XDG_CONFIG_HOME?.trim() || join(homedir(), ".config"),
+    "pi-herdr-outliner",
+    "projects",
+  );
 }
 
 export function resolveClientConfigPath(
@@ -50,15 +64,36 @@ export function resolveClientConfigPath(
   if (configuredPath) return configuredPath;
   const workspaceRoot = resolve(env.OUTLINER_WORKSPACE_ROOT ?? process.cwd());
   return join(
-    env.XDG_CONFIG_HOME?.trim() || join(homedir(), ".config"),
-    "pi-herdr-outliner",
-    "projects",
+    resolveClientConfigRoot(env),
     `${readableWorkspaceName(workspaceRoot)}--${workspaceKey(workspaceRoot)}`,
     "client.json",
   );
 }
 
-function readClientConfig(
+/**
+ * Records a workspace's explicit connection choice. It creates only the config
+ * directory, never state, and refuses to replace an existing choice.
+ */
+export function writeClientConfig(
+  env: NodeJS.ProcessEnv,
+  config: OutlinerClientConfig & { workspaceRoot: string },
+): string {
+  const workspaceRoot = resolve(config.workspaceRoot);
+  const path = resolveClientConfigPath({ ...env, OUTLINER_WORKSPACE_ROOT: workspaceRoot });
+  if (config.mode === "remote" && !isAbsolute(config.socketPath)) {
+    throw new Error("Remote Outliner client config socketPath must be an absolute Unix socket path");
+  }
+  const value = config.mode === "remote"
+    ? { workspaceRoot, mode: "remote", socketPath: config.socketPath, ...(config.label?.trim() ? { label: config.label } : {}) }
+    : { workspaceRoot, mode: "local", ...(config.label?.trim() ? { label: config.label } : {}) };
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+  // Validate with the same reader every process uses.
+  readClientConfig(path, workspaceRoot);
+  return path;
+}
+
+export function readClientConfig(
   path: string,
   workspaceRoot: string,
 ): OutlinerClientConfig | undefined {
@@ -158,8 +193,7 @@ function rejectLegacyClientConfig(env: NodeJS.ProcessEnv, projectConfigPath: str
 
 export function resolvePaths(env: NodeJS.ProcessEnv = process.env): OutlinerPaths {
   const workspaceRoot = resolve(env.OUTLINER_WORKSPACE_ROOT ?? process.cwd());
-  const baseStateDir =
-    env.OUTLINER_STATE_DIR ?? join(homedir(), ".local", "state", "pi-herdr-outliner");
+  const baseStateDir = resolveStateRoot(env);
   const workspaceKeyPart = workspaceKey(workspaceRoot);
   const stateDir = join(baseStateDir, workspaceKeyPart);
 

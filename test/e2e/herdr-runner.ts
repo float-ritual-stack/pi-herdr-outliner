@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { Terminal as Screen } from "@xterm/headless";
 import { createHash } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
-import { appendFileSync, closeSync, openSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, openSync } from "node:fs";
 import {
   appendFile,
   mkdir,
@@ -20,7 +20,7 @@ import { join, resolve, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { OutlinerClient } from "../../src/client";
 import { checkServiceCompatibility } from "../../src/service-compatibility";
-import { resolvePaths, type OutlinerPaths } from "../../src/paths";
+import { resolvePaths, writeClientConfig, type OutlinerPaths } from "../../src/paths";
 import { readHerdrPaneSnapshot, type HerdrPaneSnapshot } from "../../src/herdr-comment-selection";
 import { forwardService, type ForwardedRequest, type OptionalResponseMatch, type ComposedResponseMatch, type ResponseBarrier } from "./service-forwarder";
 import {
@@ -45,7 +45,10 @@ export interface HerdrScenarioSession {
   setRegistryUnavailable(unavailable: boolean): Promise<void>;
   adoptDetached(clientId: string, role?: "tree" | "detail"): Promise<string>;
   adoptCapture(): Promise<string>;
-  openShellTab(): Promise<string>;
+  /** Opens a shell tab in the private workspace; `cwd` must lie beneath the run's private root. */
+  openShellTab(cwd?: string): Promise<string>;
+  /** Invokes a plugin action from the focused pane and returns its parsed stdout once it finishes. */
+  invokeAction(actionId: string): Promise<Record<string, unknown>>;
   moveDetachedToNewTab(paneId: string): Promise<void>;
   closeDetached(paneId: string): Promise<void>;
   rejectCompetingService(): Promise<CommandResult>;
@@ -889,16 +892,35 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
         await artifacts.record("detached-adopted", detached);
         return pane.paneId;
       },
-      async openShellTab() {
+      async openShellTab(cwd = projectRoot) {
+        if (!resolve(cwd).startsWith(`${runRoot}${sep}`)) throw new Error("Shell tabs must start beneath the private run root");
         const origin = parsePane(parseResult((await runHerdr(["pane", "get", ownedPanes.launcher])).stdout, "pane_info", "shell origin").pane, "shell origin pane");
         const result = parseResult((await runHerdr(["tab", "create", "--workspace", origin.workspaceId,
-          "--cwd", projectRoot, "--label", "Capture from shell", "--focus"])).stdout, "tab_created", "shell tab");
+          "--cwd", cwd, "--label", "Capture from shell", "--focus"])).stdout, "tab_created", "shell tab");
         const pane = parsePane(result.root_pane, "shell tab pane");
         if (pane.workspaceId !== origin.workspaceId) throw Error("Shell tab escaped the private workspace");
         owned.add(pane.paneId);
-        extraPanes["capture-origin-shell"] = pane.paneId;
+        extraPanes[cwd === projectRoot ? "capture-origin-shell" : `shell-${safeName(cwd)}`] = pane.paneId;
         await artifacts.record("shell-tab-created", result);
         return pane.paneId;
+      },
+      async invokeAction(actionId) {
+        const invocation = parseResult((await runHerdr(["plugin", "action", "invoke", actionId, "--plugin", PLUGIN_ID])).stdout,
+          "plugin_action_invoked", `invoke ${actionId}`);
+        const logId = stringValue(recordValue(invocation.log, `invoke ${actionId}.log`), "log_id", `invoke ${actionId}.log`);
+        const log = await poll({
+          label: `plugin action log ${logId}`, timeoutMs: STARTUP_TIMEOUT_MS, signal: abort.signal, artifacts,
+          read: async () => arrayValue(parseResult((await runHerdr(["plugin", "log", "list", "--plugin", PLUGIN_ID, "--limit", "50"])).stdout,
+            "plugin_log_list", "plugin log list"), "logs", "plugin log list.result")
+            .map((value, index) => recordValue(value, `plugin log list.result.logs[${index}]`))
+            .find(entry => entry.log_id === logId),
+          accept: entry => entry?.status === "succeeded" || entry?.status === "failed",
+        });
+        await artifacts.record(`action-${actionId}`, log);
+        if (log?.status !== "succeeded" || typeof log.stdout !== "string") {
+          throw new Error(`Plugin action ${actionId} failed: ${String(log?.stderr ?? log?.error ?? "unknown error")}`);
+        }
+        return recordValue(parseJson(log.stdout.trim().split("\n").at(-1) ?? "", `${actionId} output`), `${actionId} output`);
       },
       async adoptCapture() {
         const origin = parsePane(parseResult((await runHerdr(["pane", "get", ownedPanes.launcher])).stdout, "pane_info", "capture fixture origin").pane, "capture fixture origin pane");
@@ -1328,7 +1350,10 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
     });
 
     await setPhase("prepare-fixture");
-    await scenario.prepare(projectRoot, resolvePaths({ OUTLINER_STATE_DIR: outlinerState, OUTLINER_WORKSPACE_ROOT: projectRoot }));
+    const preparedPaths = resolvePaths({ OUTLINER_STATE_DIR: outlinerState, OUTLINER_WORKSPACE_ROOT: projectRoot });
+    await scenario.prepare(projectRoot, preparedPaths);
+    // Opening never creates an outline by itself; the fixture chooses a new outline here.
+    if (!existsSync(preparedPaths.database)) writeClientConfig(environment, { mode: "local", workspaceRoot: projectRoot });
 
     await setPhase("start-herdr");
     const stdoutFd = openSync(join(artifactDirectory, "herdr-server.stdout.log"), "a");

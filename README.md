@@ -383,6 +383,22 @@ The manifest exposes three workspace/tab/pane actions:
   the current tab. The pair shares a fresh ephemeral browsing context and the
   new Tree receives focus.
 
+Opening never creates an outline by itself. A folder has an outline when it has
+a project `client.json` (local or remote), an existing database in its state
+directory, or remote mode set through `OUTLINER_REMOTE=1`. Otherwise every
+action above (and `prefix+u`) shows a **Choose outline** popup instead. It says
+which folder was resolved and from where (the invoking pane's directory or the
+Herdr workspace root), lists the outlines this machine knows about (state
+directories that hold a database, and project configs that point at a socket)
+with running or stopped status, and offers **New outline here**. Use ↑/↓ or
+j/k and Enter, or click a row; the wheel scrolls and Esc closes without creating
+anything. Choosing an outline writes the folder's `client.json` in remote mode
+with that outline's socket, so the next open in that folder connects directly;
+a stopped local outline whose folder is known is started first. **New outline
+here** writes a local `client.json` and only then creates the database. The Pi
+extension's background `service-only` start refuses a folder without an outline
+rather than creating one.
+
 Invoke any action as
 `herdr plugin action invoke <action> --plugin float.pi-outliner`.
 
@@ -1988,6 +2004,8 @@ Each resolved workspace root receives a distinct 12-character SHA-256 key contai
 - remembered plugin-pane metadata
 
 Override the root with `OUTLINER_WORKSPACE_ROOT` and the base state directory with `OUTLINER_STATE_DIR`.
+Only the service and an explicit **New outline here** create this directory;
+opening a folder without an outline does not.
 
 Browsing contexts, Detail targets/history, Tree presentation state, and live
 Herdr client identities are intentionally ephemeral and are not stored in
@@ -2043,7 +2061,10 @@ Create it with the local invoking workspace identity and forwarded socket:
 }
 ```
 
-Projects without this file keep their normal local per-project database.
+Projects without this file use their local per-project database when one
+exists; opening one with neither shows the outline chooser described under
+[Open the workspace](#open-the-workspace) rather than creating a database. The chooser
+writes this same file when you pick another outline.
 `OUTLINER_CONFIG_PATH` explicitly selects another config. For one-off shells,
 `OUTLINER_REMOTE=1` with an absolute `OUTLINER_SOCKET_PATH` overrides project
 configuration; `OUTLINER_REMOTE=0` forces local mode.

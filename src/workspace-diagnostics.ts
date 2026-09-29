@@ -6,6 +6,7 @@ import {resolveClientConfigPath,resolveClientPaths,resolvePaths} from './paths';
 import {checkServiceCompatibility} from './service-compatibility';
 import {OUTLINER_MIN_SERVICE_PROTOCOL,OUTLINER_PROTOCOL_VERSION,type OutlinerServiceStatus} from './types';
 import {sanitizeDynamicText} from './terminal';
+import {openStartupErrorLogPath} from './startup-error';
 
 export type WorkspaceReportEntry =
  | {kind:'section';title:string}
@@ -33,7 +34,7 @@ export async function inspectWorkspaceConnection(env:NodeJS.ProcessEnv=process.e
  field('Connection',paths.mode);field('Endpoint',paths.socket,presence(paths.socket));
  if(env.OUTLINER_REMOTE!==undefined)note('Connection mode selected by OUTLINER_REMOTE; project client.json is bypassed.');
  else field('Config presence',presence(resolveClientConfigPath(env)));
- field('Client startup logs',join(paths.stateDir,'open-startup-error.log'),'check timestamp');
+ {const log=openStartupErrorLogPath(env);field('Client startup logs',log??'not written (no state directory exists yet)',log?'check timestamp':undefined);}
  if(paths.mode==='local'){
   section('Local storage');
   field('Local state',paths.stateDir,presence(paths.stateDir));field('Local database',paths.database,presence(paths.database));

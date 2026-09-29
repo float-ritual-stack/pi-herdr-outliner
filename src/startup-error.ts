@@ -1,9 +1,21 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { resolvePaths, resolveClientPaths, resolveClientConfigPath } from "./paths";
+import { resolvePaths, resolveClientPaths, resolveClientConfigPath, resolveStateRoot } from "./paths";
 import { pluginInvocationWorkspaceRoot } from "./pane-control";
 import { sanitizeDynamicText } from "./terminal";
+
+/**
+ * Opening must not create a workspace's state directory, so its log goes into
+ * that directory only when it already exists, else into the state root, else
+ * nowhere (stderr and the Herdr notification still carry the error).
+ */
+export function openStartupErrorLogPath(env: NodeJS.ProcessEnv): string | undefined {
+  const { stateDir } = resolvePaths(env);
+  if (existsSync(stateDir)) return join(stateDir, "open-startup-error.log");
+  const stateRoot = resolveStateRoot(env);
+  return existsSync(stateRoot) ? join(stateRoot, "open-startup-error.log") : undefined;
+}
 
 /** Startup panes can disappear on exit; keep the failure available outside them. */
 export async function reportStartupErrors(
@@ -24,13 +36,20 @@ export async function reportStartupErrors(
     const title = operation === "service" ? "Outliner service failed to start" : "Outliner could not open";
     let location = "See herdr plugin log list --plugin float.pi-outliner --limit 1";
     try {
-      const { stateDir, workspaceRoot } = resolvePaths(operation === "open" ? {
+      const pathEnv = operation === "open" ? {
         ...process.env,
-        OUTLINER_WORKSPACE_ROOT: pluginInvocationWorkspaceRoot(process.env,
-          process.env.OUTLINER_WORKSPACE_ROOT ?? process.cwd()),
-      } : process.env);
-      mkdirSync(stateDir, { recursive: true });
-      const logPath = join(stateDir, `${operation}-startup-error.log`);
+        OUTLINER_WORKSPACE_ROOT: process.env.OUTLINER_OPEN_WORKSPACE_ROOT?.trim() ||
+          pluginInvocationWorkspaceRoot(process.env, process.env.OUTLINER_WORKSPACE_ROOT ?? process.cwd()),
+      } : process.env;
+      const { stateDir, workspaceRoot } = resolvePaths(pathEnv);
+      let logPath: string | undefined;
+      if (operation === "service") {
+        mkdirSync(stateDir, { recursive: true });
+        logPath = join(stateDir, "service-startup-error.log");
+      } else {
+        logPath = openStartupErrorLogPath(pathEnv);
+      }
+      if (!logPath) throw new Error("No existing state directory for the open log");
       let connection = '';
       try {
         const env={...process.env,OUTLINER_WORKSPACE_ROOT:workspaceRoot};
