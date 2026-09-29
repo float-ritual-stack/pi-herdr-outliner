@@ -62,8 +62,9 @@ export class OutlineChooser {
 export type ChooserIntent = "choose" | "close" | "changed" | null;
 
 export function chooserKey(chooser: OutlineChooser, key: TerminalKey): ChooserIntent {
-  if (key.name === "escape" || (key.ctrl && key.name === "c")) return "close";
+  // Once a choice is being saved, closing would record it without opening anything.
   if (chooser.busy) return null;
+  if (key.name === "escape" || (key.ctrl && key.name === "c")) return "close";
   if (key.name === "return") return "choose";
   if (key.name === "up" || key.name === "k") { chooser.move(-1); return "changed"; }
   if (key.name === "down" || key.name === "j") { chooser.move(1); return "changed"; }

@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { basename, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { OutlinerClient } from "./client";
 import {
   type OutlinerClientPaths,
@@ -21,10 +21,16 @@ export type OutlinePresence =
 export function detectOutline(env: NodeJS.ProcessEnv): OutlinePresence {
   const paths = resolveClientPaths(env);
   if (paths.mode === "remote") return { kind: "present", paths, because: "remote" };
+  // An explicit config path is the user's own choice, whether or not the file exists.
+  if (env.OUTLINER_CONFIG_PATH?.trim()) return { kind: "present", paths, because: "config" };
   const configPath = resolveClientConfigPath(env);
-  // resolveClientPaths reads the project config only when OUTLINER_REMOTE is unset.
-  if (env.OUTLINER_REMOTE?.trim() === undefined && existsSync(configPath)) {
-    return { kind: "present", paths, because: "config" };
+  if (existsSync(configPath)) {
+    // resolveClientPaths reads the project config only when OUTLINER_REMOTE is unset.
+    if (env.OUTLINER_REMOTE?.trim() === undefined) return { kind: "present", paths, because: "config" };
+    // OUTLINER_REMOTE=0 forces local mode; it does not undo a recorded local choice.
+    let config;
+    try { config = readClientConfig(configPath, paths.workspaceRoot); } catch { config = undefined; }
+    if (config?.mode === "local") return { kind: "present", paths, because: "config" };
   }
   if (existsSync(paths.database)) return { kind: "present", paths, because: "database" };
   return { kind: "missing", paths, configPath };
@@ -91,6 +97,33 @@ function recordedRoot(stateDir: string): string | undefined {
     }
   }
   return undefined;
+}
+
+/**
+ * The local outline that owns a socket in the state root, if any, with the folder
+ * it belongs to when a pane record or a local project config says so.
+ */
+export function localOutlineOwner(
+  socket: string,
+  options: { stateRoot: string; configRoot: string },
+): { stateDir: string; stateKey: string; root?: string } | undefined {
+  const stateDir = dirname(resolve(socket));
+  if (basename(socket) !== "outliner.sock" || dirname(stateDir) !== resolve(options.stateRoot)) return undefined;
+  if (!existsSync(join(stateDir, "outliner.sqlite"))) return undefined;
+  const stateKey = basename(stateDir);
+  let root = recordedRoot(stateDir);
+  for (const name of root ? [] : directories(options.configRoot).filter(name => name.endsWith(`--${stateKey}`))) {
+    try {
+      const path = join(options.configRoot, name, "client.json");
+      const raw = JSON.parse(readFileSync(path, "utf8")) as { workspaceRoot?: unknown };
+      if (typeof raw.workspaceRoot !== "string") continue;
+      const config = readClientConfig(path, resolve(raw.workspaceRoot));
+      if (config?.mode === "local" && config.workspaceRoot) { root = resolve(config.workspaceRoot); break; }
+    } catch {
+      // An unreadable config says nothing about the owner.
+    }
+  }
+  return { stateDir, stateKey, ...(root ? { root } : {}) };
 }
 
 function defaultPing(socket: string, timeoutMs: number): Promise<OutlinerServiceStatus> {

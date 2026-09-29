@@ -1,11 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createOutlinerClient } from "./client";
 import { listLiveClients, sendClientCommand } from "./client-target";
 import {
+  invocationPaneRoot,
   selectLinkedDetailClient,
   selectTreeClientForInvocation,
 } from "./herdr-open-policy";
@@ -15,7 +16,9 @@ import {
   type PaneEntrypoint,
   resolveServicePaneId,
 } from "./pane-control";
-import { detectOutline } from "./known-outlines";
+import { relaunchArgs, relaunchEnvironment } from "./herdr-open-relaunch";
+import { detectOutline, localOutlineOwner } from "./known-outlines";
+import { resolveClientConfigRoot, resolveStateRoot } from "./paths";
 import type { OutlineChooserContext } from "./outline-chooser";
 import { waitForCompatibleService } from "./service-compatibility";
 import {
@@ -94,15 +97,10 @@ await reportStartupErrors("open", async () => {
     invocationPane = (JSON.parse(paneOutput) as PaneDetailsResponse).result?.pane;
     // Outliner panes report their project through OSC 7; their running process
     // remains in the plugin checkout. A new Tree must inherit the project.
-    if (!chosenRoot) {
-      const [first, second] = mode === "open-tree"
-        ? [["cwd", invocationPane?.cwd], ["foreground cwd", invocationPane?.foreground_cwd]] as const
-        : [["foreground cwd", invocationPane?.foreground_cwd], ["cwd", invocationPane?.cwd]] as const;
-      const picked = first[1] ? first : second[1] ? second : undefined;
-      if (picked?.[1]) {
-        workspaceRoot = picked[1];
-        rootSource = `the invoking pane's ${picked[0]}`;
-      }
+    const picked = chosenRoot ? undefined : invocationPaneRoot(invocationPane, mode, resolve(import.meta.dir, ".."));
+    if (picked) {
+      workspaceRoot = picked.root;
+      rootSource = `the invoking pane's ${picked.field}`;
     }
   }
 
@@ -133,6 +131,26 @@ await reportStartupErrors("open", async () => {
     return;
   }
   const paths = presence.paths;
+  // A folder the chooser aliased to another local outline records that outline's
+  // socket. After a restart nobody runs its service, so start it from its own folder.
+  if (paths.mode === "remote" && process.env.OUTLINER_REMOTE?.trim() === undefined) {
+    const owner = localOutlineOwner(paths.socket, {
+      stateRoot: resolveStateRoot(process.env),
+      configRoot: resolveClientConfigRoot(process.env),
+    });
+    const running = owner && await createOutlinerClient(paths).request({ action: "ping" }, 300).then(() => true, () => false);
+    if (owner && !running) {
+      if (!owner.root) {
+        throw new Error(`The outline this folder uses (${owner.stateDir}) is not running, and the folder it belongs to is unknown. Open the Outliner from that outline's own folder to start it, then retry.`);
+      }
+      // OUTLINER_REMOTE=0 makes the owner's own open local, so this cannot recurse.
+      execFileSync(process.execPath, relaunchArgs("service-only"), {
+        env: { ...relaunchEnvironment(process.env, owner.root), OUTLINER_REMOTE: "0" },
+        stdio: ["ignore", "ignore", "pipe"],
+        timeout: 30_000,
+      });
+    }
+  }
   // Remote outlines keep their state on the service host; nothing is created here.
   if (paths.mode === "local") mkdirSync(paths.stateDir, { recursive: true });
 

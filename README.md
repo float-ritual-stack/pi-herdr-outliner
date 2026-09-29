@@ -384,8 +384,9 @@ The manifest exposes three workspace/tab/pane actions:
   new Tree receives focus.
 
 Opening never creates an outline by itself. A folder has an outline when it has
-a project `client.json` (local or remote), an existing database in its state
-directory, or remote mode set through `OUTLINER_REMOTE=1`. Otherwise every
+a project `client.json` (local or remote; a local one still counts under
+`OUTLINER_REMOTE=0`), an existing database in its state directory, an explicit
+`OUTLINER_CONFIG_PATH`, or remote mode set through `OUTLINER_REMOTE=1`. Otherwise every
 action above (and `prefix+u`) shows a **Choose outline** popup instead. It says
 which folder was resolved and from where (the invoking pane's directory or the
 Herdr workspace root), lists the outlines this machine knows about (state
@@ -394,10 +395,15 @@ with running or stopped status, and offers **New outline here**. Use ↑/↓ or
 j/k and Enter, or click a row; the wheel scrolls and Esc closes without creating
 anything. Choosing an outline writes the folder's `client.json` in remote mode
 with that outline's socket, so the next open in that folder connects directly;
-a stopped local outline whose folder is known is started first. **New outline
+a stopped local outline whose folder is known is started first, both when you
+choose it and on later opens (after a restart, say). If its folder is unknown the
+open says so instead of waiting on the socket. The chooser never writes through
+an explicit `OUTLINER_CONFIG_PATH`. A Tree or Detail pane stands for the project
+it reports, not the plugin checkout it runs from. **New outline
 here** writes a local `client.json` and only then creates the database. The Pi
 extension's background `service-only` start refuses a folder without an outline
-rather than creating one.
+rather than creating one; `/outliner` there reports that the chooser is open and
+connects to the chosen outline on the next call.
 
 Invoke any action as
 `herdr plugin action invoke <action> --plugin float.pi-outliner`.

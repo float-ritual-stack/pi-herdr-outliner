@@ -2,7 +2,8 @@ import { afterEach, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
-import { detectOutline, listKnownOutlines, type KnownOutline } from "../src/known-outlines";
+import { detectOutline, listKnownOutlines, localOutlineOwner, type KnownOutline } from "../src/known-outlines";
+import { invocationPaneRoot } from "../src/herdr-open-policy";
 import {
   chooserKey,
   chooserMouse,
@@ -83,6 +84,62 @@ test("an existing database, an explicit config or remote mode each count as an o
     .toMatchObject({ kind: "present", because: "remote" });
   // Forcing local mode alone is not a choice to create an outline.
   expect(detectOutline({ ...env(forced), OUTLINER_REMOTE: "0" }).kind).toBe("missing");
+});
+
+test("OUTLINER_REMOTE=0 keeps a recorded local choice, so New outline here does not loop back to the chooser", () => {
+  const { directory, env } = fixture();
+  const root = join(directory, "jam-shelf");
+  writeClientConfig({ ...env(root), OUTLINER_REMOTE: "0" }, { mode: "local", workspaceRoot: root });
+  expect(detectOutline({ ...env(root), OUTLINER_REMOTE: "0" })).toMatchObject({ kind: "present", because: "config", paths: { mode: "local" } });
+  // A recorded remote choice is overridden by OUTLINER_REMOTE=0 and is no local consent.
+  const aliased = join(directory, "quiet-attic");
+  writeClientConfig(env(aliased), { mode: "remote", workspaceRoot: aliased, socketPath: "/tmp/fixture-outline.sock" });
+  expect(detectOutline({ ...env(aliased), OUTLINER_REMOTE: "0" }).kind).toBe("missing");
+  // A second choice for the same folder reports EEXIST, which the chooser treats as already chosen.
+  expect(() => writeClientConfig(env(root), { mode: "local", workspaceRoot: root })).toThrow(expect.objectContaining({ code: "EEXIST" }));
+});
+
+test("an explicit OUTLINER_CONFIG_PATH is the user's choice and is never written through", () => {
+  const { directory, env } = fixture();
+  const root = join(directory, "jam-shelf");
+  const shared = join(directory, "shared-client.json");
+  const explicit = { ...env(root), OUTLINER_CONFIG_PATH: shared };
+  expect(detectOutline(explicit)).toMatchObject({ kind: "present", because: "config", paths: { mode: "local" } });
+  expect(() => writeClientConfig(explicit, { mode: "local", workspaceRoot: root })).toThrow("OUTLINER_CONFIG_PATH");
+  expect(existsSync(shared)).toBe(false);
+  expect(existsSync(resolveClientConfigPath(env(root)))).toBe(false);
+});
+
+test("a socket in the state root belongs to a local outline whose folder comes from its pane record or local config", () => {
+  const { directory, stateRoot, configRoot, env } = fixture();
+  const kiln = join(directory, "kiln");
+  const recorded = outlineAt(env(kiln), { paneRoot: kiln });
+  expect(localOutlineOwner(recorded.socket, { stateRoot, configRoot })).toEqual({
+    stateDir: recorded.stateDir, stateKey: recorded.stateDir.split("/").at(-1)!, root: kiln,
+  });
+  const moss = join(directory, "moss-desk");
+  const configured = outlineAt(env(moss));
+  writeClientConfig(env(moss), { mode: "local", workspaceRoot: moss });
+  expect(localOutlineOwner(configured.socket, { stateRoot, configRoot })?.root).toBe(moss);
+  const orphan = outlineAt(env(join(directory, "old-hash")));
+  const owner = localOutlineOwner(orphan.socket, { stateRoot, configRoot });
+  expect(owner?.stateDir).toBe(orphan.stateDir);
+  expect(owner?.root).toBeUndefined();
+  // Genuinely remote sockets and state directories without a database are not local outlines.
+  expect(localOutlineOwner(join(directory, "tunnel", "outliner.sock"), { stateRoot, configRoot })).toBeUndefined();
+  expect(localOutlineOwner(resolvePaths(env(join(directory, "empty"))).socket, { stateRoot, configRoot })).toBeUndefined();
+});
+
+test("an Outliner pane's folder comes from its OSC 7 cwd, not the plugin checkout it runs in", () => {
+  const plugin = "/tmp/fixture/plugin-checkout";
+  const tree = { foreground_cwd: plugin, cwd: "/tmp/fixture/jam-shelf" };
+  expect(invocationPaneRoot(tree, "open-here", plugin)).toEqual({ root: "/tmp/fixture/jam-shelf", field: "cwd" });
+  expect(invocationPaneRoot(tree, "ensure-detail", `${plugin}/`)).toEqual({ root: "/tmp/fixture/jam-shelf", field: "cwd" });
+  const shell = { foreground_cwd: "/tmp/fixture/jam-shelf/notes", cwd: "/tmp/fixture/jam-shelf" };
+  expect(invocationPaneRoot(shell, "open-here", plugin)).toEqual({ root: "/tmp/fixture/jam-shelf/notes", field: "foreground cwd" });
+  expect(invocationPaneRoot(shell, "open-tree", plugin)).toEqual({ root: "/tmp/fixture/jam-shelf", field: "cwd" });
+  expect(invocationPaneRoot({ foreground_cwd: plugin }, "open-here", plugin)).toEqual({ root: plugin, field: "foreground cwd" });
+  expect(invocationPaneRoot(undefined, "open-here", plugin)).toBeUndefined();
 });
 
 test("the config writer records a choice every process reads the same way, and never replaces one", () => {
@@ -183,6 +240,11 @@ test("the chooser moves by keys and mouse, chooses by Enter or a click, and sani
   expect(chooser.index).toBe(1);
   expect(chooserKey(chooser, { name: "return" })).toBe("choose");
   expect(chooserKey(chooser, { name: "escape" })).toBe("close");
+  // While a choice is being saved and continued, nothing closes the popup halfway.
+  chooser.busy = true;
+  expect(chooserKey(chooser, { name: "escape" })).toBeNull();
+  expect(chooserKey(chooser, { name: "c", ctrl: true })).toBeNull();
+  chooser.busy = false;
 
   const frame = renderChooserFrame(chooser, 90, 24);
   expect(frame).toHaveLength(24);
@@ -252,4 +314,14 @@ else console.log(JSON.stringify({ result: { plugin_pane: { pane: { pane_id: "w:p
   expect(refused.code).toBe(1);
   expect(refused.stderr).toContain(`No outline for ${root}`);
   expect(existsSync(stateRoot)).toBe(false);
-}, 20_000);
+
+  // Aliased to a stopped local outline whose folder is unknown: say so at once, never blame a tunnel.
+  const orphan = outlineAt({ OUTLINER_WORKSPACE_ROOT: join(directory, "old-hash"), OUTLINER_STATE_DIR: stateRoot });
+  writeClientConfig({ OUTLINER_STATE_DIR: stateRoot, XDG_CONFIG_HOME: configHome }, { mode: "remote", workspaceRoot: root, socketPath: orphan.socket });
+  const started = Date.now();
+  const stopped = await run("open-here");
+  expect(stopped.code).toBe(1);
+  expect(stopped.stderr).toContain("is not running, and the folder it belongs to is unknown");
+  expect(stopped.stderr).not.toContain("SSH");
+  expect(Date.now() - started).toBeLessThan(8_000);
+}, 30_000);

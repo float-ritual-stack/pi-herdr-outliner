@@ -78,6 +78,10 @@ export function writeClientConfig(
   env: NodeJS.ProcessEnv,
   config: OutlinerClientConfig & { workspaceRoot: string },
 ): string {
+  if (env.OUTLINER_CONFIG_PATH?.trim()) {
+    // That file is the user's own, possibly shared by several folders; never pin it to one.
+    throw new Error("OUTLINER_CONFIG_PATH is set explicitly, so the Outliner will not write a project config through it; edit that file instead");
+  }
   const workspaceRoot = resolve(config.workspaceRoot);
   const path = resolveClientConfigPath({ ...env, OUTLINER_WORKSPACE_ROOT: workspaceRoot });
   if (config.mode === "remote" && !isAbsolute(config.socketPath)) {

@@ -111,8 +111,8 @@ import {
 
 const execFileAsync = promisify(execFile);
 const extensionRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const paths = resolveClientPaths();
-const client = createOutlinerClient(paths);
+let paths = resolveClientPaths();
+let client = createOutlinerClient(paths);
 let headlessServer: ChildProcess | null = null;
 
 export type OutlinerHostActorId = "omp" | "pi";
@@ -977,6 +977,12 @@ async function runWorkflowOrchestrator(
 }
 
 async function ensureService(focus: boolean): Promise<void> {
+  // A choice made in the outline chooser since load changes where this folder connects.
+  const current = resolveClientPaths();
+  if (current.socket !== paths.socket || current.mode !== paths.mode) {
+    paths = current;
+    client = createOutlinerClient(paths);
+  }
   const service = await client
     .request<OutlinerServiceStatus>({ action: "ping" }, paths.mode === "remote" ? undefined : 300)
     .catch(() => null);
@@ -992,7 +998,7 @@ async function ensureService(focus: boolean): Promise<void> {
   }
 
   if (process.env.HERDR_ENV === "1") {
-    await execFileAsync("bun", [
+    const { stdout } = await execFileAsync("bun", [
       "run",
       join(extensionRoot, "src", "herdr-open.ts"),
       "--mode",
@@ -1005,6 +1011,12 @@ async function ensureService(focus: boolean): Promise<void> {
         OUTLINER_WORKSPACE_ROOT: paths.workspaceRoot,
       },
     });
+    // Opening never creates an outline: Herdr now shows the chooser instead of a service.
+    let opened: { outline?: unknown } = {};
+    try { opened = JSON.parse(stdout.trim().split("\n").at(-1) ?? "{}"); } catch { /* Older launchers print other output. */ }
+    if (opened.outline === "missing") {
+      throw new Error(`No outline for ${paths.workspaceRoot} yet. Choose one in the Choose outline popup (or New outline here), then retry.`);
+    }
   } else if (!headlessServer) {
     headlessServer = spawn("bun", ["run", join(extensionRoot, "src", "server-main.ts")], {
       cwd: extensionRoot,

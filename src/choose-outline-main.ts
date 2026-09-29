@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
-import { join } from "node:path";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { isKeyRelease, ProcessTerminal } from "@earendil-works/pi-tui";
 import { decodePiDetailInput } from "./detail-pi-input";
+import { relaunchArgs, relaunchEnvironment } from "./herdr-open-relaunch";
 import { listKnownOutlines } from "./known-outlines";
 import {
   chooserKey,
@@ -39,31 +39,11 @@ async function stop(exitCode = 0): Promise<void> {
   process.exit(exitCode);
 }
 
-/** Runs the launcher again for the chosen folder, as if the user had invoked the action there. */
-function launcherEnvironment(workspaceRoot: string, paneId: string | undefined): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    OUTLINER_OPEN_WORKSPACE_ROOT: workspaceRoot,
-    HERDR_PLUGIN_CONTEXT_JSON: JSON.stringify({
-      ...(paneId ? { focused_pane_id: paneId } : {}),
-      focused_pane_cwd: workspaceRoot,
-    }),
-  };
-  delete env.OUTLINER_CHOOSER_CONTEXT;
-  // This popup's own pane must never be mistaken for the invoking pane.
-  delete env.HERDR_PANE_ID;
-  return env;
-}
-
-function launcherArgs(mode: string, clientId?: string): string[] {
-  return ["run", join(import.meta.dir, "herdr-open.ts"), "--mode", mode, ...(clientId ? ["--client", clientId] : [])];
-}
-
 function runLauncher(mode: string, workspaceRoot: string): Promise<void> {
   return new Promise((resolve, reject) => {
     let stderr = "";
-    const child = spawn(process.execPath, launcherArgs(mode), {
-      env: launcherEnvironment(workspaceRoot, undefined),
+    const child = spawn(process.execPath, relaunchArgs(mode), {
+      env: relaunchEnvironment(process.env, workspaceRoot),
       stdio: ["ignore", "ignore", "pipe"],
     });
     child.stderr.on("data", chunk => { stderr += String(chunk); });
@@ -86,7 +66,12 @@ async function choose(): Promise<void> {
       draw();
       await runLauncher("service-only", plan.startServiceFor);
     }
-    writeClientConfig(process.env, plan.config);
+    try {
+      writeClientConfig(process.env, plan.config);
+    } catch (error) {
+      // Another chooser (or an earlier choice) already recorded this folder's outline: honour it.
+      if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+    }
   } catch (error) {
     chooser.busy = false;
     chooser.status = error instanceof Error ? error.message : String(error);
@@ -94,8 +79,8 @@ async function choose(): Promise<void> {
     return;
   }
   // The popup closes before the panes open; the launcher reports its own failures.
-  spawn(process.execPath, launcherArgs(context.mode, context.clientId), {
-    env: launcherEnvironment(context.workspaceRoot, context.paneId),
+  spawn(process.execPath, relaunchArgs(context.mode, context.clientId), {
+    env: relaunchEnvironment(process.env, context.workspaceRoot, context.paneId),
     detached: true,
     stdio: "ignore",
   }).unref();
@@ -109,21 +94,31 @@ function queueStop(exitCode = 0): void {
 
 function apply(intent: ChooserIntent): void {
   if (intent === "close") queueStop();
-  else if (intent === "choose") workQueue = workQueue.then(choose);
+  else if (intent === "choose") workQueue = workQueue.then(choose).catch(error => {
+    chooser.busy = false;
+    chooser.status = error instanceof Error ? error.message : String(error);
+    draw();
+  });
   else if (intent === "changed") draw();
 }
 
 initTheme(undefined, false);
 terminal.write("\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h");
 terminal.start(data => {
-  if (isKeyRelease(data)) return;
-  if (isTreeMouseSequence(data)) {
-    apply(chooserMouse(chooser, data, terminal.columns, terminal.rows));
-    return;
+  try {
+    if (isKeyRelease(data)) return;
+    if (isTreeMouseSequence(data)) {
+      apply(chooserMouse(chooser, data, terminal.columns, terminal.rows));
+      return;
+    }
+    const input = decodePiDetailInput(data);
+    if (input.kind === "paste" || input.inputAction === "suppress") return;
+    apply(chooserKey(chooser, input.key));
+  } catch (error) {
+    // Never leave the popup's terminal in the alternate screen with mouse reporting on.
+    console.error(error);
+    void stop(1);
   }
-  const input = decodePiDetailInput(data);
-  if (input.kind === "paste" || input.inputAction === "suppress") return;
-  apply(chooserKey(chooser, input.key));
 }, draw);
 process.on("SIGINT", () => queueStop(130));
 process.on("SIGTERM", () => void stop(143));

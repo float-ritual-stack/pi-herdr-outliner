@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { clientSupportsRole } from "./types";
 import type { OutlinerClientRegistration, OutlinerViewAddress } from "./types";
 
@@ -71,4 +72,22 @@ export function selectLinkedDetailClient(
     throw new Error("Linked destination is unavailable · choose a destination or create a new Detail");
   }
   return client;
+}
+
+/**
+ * The folder an invoking pane stands for. Shells report it as their foreground
+ * cwd; Outliner panes run from the plugin checkout and report their project
+ * through OSC 7 as `cwd`, so a foreground cwd equal to the plugin root is skipped.
+ * `open-tree` prefers `cwd` outright, as a new Tree inherits its source's project.
+ */
+export function invocationPaneRoot(
+  pane: { cwd?: string; foreground_cwd?: string } | undefined,
+  mode: string,
+  pluginRoot: string,
+): { root: string; field: "cwd" | "foreground cwd" } | undefined {
+  const foreground = pane?.foreground_cwd && !(pane.cwd && resolve(pane.foreground_cwd) === resolve(pluginRoot))
+    ? { root: pane.foreground_cwd, field: "foreground cwd" as const }
+    : undefined;
+  const cwd = pane?.cwd ? { root: pane.cwd, field: "cwd" as const } : undefined;
+  return mode === "open-tree" ? cwd ?? foreground : foreground ?? cwd;
 }
