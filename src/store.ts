@@ -3,6 +3,7 @@ import {placeOrderedItems} from "./virtual-placement";
 import {WorkingSelectionRepository} from "./working-selection";
 import { ChangeFeed, raiseChangeFeedFloor, type SequenceChange } from "./change-feed";
 import { checklistItems, queryChecklistItems, updateChecklistText, validateChecklistIdentityChanges } from "./checklist-items";
+import { readFragment, readTransclusions, type FragmentRead, type TransclusionOptions, type TransclusionRead, type TransclusionTarget } from "./transclusions";
 import type { ChecklistCollection, ChecklistIdentityChange, ChecklistQuery, ChecklistSearchQuery, ChecklistSearchCollection, ChecklistUpdateInput, ChecklistUpdateReceipt } from "./types";
 import type {QueryExpression, SavedViewReadOptions, SavedViewReadProblem, SavedViewReadResult, VirtualBranchOrder, VirtualBranchPlacementInput} from "./types";
 import { BLOCK_ACTIVITY_KINDS, BLOCK_EDIT_ACTIVITY_KINDS } from "./types";
@@ -1487,6 +1488,16 @@ export class OutlinerStore {
       }
       return {matches,completeness:{kind:'complete'}};
     })();
+  }
+
+  /** `((id^fragment))`'s slice of its note, read in one transaction (src/transclusions.ts owns the rules). */
+  readFragment(id: string, fragmentId: string): FragmentRead {
+    return this.database.transaction(() => readFragment(this.requireActive(id), fragmentId))();
+  }
+
+  /** Transclusions as readers show them, nested and cycle-safe, from one consistent read. */
+  readTransclusions(targets: readonly TransclusionTarget[], options: TransclusionOptions): TransclusionRead {
+    return this.database.transaction(() => readTransclusions(id => this.getFromCurrentRead(id), targets, options))();
   }
 
   updateChecklist(id: string, input: ChecklistUpdateInput, mutation: MutationProvenance): ChecklistUpdateReceipt {

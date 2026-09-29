@@ -63,6 +63,12 @@ source evidence or distinguish authored glyphs from controls.
 - `src/backlink-facets.ts` owns what a backlink source is (kind, stage, placement,
   comment resolution) as a data table; `src/backlink-view.ts` owns how clients
   hide, filter, group and order those sources.
+- `src/transclusions.ts` owns fragment slices and transclusion projection
+  (PIE-424): what `((id^fragment))` covers (`readFragment`, over
+  `resolveFragmentSlice`), and how `!((…))` nests (depth, cycles, the
+  per-document limit, the read budget) and what each failure is called.
+  `fragments.read` and `transclusions.read` serve it; Detail's embeds use its
+  limit and wording. A client asks rather than re-deriving slices.
 - `src/context-resolution.ts` owns context-scoped resolution ("the nearest key"
   for a line: the line, lines above, the block, ancestors). It is the first
   slice of PIE-408; resource projections and later soft links use it rather than

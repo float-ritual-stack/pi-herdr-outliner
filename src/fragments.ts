@@ -87,10 +87,8 @@ export function isFragmentId(value: string): boolean {
   return new RegExp(`^${FRAGMENT_ID_SOURCE}$`).test(value);
 }
 
-export function fragmentAnchors(text: string): FragmentAnchor[] {
-  const lines = text.split(/\r?\n/);
-  const offsets = lineOffsets(text);
-  const items = new Map(markdownListItems(text).map(item => [item.span.startLine, item]));
+/** The lines inside fenced or indented code: no anchor, heading or boundary lives there (PIE-424). */
+function codeLineSet(text: string): Set<number> {
   const codeLines = new Set<number>();
   const excludeCode = (nodes: MarkdownSourceToken[]): void => {
     for (const node of nodes) {
@@ -100,6 +98,14 @@ export function fragmentAnchors(text: string): FragmentAnchor[] {
     }
   };
   excludeCode(markdownSourceTokens(text));
+  return codeLines;
+}
+
+export function fragmentAnchors(text: string): FragmentAnchor[] {
+  const lines = text.split(/\r?\n/);
+  const offsets = lineOffsets(text);
+  const items = new Map(markdownListItems(text).map(item => [item.span.startLine, item]));
+  const codeLines = codeLineSet(text);
   const anchors: FragmentAnchor[] = [];
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
     if (codeLines.has(lineIndex)) continue;
@@ -150,7 +156,10 @@ export function resolveFragmentSlice(
     ).match(HEADING_PATTERN)!;
     const depth = heading[1]!.length;
     endLine = lines.length - 1;
+    // A `#` line inside a code fence is code, not a heading: it never ends the section.
+    const codeLines = codeLineSet(text);
     for (let lineIndex = anchor.lineIndex + 1; lineIndex < lines.length; lineIndex += 1) {
+      if (codeLines.has(lineIndex)) continue;
       const candidate = contentBeforeAnchor(
         lines[lineIndex]!,
         anchorMatch(lines[lineIndex]!),
@@ -192,7 +201,9 @@ export function fragmentCandidates(
   const candidates: FragmentCandidate[] = [];
 
   if (mode === "heading") {
+    const codeLines = codeLineSet(text);
     for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+      if (codeLines.has(lineIndex)) continue;
       const line = lines[lineIndex]!;
       const match = anchorMatch(line);
       const heading = contentBeforeAnchor(line, match).match(HEADING_PATTERN);

@@ -4,6 +4,7 @@ import {atomicDocument, concatDocuments, observeDocument, sourceDocument, sliceD
 import type { RequestInput } from "./client";
 import {isChecklistView,projectChecklistView} from './checklist-views';
 import { resolveFragmentSlice, stripFragmentAnchors } from "./fragments";
+import { embedPattern, MAX_EMBEDS_PER_DOCUMENT, TRANSCLUSION_WORDING } from "./transclusions";
 import { propertyReferenceOccurrences } from "./reference-occurrences";
 import { blockDisplayTitle } from "./references";
 import { propertySummarySegments } from "./property-summary";
@@ -28,9 +29,10 @@ import {
   parseVirtualBranchConfig,
 } from "./virtual-branches";
 
-const DETAIL_EMBED_PATTERN =
-  /!\(\(([A-Za-z0-9_-]{8,})(?:\^([A-Za-z0-9][A-Za-z0-9_-]{0,63}))?\)\)/g;
-const MAX_DETAIL_EMBEDS = 16;
+// The syntax, the per-document limit and the wording are the service's (src/transclusions.ts), so Detail
+// and every other client that asks `transclusions.read` agree.
+const DETAIL_EMBED_PATTERN = embedPattern();
+const MAX_DETAIL_EMBEDS = MAX_EMBEDS_PER_DOCUMENT;
 const MAX_ERROR_LENGTH = 240;
 
 export interface DetailEmbedRequester {
@@ -380,24 +382,24 @@ async function projectEmbed(
   } catch (error) {
     const message = boundedError(error);
     return message.startsWith(`Block not found: ${blockId}`)
-      ? explicitFallback(blockId, "missing", "MISSING TARGET", fragmentId)
-      : explicitFallback(blockId, "failed", `TARGET FAILED · ${message}`, fragmentId);
+      ? explicitFallback(blockId, "missing", TRANSCLUSION_WORDING.missing, fragmentId)
+      : explicitFallback(blockId, "failed", TRANSCLUSION_WORDING.failed(message), fragmentId);
   }
   if (target.effectiveDeletedRootId) {
     return explicitFallback(
       blockId,
       "deleted",
-      `IN TRASH · ${blockDisplayTitle(target)}`,
+      TRANSCLUSION_WORDING.deleted(blockDisplayTitle(target)),
       fragmentId,
     );
   }
   if (fragmentId) {
     const resolution = resolveFragmentSlice(target.text, fragmentId);
     if (resolution.status === "missing") {
-      return explicitFallback(blockId, "fragment-missing", "MISSING FRAGMENT", fragmentId);
+      return explicitFallback(blockId, "fragment-missing", TRANSCLUSION_WORDING.fragmentMissing, fragmentId);
     }
     if (resolution.status === "duplicate") {
-      return explicitFallback(blockId, "fragment-duplicate", "DUPLICATE FRAGMENT", fragmentId);
+      return explicitFallback(blockId, "fragment-duplicate", TRANSCLUSION_WORDING.fragmentDuplicate, fragmentId);
     }
     const header = `Embedded fragment: ((${embedReference(blockId, fragmentId)}))\n`;
     const observed = observeDocument({kind: 'block', blockId: target.id}, target.text, target.revision);
@@ -705,7 +707,7 @@ export async function projectDetailRead(
       projected = explicitFallback(
         blockId,
         "limit",
-        `EMBED LIMIT · maximum ${MAX_DETAIL_EMBEDS}`,
+        TRANSCLUSION_WORDING.limit,
         fragmentId,
       );
     } else {

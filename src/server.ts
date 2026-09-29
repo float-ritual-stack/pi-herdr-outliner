@@ -2132,6 +2132,12 @@ export class OutlinerServer {
         case "checklist.update":
           result = this.store.updateChecklist(request.blockId, request.input, request.mutation);
           break;
+        case "fragments.read":
+          result = this.store.readFragment(request.blockId, request.fragmentId);
+          break;
+        case "transclusions.read":
+          result = this.store.readTransclusions(request.targets, { hostBlockId: request.hostBlockId, maxDepth: request.maxDepth });
+          break;
         case "update":
           result = this.store.update(
             request.blockId,

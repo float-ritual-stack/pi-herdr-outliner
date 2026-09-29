@@ -187,3 +187,9 @@ test("parses heading-search and durable fragment completion queries", () => {
   });
   expect(parseFragmentCompletionQuery("ordinary block")).toBeNull();
 });
+
+test("a `#` line inside a code fence is code: it neither ends a heading's section nor is offered as a heading (PIE-424)", () => {
+  const source = ["# Notes", "## Setup ^setup", "Run this:", "```sh", "# comment, not a heading", "```", "Then restart.", "## Next"].join("\n");
+  expect(resolveFragmentSlice(source, "setup")).toMatchObject({ status: "resolved", slice: { startLine: 1, endLine: 6 } });
+  expect(fragmentCandidates(source, "", "heading").map(candidate => candidate.label)).toEqual(["Notes", "Setup", "Next"]);
+});

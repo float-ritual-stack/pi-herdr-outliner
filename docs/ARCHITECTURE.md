@@ -809,6 +809,7 @@ Do not leave older editors running across this upgrade.
 - compact Tree reads: `tree.index`
 - bounded search: `blocks.query` (optional `fields` projection), `tree.query`, `tree.focus`
 - saved-view evaluation: `views.read`
+- fragments and transclusions (PIE-424; capabilities `fragments.read`, `transclusions.read`): `fragments.read { blockId, fragmentId }` returns a `((id^fragment))` slice (kind, label, note lines, offsets and the text a reader shows) or `missing` / `duplicate`; `transclusions.read { targets, hostBlockId?, maxDepth? }` projects `!((id))` and `!((id^fragment))` as readers show them, nested to a bounded depth (default 3, ceiling 6), cycle-safe by `(block, fragment)` on the path from the host, at most 16 per document and 64 per read, each ready projection carrying the checklist steps in what it shows; every failure carries its reader wording. `src/transclusions.ts` owns these rules; Detail's embed projection takes its limit and wording from it
 - resource identity and documents: `resource-sources.create | list | get` and `resources.intern | intern-filesystem | get | relocate | describe | open | refresh`
 - resource projections (capability `resources.projection`): `resources.projection.read` returns stored details for a block's provider lines and ticket-page property; it never registers, refreshes or contacts a provider
 - resource retention: `resources.retention.get | configure | inspect | pin | unpin | reference | unreference` and explicit `resources.collect` eviction/purge passes
