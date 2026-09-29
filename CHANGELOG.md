@@ -10,7 +10,9 @@ This file records notable user-facing changes. The project remains active dogfoo
   deleting the token frees the address. Saves were refused before with "requires
   pages.rename" / "requires pages.remove". An address another note owns is
   refused as `[[y]] is already the page of block <id>; pick another name`, and
-  nothing is saved. Work IDs stay immutable.
+  nothing is saved; an owner in Trash is named as such. Work IDs stay immutable.
+  Quick Capture's idle draft saves are provisional: a page name corrected
+  before Save to Inbox leaves no alias behind.
 
 - Fragment completion searches every note (PIE-424; fixes PIE-295's
   "Searched only 500 blocks"). `fragments.candidates` finds `((note#heading` /

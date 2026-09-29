@@ -1382,7 +1382,16 @@ export class OutlinerStore {
       if (input.prepareBlock && !block) {
         block = this.createAt(input.text, this.requireCaptureInboxFromCurrentRead().id, "user", undefined, new Date().toISOString(), 0);
       } else if (block && !captured && block.text !== input.text) {
+        // Draft saves are provisional writing: a page named in one idle save and
+        // corrected in the next must not stay behind as an alias of the capture.
+        const provisionalPage = this.database.query(
+          "SELECT normalized_address FROM page_addresses WHERE block_id = ? AND kind = 'page'",
+        ).get(block.id) as { normalized_address: string } | null;
         block = this.update(block.id, input.text, block.revision, {author:"user", actorId:"capture"});
+        if (provisionalPage) {
+          this.database.query("DELETE FROM page_addresses WHERE normalized_address = ? AND block_id = ? AND kind = 'alias'")
+            .run(provisionalPage.normalized_address, block.id);
+        }
       }
       const previous = this.database.query(
         "SELECT revision FROM quick_capture_draft WHERE singleton = 1",
@@ -4093,8 +4102,11 @@ export class OutlinerStore {
     const target = this.pageAddressRowFromCurrentRead(desired.normalizedAddress);
     if (target && target.block_id !== blockId) {
       const role = target.kind === "page" ? "the page" : target.kind === "alias" ? "an alias" : "the Work ID";
+      const owner = this.database.query("SELECT effective_deleted_root_id FROM blocks WHERE id = ?")
+        .get(target.block_id) as { effective_deleted_root_id: string | null } | null;
+      const where = owner?.effective_deleted_root_id ? " (in Trash)" : "";
       throw new Error(
-        `[[${desired.displayAddress}]] is already ${role} of block ${target.block_id}; pick another name`,
+        `[[${desired.displayAddress}]] is already ${role} of block ${target.block_id}${where}; pick another name`,
       );
     }
     if (target?.kind === "work-id") {

@@ -2391,6 +2391,32 @@ Second paragraph`;
     expect(store.resolvePageAddress("harbor").block?.id).toBe(other.id);
   });
 
+  test("a Quick Capture draft that corrects its page name leaves no alias behind", () => {
+    const store = makeStore();
+    let draft = store.saveQuickCaptureDraft({requestId: "lamp", text: "", cursorRow: 0, cursorColumn: 0, expectedRevision: null, prepareBlock: true});
+    for (const text of ["Lamp plan [page::Lunch]", "Lamp plan [page::Launch]", "Lamp plan [page::Lamp]"]) {
+      draft = store.saveQuickCaptureDraft({requestId: "lamp", text, cursorRow: 0, cursorColumn: 0, expectedRevision: draft.revision});
+    }
+    expect(store.resolvePageAddress("lamp")).toMatchObject({kind: "page", block: {id: draft.blockId}});
+    expect(store.resolvePageAddress("lunch").status).toBe("missing");
+    expect(store.resolvePageAddress("launch").status).toBe("missing");
+    expect(store.create("Lunch menu [page::Lunch]").id).toBeString();
+  });
+
+  test("a text rename names an owner in Trash and keeps the address across restore", () => {
+    const store = makeStore();
+    const page = store.create("Lantern notes [page::Lantern]");
+    store.update(page.id, "Lantern notes [page::Beacon]", page.revision, {author: "agent", actorId: "cli"});
+    store.delete(page.id);
+    const other = store.create("Other notes");
+    expect(() => store.update(other.id, "Other notes [page::Beacon]", other.revision)).toThrow(
+      `[[Beacon]] is already the page of block ${page.id} (in Trash); pick another name`,
+    );
+    store.restore(page.id);
+    expect(store.resolvePageAddress("beacon")).toMatchObject({status: "resolved", kind: "page", block: {id: page.id}});
+    expect(store.resolvePageAddress("lantern")).toMatchObject({status: "resolved", kind: "alias", block: {id: page.id}});
+  });
+
   test("removing [page::…] from the text frees the address for another note", () => {
     const store = makeStore();
     const page = store.create("Lantern notes [page::Lantern]");
