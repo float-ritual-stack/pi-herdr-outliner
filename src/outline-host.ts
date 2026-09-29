@@ -141,6 +141,8 @@ export class OutlineHost {
   private listener: Server | null = null;
   private readonly opened = new Map<string, HostedOutline>();
   private readonly opening = new Map<string, Promise<HostedOutline>>();
+  /** Outlines whose files are being moved away; they must not reopen meanwhile. */
+  private readonly deleting = new Set<string>();
   private readonly connections = new Set<Socket>();
   private closing = false;
   private releaseHostLock: (() => void) | undefined;
@@ -286,10 +288,17 @@ export class OutlineHost {
     if (lstatOrUndefined(paths.sideFolder)) throw new Error(`${paths.sideFolder} already exists; refusing to reuse it for a new outline named "${name}"`);
   }
 
-  /** Creates a new, empty outline and opens it. Refuses a name already in use; never overwrites. */
-  async create(nameInput: unknown): Promise<HostedOutlineSummary> {
+  /**
+   * Creates a new, empty outline and opens it. Refuses a name already in use; never overwrites.
+   * `folder`, when the name was taken from a folder, is recorded in `outlines/<name>.json`
+   * so clients in another folder with the same name do not take this outline (paths.ts).
+   */
+  async create(nameInput: unknown, folderInput?: unknown): Promise<HostedOutlineSummary> {
     const name = requireName(nameInput);
+    if (folderInput !== undefined && (typeof folderInput !== "string" || !isAbsolute(folderInput))) throw new Error("The folder an outline is named after must be an absolute path");
     this.refuseTaken(name);
+    const settings = outlineSettingsPath(this.stateRoot, name);
+    if (folderInput !== undefined && lstatOrUndefined(settings)) throw new Error(`${settings} already exists; refusing to reuse it for "${name}"`);
     const paths = hostedOutlinePaths(this.stateRoot, name);
     mkdirSync(this.outlinesFolder, { recursive: true });
     // Claim the name exclusively before anything else, so two creates cannot share a file.
@@ -298,10 +307,16 @@ export class OutlineHost {
       if (errorCode(error) === "EEXIST") throw new Error(`An outline named "${name}" already exists in ${this.outlinesFolder}`);
       throw error;
     }
+    let wroteSettings = false;
     try {
+      if (typeof folderInput === "string") {
+        writeFileSync(settings, `${JSON.stringify({ folder: resolve(folderInput) }, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+        wroteSettings = true;
+      }
       mkdirSync(paths.sideFolder);
       await this.open(name);
     } catch (error) {
+      if (wroteSettings) rmSync(settings, { force: true });
       // Only what this call made: the claimed empty file, its SQLite side files and the new folder.
       // Never the `.owner.sqlite` lock file: a contender may hold it (workspace-ownership.ts).
       for (const suffix of ["", "-wal", "-shm"]) rmSync(`${paths.database}${suffix}`, { force: true });
@@ -373,12 +388,12 @@ export class OutlineHost {
    * it creates the outline first when `create` is set and none has the name.
    * A plain read never creates; only a session opener asks for `create`.
    */
-  async attach(nameInput: unknown, create: boolean): Promise<HostedOutlineAttachment> {
+  async attach(nameInput: unknown, create: boolean, folder?: unknown): Promise<HostedOutlineAttachment> {
     const name = requireName(nameInput);
     if (!lstatOrUndefined(hostedOutlinePaths(this.stateRoot, name).database)) {
       if (!create) throw new Error(`No outline named "${name}" in ${this.outlinesFolder}; create it with \`outliner outline create ${name}\``);
       try {
-        return { outline: await this.create(name), created: true };
+        return { outline: await this.create(name, folder), created: true };
       } catch (error) {
         // Another session created it a moment ago: attach to that one.
         if (!lstatOrUndefined(hostedOutlinePaths(this.stateRoot, name).database)) throw error;
@@ -413,27 +428,34 @@ export class OutlineHost {
     const paths = hostedOutlinePaths(this.stateRoot, name);
     const entry = lstatOrUndefined(paths.database);
     if (!entry) throw new Error(`No outline named "${name}" in ${this.outlinesFolder}`);
-    await this.closeOutline(name);
-    const settings = outlineSettingsPath(this.stateRoot, name);
-    if (entry.isSymbolicLink()) {
-      unlinkSync(paths.database);
-      rmSync(settings, { force: true });
-      return { name, adopted: true };
+    if (this.deleting.has(name)) throw new Error(`Outline "${name}" is already being deleted`);
+    this.deleting.add(name);
+    try {
+      await this.closeOutline(name);
+      const settings = outlineSettingsPath(this.stateRoot, name);
+      if (entry.isSymbolicLink()) {
+        unlinkSync(paths.database);
+        rmSync(settings, { force: true });
+        return { name, adopted: true };
+      }
+      const movedTo = join(this.stateRoot, "deleted", `${name}-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+      mkdirSync(movedTo, { recursive: true });
+      // The lock file stays: a contender may hold it (workspace-ownership.ts).
+      for (const suffix of ["", "-wal", "-shm"]) {
+        if (lstatOrUndefined(`${paths.database}${suffix}`)) renameSync(`${paths.database}${suffix}`, join(movedTo, `${name}.sqlite${suffix}`));
+      }
+      if (lstatOrUndefined(paths.sideFolder)) renameSync(paths.sideFolder, join(movedTo, name));
+      if (lstatOrUndefined(settings)) renameSync(settings, join(movedTo, `${name}.json`));
+      return { name, adopted: false, movedTo };
+    } finally {
+      this.deleting.delete(name);
     }
-    const movedTo = join(this.stateRoot, "deleted", `${name}-${new Date().toISOString().replace(/[:.]/g, "-")}`);
-    mkdirSync(movedTo, { recursive: true });
-    // The lock file stays: a contender may hold it (workspace-ownership.ts).
-    for (const suffix of ["", "-wal", "-shm"]) {
-      if (lstatOrUndefined(`${paths.database}${suffix}`)) renameSync(`${paths.database}${suffix}`, join(movedTo, `${name}.sqlite${suffix}`));
-    }
-    if (lstatOrUndefined(paths.sideFolder)) renameSync(paths.sideFolder, join(movedTo, name));
-    if (lstatOrUndefined(settings)) renameSync(settings, join(movedTo, `${name}.json`));
-    return { name, adopted: false, movedTo };
   }
 
   /** Opens an outline on first use and keeps it open. A failure is that outline's alone and is retried next time. */
   open(name: string): Promise<HostedOutline> {
     if (this.closing) return Promise.reject(new Error("The outline host is stopping"));
+    if (this.deleting.has(name)) return Promise.reject(new Error(`Outline "${name}" is being deleted`));
     const opened = this.opened.get(name);
     if (opened) return Promise.resolve(opened);
     const pending = this.opening.get(name);
@@ -574,7 +596,7 @@ export class OutlineHost {
       case "outlines.list": return this.list();
       case "outlines.create": return this.create(request.name);
       case "outlines.adopt": return this.adopt(request.path, request.name, request.root);
-      case "outlines.attach": return this.attach(request.name, request.create === true);
+      case "outlines.attach": return this.attach(request.name, request.create === true, request.folder);
       case "outlines.close": return this.closeOutline(request.name);
       case "outlines.delete": return this.delete(request.name);
       default: throw new Error(`Unsupported host action: ${String(request.action)}`);

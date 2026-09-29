@@ -108,6 +108,24 @@ export function hostedOutlinePaths(stateRoot: string, name: string): { database:
   return { database: join(outlines, `${name}.sqlite`), sideFolder: join(outlines, name) };
 }
 
+/**
+ * Whether `outlines/<name>.json` ties a host outline to a folder other than
+ * `workspaceRoot`: the `folder` it was named after, else an adopted `root`.
+ * False when nothing is recorded; an unreadable record counts as elsewhere.
+ */
+function hostedOutlineBelongsElsewhere(stateRoot: string, name: string, workspaceRoot: string): boolean {
+  let text: string;
+  try { text = readFileSync(join(outlineHostPaths(stateRoot).outlines, `${name}.json`), "utf8"); }
+  catch (error) { return (error as NodeJS.ErrnoException).code !== "ENOENT"; }
+  let recorded: unknown;
+  try {
+    const value = JSON.parse(text) as { folder?: unknown; root?: unknown };
+    recorded = value.folder ?? value.root;
+  } catch { return true; }
+  if (recorded === undefined) return false;
+  return typeof recorded !== "string" || resolve(recorded) !== resolve(workspaceRoot);
+}
+
 function readableWorkspaceName(workspaceRoot: string): string {
   const name = basename(workspaceRoot) || "root";
   return name.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "workspace";
@@ -320,7 +338,8 @@ export function resolvePaths(env: NodeJS.ProcessEnv = process.env): OutlinerPath
  * 3. The folder's `client.json`: an `outline` binds it to a host outline;
  *    `remote` and `local` choices are kept as before.
  * 4. Nothing chosen, an outline host running under the state root, and no
- *    hash database for the folder: the host outline named after the folder.
+ *    hash database for the folder: the host outline named after the folder,
+ *    unless `outlines/<name>.json` ties that outline to another folder.
  * 5. Otherwise the folder's hash socket, as before.
  */
 export function resolveClientPaths(
@@ -367,7 +386,8 @@ export function resolveClientPaths(
       config === undefined && !explicitConfigPath && envRemote === undefined &&
       existsSync(outlineHostPaths(stateRoot).socket) && !existsSync(paths.database)
     ) {
-      return host(slugifyOutlineName(basename(paths.workspaceRoot)), "folder");
+      const guess = slugifyOutlineName(basename(paths.workspaceRoot));
+      if (!hostedOutlineBelongsElsewhere(stateRoot, guess, paths.workspaceRoot)) return host(guess, "folder");
     }
     return { ...paths, mode: "local" };
   }

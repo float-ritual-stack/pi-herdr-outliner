@@ -138,6 +138,13 @@ test("resolution: OUTLINER_OUTLINE, then a folder's binding, then the folder's n
   mkdirSync(stateRoot, { recursive: true });
   writeFileSync(hostSocket, "");
   expect(resolveClientPaths(envFor(root, jam))).toMatchObject({ mode: "host", outline: "jam-shelf", outlineSource: "folder" });
+  // ...unless that outline records another folder of the same name: no silent merge.
+  const otherJam = join(root, "elsewhere", "Jam Shelf");
+  mkdirSync(otherJam, { recursive: true });
+  mkdirSync(outlineHostPaths(stateRoot).outlines, { recursive: true });
+  writeFileSync(join(outlineHostPaths(stateRoot).outlines, "jam-shelf.json"), JSON.stringify({ folder: jam }));
+  expect(resolveClientPaths(envFor(root, jam))).toMatchObject({ mode: "host", outline: "jam-shelf", outlineSource: "folder" });
+  expect(resolveClientPaths(envFor(root, otherJam)).mode).toBe("local");
   // ...but a folder that already has a hash database keeps it, and OUTLINER_REMOTE=0 forces the hash.
   const old = resolvePaths(envFor(root, oldFolder));
   mkdirSync(old.stateDir, { recursive: true });
@@ -161,6 +168,10 @@ test("attach creates only when asked, and a plain CLI read never creates", async
   expect(first).toMatchObject({ created: true, outline: { name: "uncle", open: true } });
   const again = await control.request<HostedOutlineAttachment>({ action: "outlines.attach", name: "uncle", create: true });
   expect(again).toMatchObject({ created: false, outline: { name: "uncle", open: true } });
+  // A name taken from a folder records that folder beside the outline.
+  await control.request({ action: "outlines.attach", name: "aunt", create: true, folder: root });
+  expect(JSON.parse(readFileSync(join(outlineHostPaths(stateRoot).outlines, "aunt.json"), "utf8"))).toEqual({ folder: root });
+  await control.request({ action: "outlines.delete", name: "aunt" });
 
   // Asynchronous: the host answers from this test's own event loop.
   const cli = async (...args: string[]) => {

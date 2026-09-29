@@ -17,7 +17,10 @@ export function listHostedOutlines(host: OutlinerClient): Promise<HostedOutlineL
   return host.request<HostedOutlineList>({ action: "outlines.list" });
 }
 
-/** Opens a session's outline on the host; `create` makes it first when missing (session openers only). */
-export function attachHostedOutline(host: OutlinerClient, name: string, create: boolean): Promise<HostedOutlineAttachment> {
-  return host.request<HostedOutlineAttachment>({ action: "outlines.attach", name, create });
+/**
+ * Opens a session's outline on the host; `create` makes it first when missing
+ * (session openers only). `folder` records the folder a name was taken from.
+ */
+export function attachHostedOutline(host: OutlinerClient, name: string, create: boolean, folder?: string): Promise<HostedOutlineAttachment> {
+  return host.request<HostedOutlineAttachment>({ action: "outlines.attach", name, create, ...(folder ? { folder } : {}) });
 }

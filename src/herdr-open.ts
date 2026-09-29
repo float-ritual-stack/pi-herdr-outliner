@@ -145,7 +145,8 @@ await reportStartupErrors("open", async () => {
       throw new Error(`No outline host answers at ${paths.socket} (outline "${name}" for ${workspaceRoot}). The host runs as a service (\`bun run host\`); start it and retry.`);
     }
     // Opening a session creates a missing outline; Pi's `service-only` check only attaches.
-    const attachment = await attachHostedOutline(host, name, mode !== "service-only");
+    // A name taken from the folder records that folder, so a same-named folder elsewhere is not merged into it.
+    const attachment = await attachHostedOutline(host, name, mode !== "service-only", paths.outlineSource === "folder" ? paths.workspaceRoot : undefined);
     attached = { name, created: attachment.created, source: { env: "OUTLINER_OUTLINE", bound: "the folder's binding", folder: "the folder's name" }[paths.outlineSource ?? "env"] };
     if (attachment.created) {
       try {

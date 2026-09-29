@@ -9,9 +9,11 @@ This file records notable user-facing changes. The project remains active dogfoo
   refuses a single-outline service when a name is asked for. The endpoint is
   `OUTLINER_OUTLINE` (CLI `--outline`), else a folder binding
   `{ workspaceRoot, outline }` in `client.json`, else, while a host runs, the
-  outline named after the folder. `outlines.attach { name, create }` opens by
-  name and creates on request (capability `outlines.attach`); Ctrl-b u creates
-  an unbound folder's outline on first open and notifies. Herdr panes all get
+  outline named after the folder. `outlines.attach { name, create, folder? }`
+  opens by name and creates on request (capability `outlines.attach`); Ctrl-b u
+  creates an unbound folder's outline on first open, records the folder in
+  `outlines/<name>.json`, and notifies. A same-named folder elsewhere is not
+  merged into it: it gets the chooser instead. Herdr panes all get
   `OUTLINER_OUTLINE`; no service pane in host mode. New host requests
   `outlines.close` and `outlines.delete`; new action **choose-outline** (the
   switcher). `doctor` shows the host and how the outline was chosen.
@@ -30,7 +32,7 @@ This file records notable user-facing changes. The project remains active dogfoo
   `outlines.list`, `outlines.create`, `outlines.adopt`, `ping.host`,
   `request.outline`). `outliner outlines` lists through a running host, and
   `outliner outline create <name>` / `outline adopt <path> <name>` ask it.
-  Clients do not send `outline` yet; the single-outline service is unchanged.
+  The single-outline service is unchanged and refuses `outlines.*`.
 
 - Outlines have names (PIE-457, service side). Each database describes itself
   in `outline.json` (`name`, `root`, optional `label`, `host`, `created`,

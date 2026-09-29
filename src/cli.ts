@@ -36,6 +36,7 @@ import {
  */
 for (let index = 2; index < process.argv.length; index++) {
   const argument = process.argv[index]!;
+  if (argument === "--") break;
   if (argument === "--outline" || argument.startsWith("--outline=")) {
     const value = argument === "--outline" ? process.argv[index + 1] : argument.slice("--outline=".length);
     if (!value) throw new Error("--outline requires an outline name");

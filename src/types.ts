@@ -1786,7 +1786,7 @@ export type OutlinerRequestAction =
   | { id: string; action: "outlines.list" }
   | { id: string; action: "outlines.create"; name: string }
   | { id: string; action: "outlines.adopt"; path: string; name: string; root?: string }
-  | { id: string; action: "outlines.attach"; name: string; create?: boolean }
+  | { id: string; action: "outlines.attach"; name: string; create?: boolean; folder?: string }
   | { id: string; action: "outlines.close"; name: string }
   | { id: string; action: "outlines.delete"; name: string }
   | { id: string; action: "blocks.query"; query: BlockSearchQuery; fields?: BlockReadField[] }
