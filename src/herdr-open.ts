@@ -17,7 +17,7 @@ import {
   resolveServicePaneId,
 } from "./pane-control";
 import { relaunchArgs, relaunchEnvironment } from "./herdr-open-relaunch";
-import { detectOutline, localOutlineOwner } from "./known-outlines";
+import { detectOutline, localOutlineOwner, socketAbsent } from "./known-outlines";
 import { resolveClientConfigRoot, resolveStateRoot } from "./paths";
 import type { OutlineChooserContext } from "./outline-chooser";
 import { waitForCompatibleService } from "./service-compatibility";
@@ -138,8 +138,9 @@ await reportStartupErrors("open", async () => {
       stateRoot: resolveStateRoot(process.env),
       configRoot: resolveClientConfigRoot(process.env),
     });
-    const running = owner && await createOutlinerClient(paths).request({ action: "ping" }, 300).then(() => true, () => false);
-    if (owner && !running) {
+    // Only a missing or refusing socket means stopped: a slow answer from a busy
+    // service must not start a second one or fail the open.
+    if (owner && await socketAbsent(paths.socket)) {
       if (!owner.root) {
         throw new Error(`The outline this folder uses (${owner.stateDir}) is not running, and the folder it belongs to is unknown. Open the Outliner from that outline's own folder to start it, then retry.`);
       }

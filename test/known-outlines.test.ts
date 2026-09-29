@@ -1,8 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
-import { detectOutline, listKnownOutlines, localOutlineOwner, type KnownOutline } from "../src/known-outlines";
+import { detectOutline, listKnownOutlines, localOutlineOwner, socketAbsent, type KnownOutline } from "../src/known-outlines";
 import { invocationPaneRoot } from "../src/herdr-open-policy";
 import {
   chooserKey,
@@ -325,3 +326,21 @@ else console.log(JSON.stringify({ result: { plugin_pane: { pane: { pane_id: "w:p
   expect(stopped.stderr).not.toContain("SSH");
   expect(Date.now() - started).toBeLessThan(8_000);
 }, 30_000);
+
+test("an outline counts as stopped only when its socket is missing or refuses, never when it is slow", async () => {
+  const { directory } = fixture();
+  expect(await socketAbsent(join(directory, "nowhere", "outliner.sock"))).toBe(true);
+  // A leftover socket path with nobody listening, as a killed service leaves behind.
+  const stale = join(directory, "stale.sock");
+  writeFileSync(stale, "");
+  expect(await socketAbsent(stale)).toBe(true);
+  // A listening service that never answers is busy, not stopped.
+  const busy = join(directory, "busy.sock");
+  const server = createServer(() => {});
+  await new Promise<void>(ready => server.listen(busy, ready));
+  try {
+    expect(await socketAbsent(busy, 200)).toBe(false);
+  } finally {
+    await new Promise<void>(closed => server.close(() => closed()));
+  }
+});

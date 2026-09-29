@@ -1,4 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { connect } from "node:net";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { OutlinerClient } from "./client";
 import {
@@ -124,6 +125,22 @@ export function localOutlineOwner(
     }
   }
   return { stateDir, stateKey, ...(root ? { root } : {}) };
+}
+
+/**
+ * Whether nothing is serving a socket: its file is missing or a connection is
+ * refused. A slow or busy service counts as present, so a loaded machine is
+ * never mistaken for a stopped outline.
+ */
+export function socketAbsent(socket: string, timeoutMs = 1_000): Promise<boolean> {
+  if (!existsSync(socket)) return Promise.resolve(true);
+  return new Promise(settle => {
+    const probe = connect(socket);
+    const done = (absent: boolean) => { clearTimeout(timer); probe.destroy(); settle(absent); };
+    const timer = setTimeout(() => done(false), timeoutMs);
+    probe.once("connect", () => done(false));
+    probe.once("error", (error: NodeJS.ErrnoException) => done(error.code === "ECONNREFUSED" || error.code === "ENOENT"));
+  });
 }
 
 function defaultPing(socket: string, timeoutMs: number): Promise<OutlinerServiceStatus> {
