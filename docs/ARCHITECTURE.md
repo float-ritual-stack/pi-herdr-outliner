@@ -464,6 +464,8 @@ one folder, and no outline is created without `outlines.create`:
 <state root>/outliner.sock          the host's socket
 <state root>/outlines/<name>.sqlite a database, or a symlink to an adopted one
 <state root>/outlines/<name>/       a created outline's side files (prompts/, assistant-sessions/)
+<state root>/outlines/<name>.json   an adopted outline's recorded root: { "root": "<folder>" }
+<state root>/outliner.host.lock     held by the running host; never unlinked
 ```
 
 Names are slugs (`[a-z0-9][a-z0-9-]{0,31}`). Whatever `<name>.sqlite` is in
@@ -476,9 +478,15 @@ socket and the bytes it already read to that outline's `OutlinerServer`
 (`startHosted` / `acceptConnection`), which serves it exactly as a standalone
 service serves its own connections: subscribers, change feed, Inbox and note
 assistance stay per outline. Later lines on the same connection stay with the
-same outline. The Herdr registry mirrors one machine's panes and is shared.
+same outline; a later line naming a different `outline` is refused. The
+Herdr registry mirrors one machine's panes and is shared.
 
-**Opening.** An outline opens on its first request and stays open. Opening
+**Starting.** The host takes `outliner.host.lock` (a second host on the same
+state root is refused, so two hosts cannot unlink each other's socket), opens
+the default outline so its database lock is held from the start (a failure is
+logged loudly and the host serves the others), then listens.
+
+**Opening.** Other outlines open on their first request and stay open. Opening
 takes the database's ownership lock, as a starting service does. A failure (not
 a database, or held by another process) answers that request with an error; the
 host and other outlines keep serving, and the next request tries again.
@@ -494,14 +502,17 @@ additive; a single-outline service refuses `outlines.*`. Host answers carry
 `sequence: 0`: they belong to no outline's feed.
 
 **Adopting** serves an existing database where it lies: `outlines/<name>.sqlite`
-becomes a symlink to its real path. It is refused when the name is taken, the
-database is already in the host, the file has no outliner tables, or another
-process holds its ownership lock (the check a starting service makes). An
+becomes a symlink to its real path, and `outlines/<name>.json` records its root.
+It is refused when the name is taken, the database is already in the host, the
+file has no outliner tables, another process holds its ownership lock (the check
+a starting service makes), or its root is unknown: the root is the `root`
+argument (`--root`), else the `root` of a slice-1 `outline.json` beside it,
+never a guess. Adopting the default outline opens it at once. Lock files
+(`*.owner.sqlite`) are never unlinked, even when a create or adopt fails. An
 adopted outline's side files stay beside its database: its folder is the
 outline's state directory (prompts, assistant sessions), so it keeps its prompt
 edits and history, and a standalone service could serve it again unchanged once
-the host lets go. Its workspace root is the `root` in a slice-1 `outline.json`
-beside it, else its own folder. A created outline's root is its side folder.
+the host lets go. A created outline's root is its side folder.
 
 [`resolveClientPaths()`](../src/paths.ts) adds an explicit local/remote endpoint
 mode without changing canonical workspace storage paths. Normal configuration

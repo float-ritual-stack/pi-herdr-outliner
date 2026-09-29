@@ -14,7 +14,7 @@ import { NoteAssistanceRepository } from "./note-assistance-repository";
 import type { NoteModel } from "./note-assistance-model";
 import type { InboxModel, InboxResult, InboxStatus } from "./inbox-types";
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
-import { createConnection, createServer, type Server, type Socket } from "node:net";
+import { createServer, type Server, type Socket } from "node:net";
 import { hostname as systemHostname } from "node:os";
 import { dirname } from "node:path";
 import {
@@ -41,6 +41,7 @@ import {
   normalizeResourcePresentationContext,
   TUI_RESOURCE_PRESENTATION_CONTEXT,
 } from "./resource-presentation";
+import { probeSocket } from "./socket-probe";
 import { WorkflowManager } from "./workflows";
 import {
   OUTLINER_CAPABILITIES,
@@ -324,22 +325,8 @@ export class OutlinerServer {
   }
 
   private async socketIsActive(): Promise<boolean> {
-    const connected = Promise.withResolvers<boolean>();
-    const socket = createConnection(this.socketPath);
-    const timer = setTimeout(() => {
-      socket.destroy();
-      connected.resolve(false);
-    }, 250);
-    socket.once("connect", () => {
-      clearTimeout(timer);
-      socket.end();
-      connected.resolve(true);
-    });
-    socket.once("error", () => {
-      clearTimeout(timer);
-      connected.resolve(false);
-    });
-    return connected.promise;
+    // A listener that does not answer within the probe counts as gone, as before.
+    return (await probeSocket(this.socketPath, 250)) === "answers";
   }
 
   private pruneDestroyedSubscribers(): void {
@@ -2674,6 +2661,10 @@ export class OutlinerServer {
     const previousSequence = this.store.sequence;
     try {
       request = JSON.parse(line) as OutlinerRequest;
+      // The host routed this connection by its first line; it stays with that outline.
+      if (this.hosted && request.outline !== undefined && request.outline !== this.outline?.name) {
+        throw new Error(`This connection serves the outline "${this.outline?.name}"; open a new connection for "${String(request.outline)}"`);
+      }
       const subscribedClient = request.action === "events.subscribe"
         ? this.registerSubscriber(socket, request.client)
         : undefined;

@@ -2024,7 +2024,7 @@ outline's side files in `<name>/`. See
 ```sh
 OUTLINER_DEFAULT_OUTLINE=jam-shelf bun run host   # requests without `outline` go to jam-shelf
 bun run cli outline create jam-shelf               # the only way an outline is born
-bun run cli outline adopt /backups/fig-crate/outliner.sqlite fig-crate   # serve it where it lies
+bun run cli outline adopt /backups/fig-crate/outliner.sqlite fig-crate --root /work/fig-crate   # serve it where it lies
 bun run cli outlines                               # lists through the host when one runs
 ```
 

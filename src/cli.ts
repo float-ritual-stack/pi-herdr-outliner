@@ -1,6 +1,7 @@
 import { createBlockComment } from "./block-comments";
 import { readSavedView } from "./saved-view-read";
 import {inspectWorkspaceConnection} from './workspace-diagnostics';
+import { resolve } from "node:path";
 import { parseArgs, type ParseArgsOptionsConfig } from "node:util";
 import { normalizePropertyQueryScope, parsePropertyFilterClause } from "./block-query";
 import {
@@ -10,7 +11,6 @@ import {
 import { createOutlinerClient, OutlinerClient, OutlinerRequestError, type RequestInput } from "./client";
 import { requireClientIdForRole } from "./client-target";
 import { outlineHostPaths, resolveClientConfigRoot, resolveClientPaths, resolveStateRoot } from "./paths";
-import { resolve } from "node:path";
 import { listKnownOutlines, socketAbsent, type KnownOutline } from "./known-outlines";
 import { renameOutline, setOutlineRoot } from "./outline-names";
 import { navigateOutlinerLink, parseOutlinerLinkUri, resolveOutlinerLinkTarget } from "./outliner-links";
@@ -50,8 +50,25 @@ function describeOutline(outline: KnownOutline): string {
 }
 
 function describeHostedOutline(outline: HostedOutlineSummary): string {
-  const flags = [outline.open ? "open" : "closed", ...(outline.default ? ["default"] : []), ...(outline.adopted ? ["adopted"] : [])];
-  return `${outline.name}  ${flags.join("  ")}\n  database ${outline.database}${outline.problem ? `\n  problem  ${outline.problem}` : ""}`;
+  const flags = ["hosted", outline.open ? "open" : "closed", ...(outline.default ? ["default"] : []), ...(outline.adopted ? ["adopted"] : [])];
+  return [
+    `${outline.name}  ${flags.join("  ")}`,
+    `  root     ${outline.root ?? "unknown"}`,
+    `  database ${outline.database}`,
+    ...(outline.problem ? [`  problem  ${outline.problem}`] : []),
+  ].join("\n");
+}
+
+/** One row of `outlines`: a slice-1 stored outline (`hosted: false`) or an outline host's (`hosted: true`). */
+type ListedOutline =
+  | (KnownOutline & { hosted: false })
+  | (KnownOutline & { hosted: true } & Omit<HostedOutlineSummary, "name" | "root">);
+
+function hostedRow(outline: HostedOutlineSummary, socket: string): ListedOutline {
+  return {
+    ...outline, hosted: true, socket, label: outline.name, name: outline.name, aliases: [],
+    location: "local", status: "running",
+  };
 }
 
 /** The outline host's socket when one is running under this state root; its requests go there. */
@@ -73,28 +90,40 @@ async function runOutlinesCommand(group: "outlines" | "outline", args: string[])
   try {
     if (group === "outlines") {
       const { values } = parseArgs({ args, strict: true, options: { json: { type: "boolean" } } });
+      // One listing either way: slice-1 stored outlines, then a running host's.
       const host = await outlineHostClient(stateRoot);
-      if (host) {
-        const listed = await host.request<HostedOutlineList>({ action: "outlines.list" });
-        if (values.json) console.log(JSON.stringify({ stateRoot, host: host.socketPath, ...listed }, null, 2));
-        else console.log(listed.outlines.length ? listed.outlines.map(describeHostedOutline).join("\n\n") : `No outlines in the host at ${host.socketPath}.`);
-        return 0;
+      const hosted = host ? await host.request<HostedOutlineList>({ action: "outlines.list" }) : undefined;
+      const stored = await listKnownOutlines({ stateRoot, configRoot: resolveClientConfigRoot() });
+      const outlines: ListedOutline[] = [
+        ...stored.map(outline => ({ ...outline, hosted: false as const })),
+        ...(host && hosted ? hosted.outlines.map(outline => hostedRow(outline, host.socketPath)) : []),
+      ];
+      if (values.json) {
+        console.log(JSON.stringify({
+          stateRoot,
+          ...(host ? { host: { socket: host.socketPath, ...(hosted?.defaultOutline ? { defaultOutline: hosted.defaultOutline } : {}) } } : {}),
+          outlines,
+        }, null, 2));
+      } else {
+        console.log(outlines.length
+          ? [...stored.map(describeOutline), ...(hosted?.outlines ?? []).map(describeHostedOutline)].join("\n\n")
+          : `No outlines in ${stateRoot}.`);
       }
-      const outlines = await listKnownOutlines({ stateRoot, configRoot: resolveClientConfigRoot() });
-      if (values.json) console.log(JSON.stringify({ stateRoot, outlines }, null, 2));
-      else console.log(outlines.length ? outlines.map(describeOutline).join("\n\n") : `No outlines in ${stateRoot}.`);
       return 0;
     }
     const [operation, ...operands] = args;
-    const { values, positionals } = parseArgs({ args: operands, allowPositionals: true, strict: true, options: { json: { type: "boolean" } } });
+    const { values, positionals } = parseArgs({ args: operands, allowPositionals: true, strict: true, options: { json: { type: "boolean" }, root: { type: "string" } } });
     if (operation === "create" || operation === "adopt") {
       const wanted = operation === "create" ? 1 : 2;
-      if (positionals.length !== wanted) throw new Error(operation === "create" ? "outline create expects: <name>" : "outline adopt expects: <database path> <name>");
+      if (positionals.length !== wanted) throw new Error(operation === "create" ? "outline create expects: <name>" : "outline adopt expects: <database path> <name> [--root <folder>]");
       const host = await outlineHostClient(stateRoot);
       if (!host) throw new Error(`No outline host is running at ${outlineHostPaths(stateRoot).socket}; start it with \`bun run host\``);
       const created = operation === "create"
         ? await host.request<HostedOutlineSummary>({ action: "outlines.create", name: positionals[0]! })
-        : await host.request<HostedOutlineSummary>({ action: "outlines.adopt", path: resolve(positionals[0]!), name: positionals[1]! });
+        : await host.request<HostedOutlineSummary>({
+          action: "outlines.adopt", path: resolve(positionals[0]!), name: positionals[1]!,
+          ...(values.root ? { root: resolve(values.root) } : {}),
+        });
       console.log(values.json ? JSON.stringify(created, null, 2) : describeHostedOutline(created));
       return 0;
     }
@@ -104,7 +133,7 @@ async function runOutlinesCommand(group: "outlines" | "outline", args: string[])
     } else if (operation === "rename" && positionals.length === 2) {
       descriptor = await renameOutline({ stateRoot, from: positionals[0]!, to: positionals[1]! });
     } else {
-      throw new Error("outline expects: create <name> | adopt <database path> <name> | set-root <name|storage-key> <path> | rename <name|storage-key> <new-name>");
+      throw new Error("outline expects: create <name> | adopt <database path> <name> [--root <folder>] | set-root <name|storage-key> <path> | rename <name|storage-key> <new-name>");
     }
     console.log(values.json ? JSON.stringify(descriptor, null, 2) : `${descriptor.name}  ${descriptor.root}`);
     return 0;

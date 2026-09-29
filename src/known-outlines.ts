@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync } from "node:fs";
-import { connect } from "node:net";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { OutlinerClient } from "./client";
+import { probeSocket } from "./socket-probe";
 import {
   type OutlinerClientPaths,
   readClientConfig,
@@ -252,15 +252,9 @@ export function localOutlineOwner(
  * refused. A slow or busy service counts as present, so a loaded machine is
  * never mistaken for a stopped outline.
  */
-export function socketAbsent(socket: string, timeoutMs = 1_000): Promise<boolean> {
-  if (!existsSync(socket)) return Promise.resolve(true);
-  return new Promise(settle => {
-    const probe = connect(socket);
-    const done = (absent: boolean) => { clearTimeout(timer); probe.destroy(); settle(absent); };
-    const timer = setTimeout(() => done(false), timeoutMs);
-    probe.once("connect", () => done(false));
-    probe.once("error", (error: NodeJS.ErrnoException) => done(error.code === "ECONNREFUSED" || error.code === "ENOENT"));
-  });
+export async function socketAbsent(socket: string, timeoutMs = 1_000): Promise<boolean> {
+  const probe = await probeSocket(socket, timeoutMs);
+  return probe === "absent" || probe === "refused";
 }
 
 function defaultPing(socket: string, timeoutMs: number): Promise<OutlinerServiceStatus> {

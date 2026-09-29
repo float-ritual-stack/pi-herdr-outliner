@@ -1708,6 +1708,8 @@ export interface HostedOutlineSummary {
   database: string;
   /** True when the entry links to a database that lives elsewhere. */
   adopted: boolean;
+  /** The folder the outline belongs to (its workspace root), when known. */
+  root?: string;
   /** Open in this host process now. Outlines open on their first request. */
   open: boolean;
   default: boolean;
@@ -1741,7 +1743,15 @@ export interface ComputedExecutionResult {
   readonly description: ResourceDescription;
 }
 
-export type OutlinerRequest =
+/**
+ * Any request may name its outline (capability `request.outline`): an outline
+ * host routes the connection by its first line's `outline`, and a later line
+ * naming another outline is refused. A single-outline service ignores it, so a
+ * client that names one first confirms the capability.
+ */
+export type OutlinerRequest = OutlinerRequestAction & { outline?: string };
+
+export type OutlinerRequestAction =
   | { id: string; action: "properties.preview"; text: string }
   | { id: string; action: "properties.inventory"; key: string; propertyScope?: PropertyQueryScope; offset?: number; limit?: number }
   | { id: string; action: "inbox.search"; query: string; semantic?: boolean }
@@ -1755,7 +1765,7 @@ export type OutlinerRequest =
   /** Answered by the outline host itself (capabilities `outlines.*`); a single-outline service refuses them. */
   | { id: string; action: "outlines.list" }
   | { id: string; action: "outlines.create"; name: string }
-  | { id: string; action: "outlines.adopt"; path: string; name: string }
+  | { id: string; action: "outlines.adopt"; path: string; name: string; root?: string }
   | { id: string; action: "blocks.query"; query: BlockSearchQuery; fields?: BlockReadField[] }
   | { id: string; action: "blocks.read"; ids: string[]; fields?: BlockReadField[] }
   | ({ id: string; action: "views.read"; viewId: string; format?: "full" | "tree" } & SavedViewReadOptions)

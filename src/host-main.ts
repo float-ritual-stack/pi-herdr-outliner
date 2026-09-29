@@ -11,6 +11,15 @@ import { resolveStateRoot } from "./paths";
  * on their first request. A failure to start is said on stderr only: the host
  * has no per-folder state directory to log into, and makes none.
  */
+// One outline's fault must not take the others down: log it and keep serving.
+// A request's own failure is already answered as an error to that request.
+process.on("uncaughtException", error => {
+  console.error(`Outline host: uncaught error, contained: ${error.stack ?? error.message}`);
+});
+process.on("unhandledRejection", reason => {
+  console.error(`Outline host: unhandled rejection, contained: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}`);
+});
+
 try {
   const stateRoot = resolveStateRoot();
   const herdrSocketPath = process.env.HERDR_SOCKET_PATH;
@@ -23,6 +32,11 @@ try {
     defaultOutline,
     herdrRegistry,
     promptDirectory: process.env.OUTLINER_PROMPT_DIR,
+    // The listener is the host: without it nothing is served, so exit for systemd to restart.
+    onListenerError: error => {
+      console.error(`Outline host listener failed: ${error.stack ?? error.message}`);
+      void stop(1);
+    },
     onOpen: outline => {
       console.error(`Outline "${outline.name}" open: ${outline.database}`);
       startOutlineInbox(outline.server, {
@@ -35,10 +49,10 @@ try {
   herdrRunner?.start();
   console.log(JSON.stringify({ status: "ready", socket: host.socketPath, outlines: host.outlinesFolder, ...(defaultOutline ? { defaultOutline } : {}) }));
 
-  async function stop(): Promise<void> {
+  async function stop(failure = 0): Promise<void> {
     if (stopping) return;
     stopping = true;
-    let exitCode = 0;
+    let exitCode = failure;
     try {
       await herdrRunner?.stop();
     } catch (error) {
@@ -53,9 +67,9 @@ try {
     }
     process.exit(exitCode);
   }
-  process.on("SIGINT", stop);
-  process.on("SIGTERM", stop);
-  process.on("SIGHUP", stop);
+  process.on("SIGINT", () => void stop());
+  process.on("SIGTERM", () => void stop());
+  process.on("SIGHUP", () => void stop());
 } catch (error) {
   console.error(`Outline host failed to start: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
   process.exit(1);
