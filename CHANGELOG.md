@@ -4,6 +4,10 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+- Workspace and connection: Copy on **Client protocol** copies the number
+  alone; "needs service ≥ N" is the field's note, shown as before (PIE-355).
+  After leaving an edit with retained writing, the status names Alt+R and the
+  actions menu; compact chrome has no header cue for Writing history.
 - Clients name their outline on the outline host (PIE-457 step 3).
   `OutlinerClient` sends `outline` on every request and subscription, and
   refuses a single-outline service when a name is asked for. The endpoint is
