@@ -102,8 +102,13 @@ async function choose(): Promise<void> {
   await stop();
 }
 
+/** Waits for an in-progress choice so a started service always gets its client config. */
+function queueStop(exitCode = 0): void {
+  workQueue = workQueue.then(() => stop(exitCode), () => stop(exitCode));
+}
+
 function apply(intent: ChooserIntent): void {
-  if (intent === "close") void stop();
+  if (intent === "close") queueStop();
   else if (intent === "choose") workQueue = workQueue.then(choose);
   else if (intent === "changed") draw();
 }
@@ -120,7 +125,7 @@ terminal.start(data => {
   if (input.kind === "paste" || input.inputAction === "suppress") return;
   apply(chooserKey(chooser, input.key));
 }, draw);
-process.on("SIGINT", () => void stop(130));
+process.on("SIGINT", () => queueStop(130));
 process.on("SIGTERM", () => void stop(143));
 process.on("SIGHUP", () => void stop(129));
 draw();
