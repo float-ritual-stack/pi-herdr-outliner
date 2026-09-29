@@ -4,6 +4,7 @@ import { isKeyRelease, ProcessTerminal } from "@earendil-works/pi-tui";
 import { decodePiDetailInput } from "./detail-pi-input";
 import { relaunchArgs, relaunchEnvironment } from "./herdr-open-relaunch";
 import { listKnownOutlines } from "./known-outlines";
+import { listHostedOutlines, outlineHostClient } from "./outline-host-client";
 import {
   chooserKey,
   chooserMouse,
@@ -57,17 +58,25 @@ function runLauncher(mode: string, workspaceRoot: string): Promise<void> {
 async function choose(): Promise<void> {
   const row = chooser.selected;
   if (!row || chooser.busy) return;
-  const plan = planChoice(row, context.workspaceRoot);
+  const plan = planChoice(row, context.workspaceRoot, chooser.host);
   if (plan.kind === "refuse") { chooser.status = plan.message; draw(); return; }
   chooser.busy = true;
   try {
+    if (plan.createOutline) {
+      const host = await outlineHostClient(resolveStateRoot());
+      if (!host) throw new Error("The outline host stopped answering; nothing was created");
+      chooser.status = `Creating outline ${plan.createOutline}…`;
+      draw();
+      await host.request({ action: "outlines.create", name: plan.createOutline });
+    }
     if (plan.startServiceFor) {
       chooser.status = `Starting the outline for ${plan.startServiceFor}…`;
       draw();
       await runLauncher("service-only", plan.startServiceFor);
     }
     try {
-      writeClientConfig(process.env, plan.config);
+      // The switcher replaces the folder's choice; a first choice never overwrites one.
+      writeClientConfig(process.env, plan.config, { replace: context.switch === true });
     } catch (error) {
       // Another chooser (or an earlier choice) already recorded this folder's outline: honour it.
       if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
@@ -79,8 +88,11 @@ async function choose(): Promise<void> {
     return;
   }
   // The popup closes before the panes open; the launcher reports its own failures.
+  const relaunch = relaunchEnvironment(process.env, context.workspaceRoot, context.paneId);
+  // A host choice opens that outline whatever else the environment says.
+  if (plan.config.mode === "host") relaunch.OUTLINER_OUTLINE = plan.config.outline;
   spawn(process.execPath, relaunchArgs(context.mode, context.clientId), {
-    env: relaunchEnvironment(process.env, context.workspaceRoot, context.paneId),
+    env: relaunch,
     detached: true,
     stdio: "ignore",
   }).unref();
@@ -124,8 +136,18 @@ process.on("SIGINT", () => queueStop(130));
 process.on("SIGTERM", () => void stop(143));
 process.on("SIGHUP", () => void stop(129));
 draw();
-void listKnownOutlines({ stateRoot: resolveStateRoot(), configRoot: resolveClientConfigRoot() })
-  .then(outlines => { chooser.setOutlines(outlines); draw(); })
+/** With an outline host running, its outlines are the choices; without one, the stored outlines as before. */
+async function loadChoices(): Promise<void> {
+  const host = await outlineHostClient(resolveStateRoot());
+  if (host) {
+    const listed = await listHostedOutlines(host);
+    chooser.setHostedOutlines(host.socketPath, listed.outlines);
+    return;
+  }
+  chooser.setOutlines(await listKnownOutlines({ stateRoot: resolveStateRoot(), configRoot: resolveClientConfigRoot() }));
+}
+void loadChoices()
+  .then(() => draw())
   .catch(error => {
     chooser.loading = false;
     chooser.status = `Could not list outlines: ${error instanceof Error ? error.message : String(error)}`;

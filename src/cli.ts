@@ -8,10 +8,11 @@ import {
   focusBlockByQuery,
   formatBlockFocusMatch,
 } from "./block-focus";
-import { createOutlinerClient, OutlinerClient, OutlinerRequestError, type RequestInput } from "./client";
+import { createOutlinerClient, OutlinerRequestError, type RequestInput } from "./client";
 import { requireClientIdForRole } from "./client-target";
 import { outlineHostPaths, resolveClientConfigRoot, resolveClientPaths, resolveStateRoot } from "./paths";
-import { listKnownOutlines, socketAbsent, type KnownOutline } from "./known-outlines";
+import { listKnownOutlines, type KnownOutline } from "./known-outlines";
+import { outlineHostClient } from "./outline-host-client";
 import { renameOutline, setOutlineRoot } from "./outline-names";
 import { navigateOutlinerLink, parseOutlinerLinkUri, resolveOutlinerLinkTarget } from "./outliner-links";
 import { blockDisplayTitle } from "./references";
@@ -28,6 +29,21 @@ import {
   type WorkActor,
 } from "./work-tools";
 
+/**
+ * `--outline <name>` anywhere on the line is `OUTLINER_OUTLINE=<name>`: the
+ * command talks to that outline on the outline host. Plain commands never
+ * create it; only a session opener (herdr-open, the door) attaches with create.
+ */
+for (let index = 2; index < process.argv.length; index++) {
+  const argument = process.argv[index]!;
+  if (argument === "--outline" || argument.startsWith("--outline=")) {
+    const value = argument === "--outline" ? process.argv[index + 1] : argument.slice("--outline=".length);
+    if (!value) throw new Error("--outline requires an outline name");
+    process.env.OUTLINER_OUTLINE = value;
+    process.argv.splice(index, argument === "--outline" ? 2 : 1);
+    index--;
+  }
+}
 if(process.argv[2]==='doctor'){
  const report=await inspectWorkspaceConnection();
  console.log(process.argv.includes('--json')?JSON.stringify(report,null,2):report.lines.join('\n'));
@@ -71,12 +87,6 @@ function hostedRow(outline: HostedOutlineSummary, socket: string): ListedOutline
   };
 }
 
-/** The outline host's socket when one is running under this state root; its requests go there. */
-async function outlineHostClient(stateRoot: string): Promise<OutlinerClient | undefined> {
-  const { socket } = outlineHostPaths(stateRoot);
-  if (await socketAbsent(socket, 500)) return undefined;
-  return new OutlinerClient(socket);
-}
 
 /**
  * `outlines [--json]` lists the outline host's outlines when a host runs under

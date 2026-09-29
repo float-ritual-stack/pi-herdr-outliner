@@ -3,6 +3,7 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 import { OutlinerClient } from "./client";
 import { probeSocket } from "./socket-probe";
 import {
+  OUTLINE_NAME_PATTERN,
   type OutlinerClientPaths,
   readClientConfig,
   resolveClientConfigPath,
@@ -18,12 +19,14 @@ import type { OutlinerServiceStatus } from "./types";
  * a folder with none of these gets the outline chooser instead of a new database.
  */
 export type OutlinePresence =
-  | { kind: "present"; paths: OutlinerClientPaths; because: "remote" | "config" | "database" }
+  | { kind: "present"; paths: OutlinerClientPaths; because: "remote" | "config" | "database" | "host" }
   | { kind: "missing"; paths: OutlinerClientPaths; configPath: string };
 
 export function detectOutline(env: NodeJS.ProcessEnv): OutlinePresence {
   const paths = resolveClientPaths(env);
   if (paths.mode === "remote") return { kind: "present", paths, because: "remote" };
+  // A host outline is named (by env, a binding or the folder's name); opening attaches to it, creating it if needed.
+  if (paths.mode === "host") return { kind: "present", paths, because: "host" };
   // An explicit config path is the user's own choice, whether or not the file exists.
   if (env.OUTLINER_CONFIG_PATH?.trim()) return { kind: "present", paths, because: "config" };
   const configPath = resolveClientConfigPath(env);
@@ -39,8 +42,7 @@ export function detectOutline(env: NodeJS.ProcessEnv): OutlinePresence {
   return { kind: "missing", paths, configPath };
 }
 
-/** A short slug that addresses an outline, unique per state root. */
-export const OUTLINE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/;
+export { OUTLINE_NAME_PATTERN } from "./paths";
 
 /**
  * What a database says about itself (`outline.json`). The service writes it on

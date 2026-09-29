@@ -2029,8 +2029,16 @@ bun run cli outlines                               # lists through the host when
 ```
 
 A request names its outline with `"outline": "<name>"`; without it, it reaches
-the default, so existing clients work unchanged. Clients do not send `outline`
-yet, and the single-outline service (`bun run server`) is unchanged.
+the default. Clients pick their outline like `herdr --session <name>`:
+`OUTLINER_OUTLINE=<name>` (or the CLI's `--outline <name>`), else the folder's
+binding in its `client.json` (`{ "workspaceRoot": "/work/fred", "outline": "fred" }`),
+else, while a host runs and the folder has no hash database, the outline named
+after the folder. Ctrl-b u in an unbound folder opens that outline, creating it
+on first open ("Created outline jam-shelf"); **Outliner: choose this folder's
+outline** switches a folder to another. Reads (`list`, `read`, `doctor`) never
+create an outline. Claude's `PI_OUTLINER_MENTIONS_WORKSPACES` entries may bind a
+folder to an outline: `/work/fred=fred`. The single-outline service
+(`bun run server`) is unchanged.
 
 ### Outline names
 

@@ -88,7 +88,7 @@ export async function openCaptureSurface(client: OutlinerRequester, options: {
         "--env", `OUTLINER_WORKSPACE_ROOT=${options.workspaceRoot}`,
         "--env", `OUTLINER_CAPTURE_HANDOFF=${directory}`,
         ...(direction ? ["--target-pane", anchor, "--placement", "split", "--direction", direction, "--no-focus"] : ["--focus"])];
-      for (const name of ["OUTLINER_STATE_DIR", "OUTLINER_CONFIG_PATH", "OUTLINER_REMOTE", "OUTLINER_SOCKET_PATH", "OUTLINER_KEYBINDINGS_PATH"] as const) {
+      for (const name of ["OUTLINER_STATE_DIR", "OUTLINER_CONFIG_PATH", "OUTLINER_REMOTE", "OUTLINER_SOCKET_PATH", "OUTLINER_OUTLINE", "OUTLINER_KEYBINDINGS_PATH"] as const) {
         if (process.env[name] !== undefined) args.push("--env", `${name}=${process.env[name]}`);
       }
       const opened = await herdr(args);

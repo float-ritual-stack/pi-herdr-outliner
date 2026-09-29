@@ -15,16 +15,27 @@ export type MentionMessage = {
 /**
  * The workspaces option as configured: one path or several separated by ':'
  * or ','. Trailing slashes are dropped so `/a/b/` matches a cwd of `/a/b`.
+ * An entry may bind its folder to an outline on the outline host by name:
+ * `/work/fred-folder=fred`.
  */
-export function workspacesOf(value: unknown): string[] {
+export function workspaceBindingsOf(value: unknown): { root: string; outline?: string }[] {
   const parts = Array.isArray(value)
     ? value.filter((part): part is string => typeof part === 'string')
     : typeof value === 'string'
       ? value.split(/[:,]/)
       : []
   return parts
-    .map(part => part.trim().replace(/(?<=.)\/+$/, ''))
-    .filter(part => part.startsWith('/'))
+    .map(part => {
+      const [path = '', outline] = part.trim().split('=', 2)
+      const root = path.trim().replace(/(?<=.)\/+$/, '')
+      const name = outline?.trim()
+      return name && /^[a-z0-9][a-z0-9-]{0,31}$/.test(name) ? { root, outline: name } : { root }
+    })
+    .filter(binding => binding.root.startsWith('/'))
+}
+
+export function workspacesOf(value: unknown): string[] {
+  return workspaceBindingsOf(value).map(binding => binding.root)
 }
 
 /**
@@ -32,9 +43,25 @@ export function workspacesOf(value: unknown): string[] {
  * variable. Claude Code passes an unset string option as '', so an empty
  * option cannot be told from an unset one and never overrides the environment.
  */
+export function effectiveWorkspaceBindings(option: unknown, environment: string | undefined): { root: string; outline?: string }[] {
+  const configured = workspaceBindingsOf(option)
+  return configured.length > 0 ? configured : workspaceBindingsOf(environment)
+}
+
 export function effectiveWorkspaces(option: unknown, environment: string | undefined): string[] {
-  const configured = workspacesOf(option)
-  return configured.length > 0 ? configured : workspacesOf(environment)
+  return effectiveWorkspaceBindings(option, environment).map(binding => binding.root)
+}
+
+/**
+ * The environment an Outliner CLI run or pane gets for one workspace: its
+ * folder, and the outline it is bound to when the entry names one.
+ */
+export function outlinerEnvironment(
+  workspace: string,
+  bindings: readonly { root: string; outline?: string }[],
+): Record<string, string> {
+  const outline = bindings.find(binding => binding.root === workspace)?.outline
+  return { OUTLINER_WORKSPACE_ROOT: workspace, ...(outline ? { OUTLINER_OUTLINE: outline } : {}) }
 }
 
 /**

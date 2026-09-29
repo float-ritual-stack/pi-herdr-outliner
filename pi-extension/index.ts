@@ -979,7 +979,7 @@ async function runWorkflowOrchestrator(
 async function ensureService(focus: boolean): Promise<void> {
   // A choice made in the outline chooser since load changes where this folder connects.
   const current = resolveClientPaths();
-  if (current.socket !== paths.socket || current.mode !== paths.mode) {
+  if (current.socket !== paths.socket || current.mode !== paths.mode || current.outline !== paths.outline) {
     paths = current;
     client = createOutlinerClient(paths);
   }
@@ -994,6 +994,12 @@ async function ensureService(focus: boolean): Promise<void> {
   if (!service && paths.mode === "remote") {
     throw new Error(
       `Remote Outliner service is unavailable at ${paths.socket}; start the SSH tunnel and retry`,
+    );
+  }
+  // The outline host is a service of its own; Pi never starts one. Herdr's open still attaches the outline.
+  if (!service && paths.mode === "host" && process.env.HERDR_ENV !== "1") {
+    throw new Error(
+      `The outline "${paths.outline}" is not available on the outline host at ${paths.socket}; start the host, or open the outline from Herdr to create it`,
     );
   }
 

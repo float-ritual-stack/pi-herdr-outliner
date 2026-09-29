@@ -4,6 +4,18 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+- Clients name their outline on the outline host (PIE-457 step 3).
+  `OutlinerClient` sends `outline` on every request and subscription, and
+  refuses a single-outline service when a name is asked for. The endpoint is
+  `OUTLINER_OUTLINE` (CLI `--outline`), else a folder binding
+  `{ workspaceRoot, outline }` in `client.json`, else, while a host runs, the
+  outline named after the folder. `outlines.attach { name, create }` opens by
+  name and creates on request (capability `outlines.attach`); Ctrl-b u creates
+  an unbound folder's outline on first open and notifies. Herdr panes all get
+  `OUTLINER_OUTLINE`; no service pane in host mode. New host requests
+  `outlines.close` and `outlines.delete`; new action **choose-outline** (the
+  switcher). `doctor` shows the host and how the outline was chosen.
+
 - One outline host per user and machine (PIE-457, steps 1 and 2). `bun run host`
   (`src/host-main.ts`) listens on `<state root>/outliner.sock` and serves every
   outline in `<state root>/outlines/`: it reads the first line of each

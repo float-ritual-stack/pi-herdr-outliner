@@ -1,6 +1,8 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { basename } from "node:path";
 import type { KnownOutline } from "./known-outlines";
-import type { OutlinerClientConfig } from "./paths";
+import { type OutlinerClientConfig, slugifyOutlineName } from "./paths";
+import type { HostedOutlineSummary } from "./types";
 import { sanitizeDynamicText, type TerminalKey } from "./terminal";
 import { parseTreePrimaryClick, parseTreeWheelEvent } from "./tree-mouse";
 
@@ -11,6 +13,8 @@ export interface OutlineChooserContext {
   rootSource: string;
   paneId?: string;
   clientId?: string;
+  /** The switcher: the folder may already have an outline, and a choice replaces it. */
+  switch?: boolean;
 }
 
 export function parseOutlineChooserContext(value: string | undefined): OutlineChooserContext {
@@ -25,10 +29,14 @@ export function parseOutlineChooserContext(value: string | undefined): OutlineCh
     rootSource: parsed.rootSource,
     ...(typeof parsed.paneId === "string" ? { paneId: parsed.paneId } : {}),
     ...(typeof parsed.clientId === "string" ? { clientId: parsed.clientId } : {}),
+    ...(parsed.switch === true ? { switch: true } : {}),
   };
 }
 
-export type OutlineChooserRow = { kind: "outline"; outline: KnownOutline } | { kind: "new" };
+export type OutlineChooserRow =
+  | { kind: "outline"; outline: KnownOutline }
+  | { kind: "hosted"; outline: HostedOutlineSummary }
+  | { kind: "new" };
 
 export class OutlineChooser {
   rows: OutlineChooserRow[] = [{ kind: "new" }];
@@ -41,8 +49,18 @@ export class OutlineChooser {
 
   get selected(): OutlineChooserRow | undefined { return this.rows[this.index]; }
 
+  /** Set when an outline host answers: rows are its outlines, and "new" creates one there. */
+  host: { socket: string; names: Set<string> } | undefined;
+
   setOutlines(outlines: readonly KnownOutline[]): void {
     this.rows = [...outlines.map(outline => ({ kind: "outline", outline }) as const), { kind: "new" }];
+    this.index = Math.min(this.index, this.rows.length - 1);
+    this.loading = false;
+  }
+
+  setHostedOutlines(socket: string, outlines: readonly HostedOutlineSummary[]): void {
+    this.host = { socket, names: new Set(outlines.map(outline => outline.name)) };
+    this.rows = [...outlines.map(outline => ({ kind: "hosted", outline }) as const), { kind: "new" }];
     this.index = Math.min(this.index, this.rows.length - 1);
     this.loading = false;
   }
@@ -95,6 +113,14 @@ export function chooserMouse(chooser: OutlineChooser, sequence: string, width: n
   return "choose";
 }
 
+function describeHosted(outline: HostedOutlineSummary): { title: string; detail: string } {
+  const flags = [outline.open ? "\x1b[32mopen\x1b[0m" : "\x1b[2mclosed\x1b[0m", ...(outline.default ? ["default"] : []), ...(outline.adopted ? ["adopted"] : [])];
+  return {
+    title: `${sanitizeDynamicText(outline.name)}  ${flags.join("  ")}`,
+    detail: sanitizeDynamicText(outline.root ?? outline.database),
+  };
+}
+
 function describe(outline: KnownOutline): { title: string; detail: string } {
   const status = outline.status === "running" ? "\x1b[32mrunning\x1b[0m" : "\x1b[2mstopped\x1b[0m";
   const where = `${outline.name && outline.name !== outline.label ? `${outline.name} · ` : ""}${outline.root ?? `root unknown · ${outline.stateKey ?? outline.socket}`}`;
@@ -120,8 +146,10 @@ export function renderChooserFrame(chooser: OutlineChooser, width: number, heigh
   for (const [offset, row] of chooser.rows.slice(start, start + slots).entries()) {
     const active = start + offset === chooser.index;
     const text = row.kind === "new"
-      ? { title: "+ New outline here", detail: `Creates a new database for ${root}` }
-      : describe(row.outline);
+      ? chooser.host
+        ? { title: "+ New outline here", detail: `Creates the outline "${newHostedOutlineName(chooser.context.workspaceRoot, chooser.host.names)}" on the outline host` }
+        : { title: "+ New outline here", detail: `Creates a new database for ${root}` }
+      : row.kind === "hosted" ? describeHosted(row.outline) : describe(row.outline);
     const title = fit(`${active ? "›" : " "} ${text.title}`);
     list.push(active ? `\x1b[48;5;238m\x1b[1m${title}\x1b[0m` : title);
     list.push(`  \x1b[2m${text.detail}\x1b[0m`);
@@ -131,7 +159,7 @@ export function renderChooserFrame(chooser: OutlineChooser, width: number, heigh
     ? "Looking for outlines…"
     : count ? `Use one of ${count} known outline${count === 1 ? "" : "s"}, or start a new one:` : "No other outlines found. Start a new one:";
   const output = ["", ` ┌${"─".repeat(inner)}┐ `,
-    bordered(`\x1b[1;36mNo outline for\x1b[0m ${root}`),
+    bordered(chooser.context.switch ? `\x1b[1;36mChoose the outline for\x1b[0m ${root}` : `\x1b[1;36mNo outline for\x1b[0m ${root}`),
     bordered(`\x1b[2mResolved from ${sanitizeDynamicText(chooser.context.rootSource)}. Nothing has been created.\x1b[0m`),
     bordered(heading)];
   for (let row = 0; row < listHeight; row++) output.push(bordered(list[row] ?? ""));
@@ -141,12 +169,31 @@ export function renderChooserFrame(chooser: OutlineChooser, width: number, heigh
   return output.slice(0, height);
 }
 
-/** What choosing a row does: the config to record, and an outline service to start first. */
+/** The name "New outline here" gives on a host: the folder's name, with a suffix if taken. */
+export function newHostedOutlineName(workspaceRoot: string, taken: ReadonlySet<string>): string {
+  const base = slugifyOutlineName(basename(workspaceRoot));
+  if (!taken.has(base)) return base;
+  for (let n = 2; ; n++) {
+    const suffix = `-${n}`;
+    const candidate = `${base.slice(0, 32 - suffix.length).replace(/-+$/, "")}${suffix}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
+/**
+ * What choosing a row does: the config to record, an outline service to start
+ * first (no host), or an outline to create on the host first.
+ */
 export type ChooserPlan =
-  | { kind: "write"; config: OutlinerClientConfig & { workspaceRoot: string }; startServiceFor?: string }
+  | { kind: "write"; config: OutlinerClientConfig & { workspaceRoot: string }; startServiceFor?: string; createOutline?: string }
   | { kind: "refuse"; message: string };
 
-export function planChoice(row: OutlineChooserRow, workspaceRoot: string): ChooserPlan {
+export function planChoice(row: OutlineChooserRow, workspaceRoot: string, host?: { names: ReadonlySet<string> }): ChooserPlan {
+  if (row.kind === "hosted") return { kind: "write", config: { mode: "host", workspaceRoot, outline: row.outline.name } };
+  if (row.kind === "new" && host) {
+    const name = newHostedOutlineName(workspaceRoot, host.names);
+    return { kind: "write", config: { mode: "host", workspaceRoot, outline: name }, createOutline: name };
+  }
   if (row.kind === "new") return { kind: "write", config: { mode: "local", workspaceRoot } };
   const { outline } = row;
   const config = { mode: "remote" as const, workspaceRoot, socketPath: outline.socket, label: outline.label };

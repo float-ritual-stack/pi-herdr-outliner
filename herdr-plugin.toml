@@ -96,6 +96,13 @@ command = ["/bin/sh", "scripts/run-bun.sh", "run", "src/herdr-open.ts", "--mode"
 
 
 [[actions]]
+id = "choose-outline"
+title = "Outliner: choose this folder's outline"
+description = "Pick which outline this folder opens (or start a new one), then open it here."
+contexts = ["workspace", "tab", "pane"]
+command = ["/bin/sh", "scripts/run-bun.sh", "run", "src/herdr-open.ts", "--mode", "choose-outline"]
+
+[[actions]]
 id = "open-composed"
 title = "Outliner: open combined Tree + Detail experiment"
 description = "Open one application-owned split, with explicit detached views still available."

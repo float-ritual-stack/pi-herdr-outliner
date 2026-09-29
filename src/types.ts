@@ -1664,8 +1664,14 @@ export const OUTLINER_CAPABILITIES = [
 export const OUTLINER_HOST_CAPABILITIES = [
   /** `outlines.adopt`: serve an existing database where it lies, under a name. */
   "outlines.adopt",
-  /** `outlines.create`: the only way a new outline is born on a host. */
+  /** `outlines.attach`: open an outline by name, creating it when asked (like `tmux new -A`). */
+  "outlines.attach",
+  /** `outlines.close`: stop serving an open outline and release its database. */
+  "outlines.close",
+  /** `outlines.create`: a new outline is born only here or through `outlines.attach` with `create`. */
   "outlines.create",
+  /** `outlines.delete`: remove an outline from the host; its files are moved aside, never erased. */
+  "outlines.delete",
   /** `outlines.list`: the outlines in the host's `outlines/` folder. */
   "outlines.list",
   /** `ping` reports `host`: its socket, default outline and outline names. */
@@ -1717,6 +1723,20 @@ export interface HostedOutlineSummary {
   problem?: string;
 }
 
+/** `outlines.attach`: the outline, open, and whether this request created it. */
+export interface HostedOutlineAttachment {
+  outline: HostedOutlineSummary;
+  created: boolean;
+}
+
+/** `outlines.delete`: where the outline's files went (an adopted outline's database is left where it lies). */
+export interface HostedOutlineDeletion {
+  name: string;
+  adopted: boolean;
+  /** The folder the created outline's files were moved into; absent for an adopted outline. */
+  movedTo?: string;
+}
+
 export interface HostedOutlineList {
   defaultOutline?: string;
   outlines: HostedOutlineSummary[];
@@ -1766,6 +1786,9 @@ export type OutlinerRequestAction =
   | { id: string; action: "outlines.list" }
   | { id: string; action: "outlines.create"; name: string }
   | { id: string; action: "outlines.adopt"; path: string; name: string; root?: string }
+  | { id: string; action: "outlines.attach"; name: string; create?: boolean }
+  | { id: string; action: "outlines.close"; name: string }
+  | { id: string; action: "outlines.delete"; name: string }
   | { id: string; action: "blocks.query"; query: BlockSearchQuery; fields?: BlockReadField[] }
   | { id: string; action: "blocks.read"; ids: string[]; fields?: BlockReadField[] }
   | ({ id: string; action: "views.read"; viewId: string; format?: "full" | "tree" } & SavedViewReadOptions)

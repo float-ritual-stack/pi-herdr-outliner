@@ -84,6 +84,10 @@ source evidence or distinguish authored glyphs from controls.
   learns about other outlines; `paths.ts` owns the host's layout
   (`outlineHostPaths`, `hostedOutlinePaths`). `src/outline-inbox.ts` starts an
   outline's Inbox agent for both the host and the single-outline service.
+- `resolveClientPaths` in `src/paths.ts` is the one place a client decides its
+  endpoint and outline (env, binding, folder guess); `src/outline-host-client.ts`
+  is the client side of the host's own requests (`outlines.list|attach`). Every
+  pane opener forwards `OUTLINER_OUTLINE`; a new one must too.
 - `src/work-tools.ts` owns agent workboard operations (create, stage/set, PR delivery
   and delivery keys, completion with proof across all of an item's deliveries,
   delivery stage, note sections, item bodies) over the existing RPCs. The CLI

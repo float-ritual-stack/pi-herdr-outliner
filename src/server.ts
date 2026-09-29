@@ -1484,6 +1484,9 @@ export class OutlinerServer {
         case "outlines.list":
         case "outlines.create":
         case "outlines.adopt":
+        case "outlines.attach":
+        case "outlines.close":
+        case "outlines.delete":
           throw new Error(`${action} is answered by an outline host; this service runs one outline`);
         case "blocks.query":
           result = request.fields === undefined

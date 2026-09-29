@@ -19,6 +19,7 @@ import {
 import { relaunchArgs, relaunchEnvironment } from "./herdr-open-relaunch";
 import { detectOutline, localOutlineOwner, socketAbsent } from "./known-outlines";
 import { resolveClientConfigRoot, resolveStateRoot } from "./paths";
+import { attachHostedOutline, outlineHostClient } from "./outline-host-client";
 import type { OutlineChooserContext } from "./outline-chooser";
 import { waitForCompatibleService } from "./service-compatibility";
 import {
@@ -63,7 +64,8 @@ await reportStartupErrors("open", async () => {
     mode !== "open-tree" &&
     mode !== "open-composed" &&
     mode !== "focus-existing" &&
-    mode !== "service-only"
+    mode !== "service-only" &&
+    mode !== "choose-outline"
   ) {
     throw new Error(`Invalid outliner open mode: ${String(mode)}`);
   }
@@ -75,7 +77,7 @@ await reportStartupErrors("open", async () => {
   }
   if (
     requestedClientId &&
-    (mode === "open-tree" || mode === "open-here" || mode === "open-composed" || mode === "service-only")
+    (mode === "open-tree" || mode === "open-here" || mode === "open-composed" || mode === "service-only" || mode === "choose-outline")
   ) {
     throw new Error(`--client cannot be used with --mode ${mode}`);
   }
@@ -105,15 +107,17 @@ await reportStartupErrors("open", async () => {
   }
 
   const presence = detectOutline({ ...process.env, OUTLINER_WORKSPACE_ROOT: workspaceRoot });
-  if (presence.kind === "missing") {
-    // Opening never creates an outline by itself: ask which one this folder uses.
+  // The switcher always asks; otherwise the chooser gates only a folder with no outline and no host.
+  if (presence.kind === "missing" || mode === "choose-outline") {
+    // Without a host, opening never creates an outline by itself: ask which one this folder uses.
     if (mode === "service-only") {
       throw new Error(`No outline for ${presence.paths.workspaceRoot} (resolved from ${rootSource}). Open the Outliner from Herdr in that folder to choose an outline or create one there.`);
     }
     const context: OutlineChooserContext = {
-      mode,
+      mode: mode === "choose-outline" ? "open-here" : mode,
       workspaceRoot: presence.paths.workspaceRoot,
       rootSource,
+      ...(mode === "choose-outline" ? { switch: true } : {}),
       ...(currentPaneId ? { paneId: currentPaneId } : {}),
       ...(requestedClientId ? { clientId: requestedClientId } : {}),
     };
@@ -127,10 +131,31 @@ await reportStartupErrors("open", async () => {
       if (process.env[name] !== undefined) args.push("--env", `${name}=${process.env[name]}`);
     }
     execFileSync(herdr, args, { stdio: "ignore", timeout: HERDR_SYNC_TIMEOUT_MS });
-    process.stdout.write(`${JSON.stringify({ outline: "missing", chooser: "choose-outline", workspaceRoot: presence.paths.workspaceRoot, rootSource })}\n`);
+    process.stdout.write(`${JSON.stringify({ outline: mode === "choose-outline" ? "switch" : "missing", chooser: "choose-outline", workspaceRoot: presence.paths.workspaceRoot, rootSource })}\n`);
     return;
   }
   const paths = presence.paths;
+  // On the outline host a session attaches to its outline by name, creating it
+  // when none has the name (like `tmux new -A`); the host itself is systemd's job.
+  let attached: { name: string; created: boolean; source: string } | undefined;
+  if (paths.mode === "host") {
+    const name = paths.outline!;
+    const host = await outlineHostClient(resolveStateRoot(process.env));
+    if (!host) {
+      throw new Error(`No outline host answers at ${paths.socket} (outline "${name}" for ${workspaceRoot}). The host runs as a service (\`bun run host\`); start it and retry.`);
+    }
+    // Opening a session creates a missing outline; Pi's `service-only` check only attaches.
+    const attachment = await attachHostedOutline(host, name, mode !== "service-only");
+    attached = { name, created: attachment.created, source: { env: "OUTLINER_OUTLINE", bound: "the folder's binding", folder: "the folder's name" }[paths.outlineSource ?? "env"] };
+    if (attachment.created) {
+      try {
+        execFileSync(herdr, ["notification", "show", `Created outline ${name}`, "--body", `New outline "${name}" for ${workspaceRoot} (named after ${attached.source}).`],
+          { stdio: "ignore", timeout: HERDR_SYNC_TIMEOUT_MS });
+      } catch {
+        // The open itself reports the creation on stdout.
+      }
+    }
+  }
   // A folder the chooser aliased to another local outline records that outline's
   // socket. After a restart nobody runs its service, so start it from its own folder.
   if (paths.mode === "remote" && process.env.OUTLINER_REMOTE?.trim() === undefined) {
@@ -211,6 +236,8 @@ await reportStartupErrors("open", async () => {
         args.push("--env", `${name}=${process.env[name]}`);
       }
     }
+    // Every pane lands on the same outline, whatever its environment would resolve.
+    if (paths.outline) args.push("--env", `OUTLINER_OUTLINE=${paths.outline}`);
     for (const [key, value] of Object.entries(options.env ?? {})) {
       args.push("--env", `${key}=${value}`);
     }
@@ -228,6 +255,7 @@ await reportStartupErrors("open", async () => {
 
   async function waitForService(): Promise<void> {
     const remote = paths.mode === "remote";
+    const hosted = paths.mode === "host";
     await waitForCompatibleService(createOutlinerClient(paths), {
       timeoutMs: remote ? 60_000 : 15_000,
       pingTimeoutMs: remote ? undefined : 300,
@@ -235,11 +263,14 @@ await reportStartupErrors("open", async () => {
       const lastResponse = (error instanceof Error ? error.message : String(error)).replace(/\.$/, "");
       throw new Error(`Compatible outliner service did not become ready at ${paths.socket}. ${lastResponse}. ${remote
         ? "Check the configured SSH tunnel and remote service."
-        : `Service startup details: ${join(paths.stateDir, "service-startup-error.log")} (check its timestamp).`}`);
+        : hosted
+          ? `Check the outline host (it runs as a service) and the outline "${paths.outline}".`
+          : `Service startup details: ${join(paths.stateDir, "service-startup-error.log")} (check its timestamp).`}`);
     });
   }
 
-  const servicePane = paths.mode === "remote"
+  // Only a folder's own hash service gets a service pane; a remote service and the outline host run elsewhere.
+  const servicePane = paths.mode !== "local"
     ? null
     : resolveServicePaneId(paths.stateDir, herdr) ??
       openPane("service", {
@@ -448,5 +479,5 @@ await reportStartupErrors("open", async () => {
       ? await openHere()
       : await focusExisting(trees);
   }
-  process.stdout.write(`${JSON.stringify(result)}\n`);
+  process.stdout.write(`${JSON.stringify(attached ? { ...result, outline: attached.name, outlineCreated: attached.created } : result)}\n`);
 });

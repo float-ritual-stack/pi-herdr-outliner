@@ -390,7 +390,7 @@ function openPaneSplit(args: string[], sourcePaneId: string, direction: "right" 
     "OUTLINER_STATE_DIR",
     "OUTLINER_CONFIG_PATH",
     "OUTLINER_REMOTE",
-    "OUTLINER_SOCKET_PATH",
+    "OUTLINER_SOCKET_PATH", "OUTLINER_OUTLINE",
     "OUTLINER_KEYBINDINGS_PATH",
     "OUTLINER_RIGHT_CLICK",
     "OUTLINER_PROPERTY_SUMMARY_KEYS",
@@ -448,7 +448,7 @@ export function openBacklinkPeekPopup(
     "OUTLINER_STATE_DIR",
     "OUTLINER_CONFIG_PATH",
     "OUTLINER_REMOTE",
-    "OUTLINER_SOCKET_PATH",
+    "OUTLINER_SOCKET_PATH", "OUTLINER_OUTLINE",
     "OUTLINER_OPEN_DESTINATION_TIMEOUT_MS",
   ] as const) {
     if (process.env[name] !== undefined) {
@@ -500,7 +500,7 @@ export function openVirtualBranchNavigatorPopup(
     "OUTLINER_STATE_DIR",
     "OUTLINER_CONFIG_PATH",
     "OUTLINER_REMOTE",
-    "OUTLINER_SOCKET_PATH",
+    "OUTLINER_SOCKET_PATH", "OUTLINER_OUTLINE",
     "OUTLINER_OPEN_DESTINATION_TIMEOUT_MS",
   ] as const) {
     if (process.env[name] !== undefined) {
@@ -528,7 +528,7 @@ export function openGotoPopup(
     "--env", `OUTLINER_GOTO_SOURCE_REGION=${options.sourceRegion}`,
     "--focus",
   ];
-  for (const name of ["OUTLINER_STATE_DIR", "OUTLINER_CONFIG_PATH", "OUTLINER_REMOTE", "OUTLINER_SOCKET_PATH", "OUTLINER_KEYBINDINGS_PATH"] as const) {
+  for (const name of ["OUTLINER_STATE_DIR", "OUTLINER_CONFIG_PATH", "OUTLINER_REMOTE", "OUTLINER_SOCKET_PATH", "OUTLINER_OUTLINE", "OUTLINER_KEYBINDINGS_PATH"] as const) {
     if (process.env[name] !== undefined) args.push("--env", `${name}=${process.env[name]}`);
   }
   invokeHerdr(herdr, args);
@@ -564,7 +564,7 @@ export function openCapturePopup(
     "OUTLINER_STATE_DIR",
     "OUTLINER_CONFIG_PATH",
     "OUTLINER_REMOTE",
-    "OUTLINER_SOCKET_PATH",
+    "OUTLINER_SOCKET_PATH", "OUTLINER_OUTLINE",
   ] as const) {
     if (process.env[name] !== undefined) {
       args.push("--env", `${name}=${process.env[name]}`);

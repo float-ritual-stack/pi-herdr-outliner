@@ -15,7 +15,7 @@ import {
   socketAbsent,
   type StoredOutline,
 } from "./known-outlines";
-import { type OutlinerPaths, resolveServicePaths, resolveStateRoot, stateDirPaths, WORKSPACE_KEY_PATTERN, workspaceKey } from "./paths";
+import { type OutlinerPaths, resolveServicePaths, slugifyOutlineName, resolveStateRoot, stateDirPaths, WORKSPACE_KEY_PATTERN, workspaceKey } from "./paths";
 import type { OutlinerServiceOutline } from "./types";
 
 /*
@@ -39,11 +39,7 @@ function requireOutlineName(name: string, what = "An outline name"): string {
   return name;
 }
 
-/** A name derived from a folder: its basename as a slug. */
-export function slugifyOutlineName(text: string): string {
-  const slug = text.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32).replace(/-+$/, "");
-  return slug || "outline";
-}
+export { slugifyOutlineName } from "./paths";
 
 /** `base`, or `base-2`, `base-3`… the first one nobody else has, kept within 32 characters. */
 export function uniqueOutlineName(base: string, taken: ReadonlySet<string>): string {

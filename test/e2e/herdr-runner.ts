@@ -43,7 +43,8 @@ export interface HerdrScenarioSession {
   readonly client: OutlinerClient;
   setKeybindings(bindings: Record<string, string[]>): Promise<void>;
   setRegistryUnavailable(unavailable: boolean): Promise<void>;
-  adoptDetached(clientId: string, role?: "tree" | "detail"): Promise<string>;
+  /** `source`: the service the client registered with, when not the project's (an outline host's outline). */
+  adoptDetached(clientId: string, role?: "tree" | "detail", source?: OutlinerClient): Promise<string>;
   adoptCapture(): Promise<string>;
   /** Opens a shell tab in the private workspace; `cwd` must lie beneath the run's private root. */
   openShellTab(cwd?: string): Promise<string>;
@@ -877,10 +878,11 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
         // This checks the live CLI path after the registry-only connection fault.
         parseResult((await runHerdr(["api", "snapshot"])).stdout, "session_snapshot", "registry fault CLI check");
       },
-      async adoptDetached(clientId, role = "detail") {
+      async adoptDetached(clientId, role = "detail", source) {
         const registrations = await getRegistrations();
         const primary = registrations.find(value => value.runtime?.paneId === ownedPanes.tree);
-        const detached = registrations.find(value => value.clientId === clientId);
+        const detached = (source ? await source.request<OutlinerClientRegistration[]>({ action: "clients.list" }) : registrations)
+          .find(value => value.clientId === clientId);
         if (detached?.role !== role || !detached.runtime?.paneId || !primary?.runtime || detached.runtime.workspaceId !== primary.runtime.workspaceId || owned.has(detached.runtime.paneId)) {
           throw new Error("Detached client is not a new requested view in the owned workspace");
         }

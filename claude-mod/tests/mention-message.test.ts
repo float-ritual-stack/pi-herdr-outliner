@@ -1,10 +1,18 @@
 import { describe, expect, test, tier } from 'claude-code/testing'
 
-import { effectiveWorkspaces, failureReasonOf, workspacesOf } from '../hooks/mention-message'
+import { effectiveWorkspaceBindings, effectiveWorkspaces, failureReasonOf, outlinerEnvironment, workspacesOf } from '../hooks/mention-message'
 
 tier('user')
 
 describe('mention-message', () => {
+  test('an entry may bind its folder to a host outline by name', async () => {
+    const bindings = effectiveWorkspaceBindings('', '/work/fred-folder=fred,/work/jam-shelf/,/work/odd=Not A Name')
+    expect(bindings).toEqual([{ root: '/work/fred-folder', outline: 'fred' }, { root: '/work/jam-shelf' }, { root: '/work/odd' }])
+    expect(effectiveWorkspaces('', '/work/fred-folder=fred')).toEqual(['/work/fred-folder'])
+    expect(outlinerEnvironment('/work/fred-folder', bindings)).toEqual({ OUTLINER_WORKSPACE_ROOT: '/work/fred-folder', OUTLINER_OUTLINE: 'fred' })
+    expect(outlinerEnvironment('/work/jam-shelf', bindings)).toEqual({ OUTLINER_WORKSPACE_ROOT: '/work/jam-shelf' })
+  })
+
   test('workspaces split on either separator and keep absolute paths only', async () => {
     expect(workspacesOf(' /a/b/, relative : /c ')).toEqual(['/a/b', '/c'])
     expect(workspacesOf(['/a', 3, 'x'])).toEqual(['/a'])
