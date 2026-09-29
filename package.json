@@ -12,6 +12,7 @@
     "outliner": "bun run src/outliner.ts",
     "profile:tree": "bun run scripts/profile-tree.ts",
     "server": "bun run src/server-main.ts",
+    "host": "bun run src/host-main.ts",
     "cli": "bun run src/cli.ts",
     "workflow": "bun run src/workflow-main.ts",
     "goto": "bun run src/cli.ts goto",

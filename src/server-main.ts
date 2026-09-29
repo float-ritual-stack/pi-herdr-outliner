@@ -7,8 +7,7 @@ import { establishOutlineIdentity, prepareOutlineIdentity, resolveOutlineService
 import { OutlinerServer } from "./server";
 import type { OutlinerServiceOutline } from "./types";
 import { OutlinerStore } from "./store";
-import { createInboxModel, checkInboxModelConfiguration, inboxEditingBudget } from "./inbox-model";
-import { createNoteModel } from "./note-assistance-model";
+import { startOutlineInbox } from "./outline-inbox";
 import { aiPromptDirectory, initializeAiPrompts } from "./ai-prompts";
 
 import { reportStartupErrors } from "./startup-error";
@@ -67,24 +66,7 @@ await reportStartupErrors("service", async () => {
   console.log(JSON.stringify({ status: "ready", socket: paths.socket, database: paths.database, ...(outline ? { outline: outline.name, ...(outline.byNameSocket ? { byNameSocket: outline.byNameSocket } : {}) } : {}) }));
 
   let stopping = false;
-  // Loading provider configuration does not delay socket readiness or capture saves.
-  if (process.env.OUTLINER_INBOX_AGENT !== "0") {
-    server.setInboxUnavailable("Checking Inbox agent configuration");
-    void checkInboxModelConfiguration({ workspaceRoot: paths.workspaceRoot }).then(configuration => {
-      if (stopping) return;
-      if (configuration.configured) {
-        let timeoutMs: number;
-        try { timeoutMs = inboxEditingBudget(); }
-        catch (error) { server.setInboxUnavailable((error as Error).message); return; }
-        const options = { timeoutMs, workspaceRoot: paths.workspaceRoot, promptDirectory, sessionDirectory: join(paths.stateDir, "assistant-sessions") };
-        server.enableInbox(createInboxModel(options), process.env.TYPESAFE_API_KEY && process.env.OUTLINER_NOTE_ASSISTANCE !== "0"
-          ? createNoteModel(options) : undefined);
-      }
-      else server.setInboxUnavailable(configuration.message);
-    }).catch(() => {
-      if (!stopping) server.setInboxUnavailable("Inbox model configuration could not be loaded");
-    });
-  }
+  startOutlineInbox(server, { workspaceRoot: paths.workspaceRoot, promptDirectory, stateDirectory: paths.stateDir, stopped: () => stopping });
   async function stop(): Promise<void> {
     if (stopping) return;
     stopping = true;

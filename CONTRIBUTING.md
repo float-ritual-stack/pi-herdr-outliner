@@ -77,6 +77,13 @@ source evidence or distinguish authored glyphs from controls.
   descriptor, the `by-name/<name>.sock` link, `OUTLINER_OUTLINE` resolution for
   the service, and `outline rename|set-root`. A name addresses an outline; the
   hash directory is storage. Derive lists of outlines by scanning; never keep one.
+- `src/outline-host.ts` owns the outline host: one listener for every outline
+  in `<state root>/outlines/`, routing each connection by its first line's
+  `outline` to that outline's `OutlinerServer`, and the host requests
+  (`outlines.list|create|adopt`). `OutlinerServer` stays per outline and never
+  learns about other outlines; `paths.ts` owns the host's layout
+  (`outlineHostPaths`, `hostedOutlinePaths`). `src/outline-inbox.ts` starts an
+  outline's Inbox agent for both the host and the single-outline service.
 - `src/work-tools.ts` owns agent workboard operations (create, stage/set, PR delivery
   and delivery keys, completion with proof across all of an item's deliveries,
   delivery stage, note sections, item bodies) over the existing RPCs. The CLI

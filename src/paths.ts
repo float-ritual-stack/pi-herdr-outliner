@@ -50,6 +50,23 @@ export function stateDirPaths(stateDir: string): { database: string; socket: str
   };
 }
 
+/** Where the host keeps its socket and outlines under a state root. */
+export function outlineHostPaths(stateRoot: string): { socket: string; outlines: string } {
+  const root = resolve(stateRoot);
+  return { socket: join(root, "outliner.sock"), outlines: join(root, "outlines") };
+}
+
+/**
+ * One outline's entries in `outlines/`: `<name>.sqlite` (the database, or for an
+ * adopted outline a symlink to it) and `<name>/`, the side folder of an outline
+ * the host created (prompts, assistant sessions). An adopted outline has no side
+ * folder here: its side files stay beside its database.
+ */
+export function hostedOutlinePaths(stateRoot: string, name: string): { database: string; sideFolder: string } {
+  const { outlines } = outlineHostPaths(stateRoot);
+  return { database: join(outlines, `${name}.sqlite`), sideFolder: join(outlines, name) };
+}
+
 function readableWorkspaceName(workspaceRoot: string): string {
   const name = basename(workspaceRoot) || "root";
   return name.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "workspace";

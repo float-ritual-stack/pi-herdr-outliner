@@ -2013,6 +2013,25 @@ Override the root with `OUTLINER_WORKSPACE_ROOT` and the base state directory wi
 Only the service and an explicit **New outline here** create this directory;
 opening a folder without an outline does not.
 
+### The outline host
+
+One host per user and machine serves any number of outlines on one socket,
+`<state root>/outliner.sock`, by name. Outlines live in `<state root>/outlines/`
+as `<name>.sqlite` (or a symlink to an adopted database), with a created
+outline's side files in `<name>/`. See
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#the-outline-host).
+
+```sh
+OUTLINER_DEFAULT_OUTLINE=jam-shelf bun run host   # requests without `outline` go to jam-shelf
+bun run cli outline create jam-shelf               # the only way an outline is born
+bun run cli outline adopt /backups/fig-crate/outliner.sqlite fig-crate   # serve it where it lies
+bun run cli outlines                               # lists through the host when one runs
+```
+
+A request names its outline with `"outline": "<name>"`; without it, it reaches
+the default, so existing clients work unchanged. Clients do not send `outline`
+yet, and the single-outline service (`bun run server`) is unchanged.
+
 ### Outline names
 
 A name is the way to address an outline; the hash directory is only where it is

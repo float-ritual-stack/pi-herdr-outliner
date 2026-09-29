@@ -1656,7 +1656,24 @@ export const OUTLINER_CAPABILITIES = [
   "resources.projection",
   "views.read",
 ] as const;
-export type OutlinerCapability = (typeof OUTLINER_CAPABILITIES)[number];
+
+/**
+ * What the outline host (`src/outline-host.ts`) adds. Its `ping` reports these
+ * beside the outline's own capabilities; a service running one outline has none.
+ */
+export const OUTLINER_HOST_CAPABILITIES = [
+  /** `outlines.adopt`: serve an existing database where it lies, under a name. */
+  "outlines.adopt",
+  /** `outlines.create`: the only way a new outline is born on a host. */
+  "outlines.create",
+  /** `outlines.list`: the outlines in the host's `outlines/` folder. */
+  "outlines.list",
+  /** `ping` reports `host`: its socket, default outline and outline names. */
+  "ping.host",
+  /** A request may carry `outline: <name>`; the host routes its connection to that outline. */
+  "request.outline",
+] as const;
+export type OutlinerCapability = (typeof OUTLINER_CAPABILITIES)[number] | (typeof OUTLINER_HOST_CAPABILITIES)[number];
 
 export interface OutlinerServiceStatus {
   status: "ready";
@@ -1671,6 +1688,36 @@ export interface OutlinerServiceStatus {
    * Absent from older services and from a service running unnamed.
    */
   outline?: OutlinerServiceOutline;
+  /** Present when an outline host answers (capability `ping.host`). */
+  host?: OutlinerHostStatus;
+}
+
+/** The outline host behind a socket: one per user and machine, serving outlines by name. */
+export interface OutlinerHostStatus {
+  socket: string;
+  /** Where requests without `outline` go; absent when the host has none. */
+  defaultOutline?: string;
+  /** Every outline in the host's `outlines/` folder, open or not. */
+  outlines: string[];
+}
+
+/** One outline a host serves (`outlines.list`, `outlines.create`, `outlines.adopt`). */
+export interface HostedOutlineSummary {
+  name: string;
+  /** The database file; for an adopted outline, where the link points. */
+  database: string;
+  /** True when the entry links to a database that lives elsewhere. */
+  adopted: boolean;
+  /** Open in this host process now. Outlines open on their first request. */
+  open: boolean;
+  default: boolean;
+  /** Why the database cannot be reached, for an adopted link whose target is gone. */
+  problem?: string;
+}
+
+export interface HostedOutlineList {
+  defaultOutline?: string;
+  outlines: HostedOutlineSummary[];
 }
 
 /**
@@ -1705,6 +1752,10 @@ export type OutlinerRequest =
   | { id: string; action: "inbox.retry"; sourceId: string; instructions?: string }
   | { id: string; action: "inbox.undo"; resultId: string }
   | { id: string; action: "ping" }
+  /** Answered by the outline host itself (capabilities `outlines.*`); a single-outline service refuses them. */
+  | { id: string; action: "outlines.list" }
+  | { id: string; action: "outlines.create"; name: string }
+  | { id: string; action: "outlines.adopt"; path: string; name: string }
   | { id: string; action: "blocks.query"; query: BlockSearchQuery; fields?: BlockReadField[] }
   | { id: string; action: "blocks.read"; ids: string[]; fields?: BlockReadField[] }
   | ({ id: string; action: "views.read"; viewId: string; format?: "full" | "tree" } & SavedViewReadOptions)

@@ -4,6 +4,22 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+- One outline host per user and machine (PIE-457, steps 1 and 2). `bun run host`
+  (`src/host-main.ts`) listens on `<state root>/outliner.sock` and serves every
+  outline in `<state root>/outlines/`: it reads the first line of each
+  connection and hands the whole connection to the outline its `outline` field
+  names, or to `OUTLINER_DEFAULT_OUTLINE` when it names none, so existing
+  clients reach the default unchanged. Outlines open on their first request and
+  stay open; one that cannot open (corrupt, or held by another process) fails
+  only its own requests. The host answers `outlines.list`, `outlines.create
+  { name }` (the only way a new outline is born) and `outlines.adopt { path,
+  name }` (serve an existing database where it lies, through a symlink; refused
+  while another process holds it). `ping` adds `host` (capabilities
+  `outlines.list`, `outlines.create`, `outlines.adopt`, `ping.host`,
+  `request.outline`). `outliner outlines` lists through a running host, and
+  `outliner outline create <name>` / `outline adopt <path> <name>` ask it.
+  Clients do not send `outline` yet; the single-outline service is unchanged.
+
 - Outlines have names (PIE-457, service side). Each database describes itself
   in `outline.json` (`name`, `root`, optional `label`, `host`, `created`,
   `updated`), written by the service on start. A new outline is named by

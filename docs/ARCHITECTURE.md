@@ -452,6 +452,57 @@ A clean stop removes the by-name link only if it still points at this service.
 scanning descriptors and client configs; no registry is kept by hand.
 Clients still resolve local outlines by hash in this slice.
 
+### The outline host
+
+The direction replacing hash folders is one **outline host** per user and
+machine, like a tmux server: one socket, any number of outlines, each addressed
+by name ([`src/outline-host.ts`](../src/outline-host.ts), started by
+[`src/host-main.ts`](../src/host-main.ts)). Nothing is hashed or scanned beyond
+one folder, and no outline is created without `outlines.create`:
+
+```text
+<state root>/outliner.sock          the host's socket
+<state root>/outlines/<name>.sqlite a database, or a symlink to an adopted one
+<state root>/outlines/<name>/       a created outline's side files (prompts/, assistant-sessions/)
+```
+
+Names are slugs (`[a-z0-9][a-z0-9-]{0,31}`). Whatever `<name>.sqlite` is in
+`outlines/` exists; the host keeps no other list.
+
+**Routing.** Each connection carries one request or one subscription, so the
+host reads only its first line. That line's `outline` names the outline; without
+it the connection goes to `OUTLINER_DEFAULT_OUTLINE`. The host then hands the
+socket and the bytes it already read to that outline's `OutlinerServer`
+(`startHosted` / `acceptConnection`), which serves it exactly as a standalone
+service serves its own connections: subscribers, change feed, Inbox and note
+assistance stay per outline. Later lines on the same connection stay with the
+same outline. The Herdr registry mirrors one machine's panes and is shared.
+
+**Opening.** An outline opens on its first request and stays open. Opening
+takes the database's ownership lock, as a starting service does. A failure (not
+a database, or held by another process) answers that request with an error; the
+host and other outlines keep serving, and the next request tries again.
+
+**Host requests** are answered by the host, whatever `outline` says:
+`outlines.list` (name, database, adopted, open, default; creates nothing),
+`outlines.create { name }` (refuses a taken name or a leftover `<name>/`; claims
+the file exclusively, never overwrites) and `outlines.adopt { path, name }`.
+`ping` without `outline` on a host with no default answers for the host alone;
+otherwise the outline answers and adds `host: { socket, defaultOutline?,
+outlines }`. The host's capabilities (`OUTLINER_HOST_CAPABILITIES`) are
+additive; a single-outline service refuses `outlines.*`. Host answers carry
+`sequence: 0`: they belong to no outline's feed.
+
+**Adopting** serves an existing database where it lies: `outlines/<name>.sqlite`
+becomes a symlink to its real path. It is refused when the name is taken, the
+database is already in the host, the file has no outliner tables, or another
+process holds its ownership lock (the check a starting service makes). An
+adopted outline's side files stay beside its database: its folder is the
+outline's state directory (prompts, assistant sessions), so it keeps its prompt
+edits and history, and a standalone service could serve it again unchanged once
+the host lets go. Its workspace root is the `root` in a slice-1 `outline.json`
+beside it, else its own folder. A created outline's root is its side folder.
+
 [`resolveClientPaths()`](../src/paths.ts) adds an explicit local/remote endpoint
 mode without changing canonical workspace storage paths. Normal configuration
 is derived from the resolved invoking workspace and lives at
