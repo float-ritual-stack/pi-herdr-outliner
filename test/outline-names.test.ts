@@ -1,12 +1,14 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { OutlinerClient } from "../src/client";
 import { byNameSocketPath, listKnownOutlines, readOutlineDescriptor, type OutlineDescriptor } from "../src/known-outlines";
 import {
+  establishOutlineIdentity,
   prepareOutlineIdentity,
+  refreshOutlineDescriptor,
   publishByNameSocket,
   renameOutline,
   resolveOutlineServicePaths,
@@ -47,7 +49,7 @@ function storedOutline(env: NodeJS.ProcessEnv, descriptor?: Partial<OutlineDescr
       created: "2026-01-01T00:00:00.000Z", updated: "2026-01-01T00:00:00.000Z", ...descriptor,
     });
   }
-  return paths;
+  return { ...paths, descriptor: join(paths.stateDir, "outline.json") };
 }
 
 /** Something listening on a socket, standing in for a live service. */
@@ -79,9 +81,9 @@ test("a new outline gets a descriptor named from its folder; an existing descrip
   // Preparing reads only.
   expect(existsSync(stateRoot)).toBe(before);
   expect(identity).toEqual({
+    name: "jam-shelf",
     descriptor: { name: "jam-shelf", root, host: "fixture-host", created: now.toISOString(), updated: now.toISOString() },
-    descriptorPath: join(paths.stateDir, "outline.json"),
-    byNameSocket: join(stateRoot, "by-name", "jam-shelf.sock"),
+    warnings: [],
   });
 
   storedOutline(env(root), { name: "tin-drawer", label: "Tin drawer", root: "/tmp/fixture/elsewhere" });
@@ -89,43 +91,86 @@ test("a new outline gets a descriptor named from its folder; an existing descrip
   const refreshed = await prepareOutlineIdentity({
     stateRoot, stateDir: paths.stateDir, workspaceRoot: root, requestedName: "ignored-name", now: later, host: "fixture-host",
   });
-  expect(refreshed.descriptor).toEqual({
+  const descriptor = refreshed.descriptor!;
+  expect(descriptor).toEqual({
     name: "tin-drawer", root, label: "Tin drawer", host: "fixture-host", created: "2026-01-01T00:00:00.000Z", updated: later.toISOString(),
   });
-  writeOutlineDescriptor(paths.stateDir, refreshed.descriptor);
-  expect(readOutlineDescriptor(paths.stateDir)).toEqual({ kind: "ok", descriptor: refreshed.descriptor });
+  // The existing name wins over OUTLINER_OUTLINE_NAME, and the service says so.
+  expect(refreshed.warnings).toEqual([expect.stringContaining("OUTLINER_OUTLINE_NAME=ignored-name is ignored: this outline is already named \"tin-drawer\"")]);
+  expect(refreshed.warnings[0]).toContain("outliner outline rename tin-drawer ignored-name");
+
+  // A crashed writer's temporary file is cleaned up by the next write.
+  writeFileSync(join(paths.stateDir, "outline.json.4242.1700000000000.tmp"), "partial");
+  expect(refreshOutlineDescriptor(paths.stateDir, descriptor)).toBe("written");
+  expect(readOutlineDescriptor(paths.stateDir)).toEqual({ kind: "ok", descriptor });
   // The write is atomic: no temporary file is left beside it.
   expect(readdirSync(paths.stateDir).sort()).toEqual(["outline.json", "outliner.sqlite"]);
+  // A restart that would change only `updated` leaves the file alone.
+  const written = readFileSync(join(paths.stateDir, "outline.json"), "utf8");
+  expect(refreshOutlineDescriptor(paths.stateDir, { ...descriptor, updated: "2026-09-03T00:00:00.000Z" })).toBe("unchanged");
+  expect(readFileSync(join(paths.stateDir, "outline.json"), "utf8")).toBe(written);
+  expect(refreshOutlineDescriptor(paths.stateDir, { ...descriptor, root: "/tmp/fixture/tin-drawer" })).toBe("written");
 });
 
-test("OUTLINER_OUTLINE_NAME names a new outline, a derived name takes a suffix, and a broken descriptor stops the start", async () => {
+test("OUTLINER_OUTLINE_NAME names a new outline, a derived name takes a suffix, and a taken explicit name is refused", async () => {
   const { directory, stateRoot, env } = fixture();
   storedOutline(env(join(directory, "a", "jam-shelf")), { name: "jam-shelf" });
   const second = resolvePaths(env(join(directory, "b", "jam-shelf")));
   const derived = await prepareOutlineIdentity({ stateRoot, stateDir: second.stateDir, workspaceRoot: second.workspaceRoot });
-  expect(derived.descriptor.name).toBe("jam-shelf-2");
+  expect(derived.name).toBe("jam-shelf-2");
 
   const requested = await prepareOutlineIdentity({ stateRoot, stateDir: second.stateDir, workspaceRoot: second.workspaceRoot, requestedName: "tin-drawer" });
-  expect(requested.descriptor.name).toBe("tin-drawer");
+  expect(requested.name).toBe("tin-drawer");
   await expect(prepareOutlineIdentity({ stateRoot, stateDir: second.stateDir, workspaceRoot: second.workspaceRoot, requestedName: "Tin Drawer" }))
     .rejects.toThrow("OUTLINER_OUTLINE_NAME must be a short slug");
   // An explicit name is a request, not a suggestion: taken means refused.
   await expect(prepareOutlineIdentity({ stateRoot, stateDir: second.stateDir, workspaceRoot: second.workspaceRoot, requestedName: "jam-shelf" }))
-    .rejects.toThrow(`already belongs to the stopped outline for ${join(directory, "a", "jam-shelf")}`);
-
-  const broken = storedOutline(env(join(directory, "c")));
-  writeFileSync(join(broken.stateDir, "outline.json"), "{not json");
-  await expect(prepareOutlineIdentity({ stateRoot, stateDir: broken.stateDir, workspaceRoot: broken.workspaceRoot })).rejects.toThrow("Could not read");
+    .rejects.toThrow(`also belongs to the stopped outline for ${join(directory, "a", "jam-shelf")}`);
 });
 
-test("a name held by another outline refuses the start, naming both roots, whether that outline is live or stopped", async () => {
+test("an unreadable descriptor never stops the start: its name comes from a by-name link, or the service runs unnamed, and the file is left alone", async () => {
+  const { directory, stateRoot, env } = fixture();
+  const broken = storedOutline(env(join(directory, "jam-shelf")));
+  for (const content of ["{not json", ""]) {
+    writeFileSync(broken.descriptor, content);
+    const unnamed = await prepareOutlineIdentity({ stateRoot, stateDir: broken.stateDir, workspaceRoot: broken.workspaceRoot });
+    expect(unnamed.name).toBeUndefined();
+    expect(unnamed.descriptor).toBeUndefined();
+    expect(unnamed.warnings).toEqual([expect.stringContaining("left in place; serving unnamed")]);
+    const logged: string[] = [];
+    expect(await establishOutlineIdentity({ stateRoot, stateDir: broken.stateDir, socket: broken.socket, identity: unnamed, log: line => logged.push(line) })).toBeUndefined();
+    expect(logged).toEqual(unnamed.warnings);
+    expect(readFileSync(broken.descriptor, "utf8")).toBe(content);
+  }
+  // A link left by an earlier run still names this outline.
+  await publishByNameSocket(stateRoot, "jam-shelf", broken.socket);
+  const recovered = await prepareOutlineIdentity({ stateRoot, stateDir: broken.stateDir, workspaceRoot: broken.workspaceRoot });
+  expect(recovered).toMatchObject({ name: "jam-shelf", warnings: [expect.stringContaining('serving as "jam-shelf", the name its by-name link gives')] });
+  expect(recovered.descriptor).toBeUndefined();
+  const outline = await establishOutlineIdentity({ stateRoot, stateDir: broken.stateDir, socket: broken.socket, identity: recovered, log() {} });
+  // No descriptor was written, so ping names no descriptor path.
+  expect(outline).toEqual({ name: "jam-shelf", byNameSocket: byNameSocketPath(stateRoot, "jam-shelf") });
+  expect(readFileSync(broken.descriptor, "utf8")).toBe("");
+  // `outliner outlines` shows it as invalid.
+  const [listed] = await listKnownOutlines({ stateRoot, configRoot: join(directory, "config"), pingTimeoutMs: 50 });
+  expect(listed).toMatchObject({ socket: broken.socket, descriptor: "invalid" });
+});
+
+test("a stopped copy of an outline's own name is a warning, a running one refuses the start naming both roots, and non-key folders are ignored", async () => {
   const { directory, stateRoot, env } = fixture();
   const first = storedOutline(env(join(directory, "one", "jam-shelf")), { name: "jam-shelf" });
-  // A copied state directory carries the same name.
+  // A backup beside the state folders, not named like a workspace key, is not an outline.
+  cpSync(first.stateDir, join(stateRoot, "jam-shelf-backup"), { recursive: true });
+  const fresh = resolvePaths(env(join(directory, "three", "jam-shelf")));
+  expect((await prepareOutlineIdentity({ stateRoot, stateDir: fresh.stateDir, workspaceRoot: fresh.workspaceRoot })).name).toBe("jam-shelf-2");
+  expect(await listKnownOutlines({ stateRoot, configRoot: join(directory, "config"), pingTimeoutMs: 50 })).toHaveLength(1);
+
+  // A copied state directory under a key carries the same name as its own.
   const copy = storedOutline(env(join(directory, "two", "jam-shelf")), { name: "jam-shelf" });
   const attempt = () => prepareOutlineIdentity({ stateRoot, stateDir: copy.stateDir, workspaceRoot: copy.workspaceRoot });
-  await expect(attempt()).rejects.toThrow(`already belongs to the stopped outline for ${first.workspaceRoot}`);
-  await expect(attempt()).rejects.toThrow(copy.workspaceRoot);
+  const tolerated = await attempt();
+  expect(tolerated.name).toBe("jam-shelf");
+  expect(tolerated.warnings).toEqual([expect.stringContaining(`also belongs to the stopped outline for ${first.workspaceRoot}`)]);
 
   await listen(first.socket);
   const live = await attempt().catch((error: Error) => error.message);
@@ -157,7 +202,6 @@ test("the by-name link is created, replaces a stale link, refuses a live one and
   symlinkSync(tin.socket, link);
   await listen(tin.socket);
   await expect(publishByNameSocket(stateRoot, "jam-shelf", jam.socket)).rejects.toThrow("points at a running service");
-  await expect(prepareOutlineIdentity({ stateRoot, stateDir: jam.stateDir, workspaceRoot: jam.workspaceRoot })).rejects.toThrow("already points at a running service");
   expect(withdrawByNameSocket(stateRoot, "jam-shelf", jam.socket)).toBe(false);
   expect(readlinkSync(link)).toBe(tin.socket);
 
@@ -166,9 +210,57 @@ test("the by-name link is created, replaces a stale link, refuses a live one and
   expect(withdrawByNameSocket(stateRoot, "jam-shelf", jam.socket)).toBe(true);
   expect(existsSync(join(stateRoot, "by-name", "jam-shelf.sock"))).toBe(false);
 
+  // A crashed start's temporary link is cleaned up.
+  symlinkSync("nowhere", `${link}.4242.tmp`);
+  await publishByNameSocket(stateRoot, "jam-shelf", jam.socket);
+  expect(readdirSync(join(stateRoot, "by-name")).sort()).toEqual(["jam-shelf.sock"]);
+  rmSync(link);
+
   // A file that is not a link is never replaced.
   writeFileSync(link, "");
   await expect(publishByNameSocket(stateRoot, "jam-shelf", jam.socket)).rejects.toThrow("is not a by-name link");
+});
+
+test("a descriptor or by-name failure is logged and the outline keeps serving: unwritable by-name, a file in the way, an unwritable descriptor", async () => {
+  const { directory, stateRoot, env } = fixture();
+  const jam = storedOutline(env(join(directory, "jam-shelf")));
+  const identity = await prepareOutlineIdentity({ stateRoot, stateDir: jam.stateDir, workspaceRoot: jam.workspaceRoot, now });
+  const establish = async () => {
+    const logged: string[] = [];
+    const outline = await establishOutlineIdentity({ stateRoot, stateDir: jam.stateDir, socket: jam.socket, identity, log: line => logged.push(line) });
+    return { outline, logged };
+  };
+
+  // by-name/ is not writable (EACCES).
+  mkdirSync(join(stateRoot, "by-name"));
+  chmodSync(join(stateRoot, "by-name"), 0o500);
+  try {
+    const { outline, logged } = await establish();
+    expect(outline).toEqual({ name: "jam-shelf", descriptorPath: jam.descriptor });
+    expect(logged).toEqual([expect.stringContaining("Could not publish the by-name socket for \"jam-shelf\"")]);
+    expect(logged[0]).toContain("EACCES");
+    expect(logged[0]).toContain(`Serving on ${jam.socket} only`);
+  } finally {
+    chmodSync(join(stateRoot, "by-name"), 0o700);
+  }
+
+  // A regular file sits where the link goes.
+  writeFileSync(byNameSocketPath(stateRoot, "jam-shelf"), "");
+  const blocked = await establish();
+  expect(blocked.outline).toEqual({ name: "jam-shelf", descriptorPath: jam.descriptor });
+  expect(blocked.logged).toEqual([expect.stringContaining("is not a by-name link")]);
+  rmSync(byNameSocketPath(stateRoot, "jam-shelf"));
+
+  // The descriptor cannot be written (its folder is read-only).
+  rmSync(jam.descriptor);
+  chmodSync(jam.stateDir, 0o500);
+  try {
+    const { outline, logged } = await establish();
+    expect(outline).toEqual({ name: "jam-shelf", byNameSocket: byNameSocketPath(stateRoot, "jam-shelf") });
+    expect(logged).toEqual([expect.stringContaining(`Could not write ${jam.descriptor}`)]);
+  } finally {
+    chmodSync(jam.stateDir, 0o700);
+  }
 });
 
 test("outlines are listed by name, with state directories that have no descriptor yet, and client configs as aliases", async () => {
@@ -240,6 +332,22 @@ test("set-root and rename change a stopped outline's descriptor and refuse while
 
   await expect(renameOutline({ stateRoot, from: "jam-shelf", to: "tin-drawer" })).rejects.toThrow('"tin-drawer" already belongs');
   await expect(renameOutline({ stateRoot, from: "jam-shelf", to: "Fig Crate" })).rejects.toThrow("must be a short slug");
+
+  // A name two stored outlines carry is ambiguous; a storage key says which one.
+  const twin = storedOutline(env(join(directory, "twin")), { name: "jam-shelf", root: join(directory, "twin") });
+  const twinKey = twin.stateDir.split("/").at(-1)!;
+  const jamKey = jam.stateDir.split("/").at(-1)!;
+  for (const attempt of [
+    setOutlineRoot({ stateRoot, name: "jam-shelf", root: moved }),
+    renameOutline({ stateRoot, from: "jam-shelf", to: "fig-crate" }),
+  ]) {
+    const message = await attempt.then(() => "", (error: Error) => error.message);
+    expect(message).toContain('The name "jam-shelf" is ambiguous');
+    expect(message).toContain(jamKey);
+    expect(message).toContain(twinKey);
+  }
+  expect((await renameOutline({ stateRoot, from: twinKey, to: "plum-box", now })).name).toBe("plum-box");
+  expect(readOutlineDescriptor(twin.stateDir)).toMatchObject({ kind: "ok", descriptor: { name: "plum-box", root: join(directory, "twin") } });
   await publishByNameSocket(stateRoot, "jam-shelf", jam.socket);
   const renamed = await renameOutline({ stateRoot, from: "jam-shelf", to: "fig-crate", now });
   expect(renamed.name).toBe("fig-crate");
@@ -262,7 +370,10 @@ test("OUTLINER_OUTLINE selects a database by name, and a moved root is never giv
   // An explicit root still wins; the service then records it in the descriptor.
   expect(resolveOutlineServicePaths({ ...env(old), OUTLINER_OUTLINE: "jam-shelf" }).workspaceRoot).toBe(old);
   expect(() => resolveOutlineServicePaths({ OUTLINER_STATE_DIR: stateRoot, OUTLINER_OUTLINE: "tin-drawer" })).toThrow('No outline named "tin-drawer"');
-  expect(() => resolveOutlineServicePaths({ OUTLINER_STATE_DIR: stateRoot, OUTLINER_OUTLINE: "jam-shelf", OUTLINER_REMOTE: "1" })).toThrow("remote client mode");
+  expect(() => resolveOutlineServicePaths({ OUTLINER_STATE_DIR: stateRoot, OUTLINER_OUTLINE: "jam-shelf", OUTLINER_REMOTE: "1", OUTLINER_SOCKET_PATH: "/tmp/fixture/remote.sock" })).toThrow("remote client mode");
+  // A storage key works as well as the name.
+  expect(resolveOutlineServicePaths({ OUTLINER_STATE_DIR: stateRoot, OUTLINER_OUTLINE: stored.stateDir.split("/").at(-1)!, XDG_CONFIG_HOME: join(directory, "config") }))
+    .toMatchObject({ stateDir: stored.stateDir, workspaceRoot: moved });
 
   // Starting by folder at the new root would hash to an empty directory: refused, naming the way in.
   expect(() => resolveOutlineServicePaths(env(moved))).toThrow("start it with OUTLINER_OUTLINE=jam-shelf");
@@ -414,3 +525,55 @@ test("the outline chooser shows an outline's name beside its label", async () =>
   }]);
   expect(renderChooserFrame(chooser, 90, 24).join("\n")).toContain("jam-shelf · /tmp/fixture/jam-shelf");
 });
+
+test("a real service keeps serving on its hash socket when its name cannot be published, its descriptor is unreadable, or a stopped copy shares its name", async () => {
+  const root = mkdtempSync(join(tmpdir(), "outline-names-tolerant-"));
+  directories.push(root);
+  mkdirSync(join(root, "jam-shelf"));
+  const env = scratchServiceEnv(root, "jam-shelf");
+  const paths = resolvePaths(env);
+  const byName = join(root, "state", "by-name", "jam-shelf.sock");
+  const descriptor = join(paths.stateDir, "outline.json");
+  const services: ReturnType<typeof launchService>[] = [];
+  const run = async (check: (status: OutlinerServiceStatus, ready: Record<string, unknown>) => void | Promise<void>) => {
+    const service = launchService(env);
+    services.push(service);
+    const ready = await service.startup();
+    if (!ready) throw new Error(await service.stderr);
+    await check(await new OutlinerClient(paths.socket).request<OutlinerServiceStatus>({ action: "ping" }), ready);
+    service.child.kill("SIGTERM");
+    expect(await service.child.exited).toBe(0);
+    return service.stderr;
+  };
+  try {
+    // 1. A regular file where the by-name link goes: logged, and the hash socket serves.
+    mkdirSync(dirname(byName), { recursive: true });
+    writeFileSync(byName, "not a link");
+    const blocked = await run((status, ready) => {
+      expect(status.outline).toEqual({ name: "jam-shelf", descriptorPath: descriptor });
+      expect(ready).toMatchObject({ outline: "jam-shelf" });
+      expect(ready.byNameSocket).toBeUndefined();
+    });
+    expect(blocked).toContain("Outline name: Could not publish the by-name socket");
+    expect(readFileSync(byName, "utf8")).toBe("not a link");
+    rmSync(byName);
+
+    // 2. An empty descriptor and no link: serves unnamed, says so, and leaves the file.
+    const written = readFileSync(descriptor, "utf8");
+    writeFileSync(descriptor, "");
+    const unnamed = await run(status => { expect(status.outline).toBeUndefined(); });
+    expect(unnamed).toContain("serving unnamed");
+    expect(readFileSync(descriptor, "utf8")).toBe("");
+    writeFileSync(descriptor, written);
+
+    // 3. A stopped copy under another storage key carries the same name: a warning, not a refusal.
+    cpSync(paths.stateDir, join(root, "state", "0123456789ab"), { recursive: true });
+    const copied = await run(status => {
+      expect(status.outline).toEqual({ name: "jam-shelf", descriptorPath: descriptor, byNameSocket: byName });
+    });
+    expect(copied).toContain(`also belongs to the stopped outline for ${join(root, "jam-shelf")}`);
+  } finally {
+    for (const service of services) if (service.child.exitCode === null) service.child.kill("SIGKILL");
+    await Promise.all(services.map(service => service.child.exited));
+  }
+}, 45_000);

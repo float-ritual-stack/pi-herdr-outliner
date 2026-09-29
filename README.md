@@ -2034,8 +2034,20 @@ registry of outlines: every list is a scan of the state root.
 While it runs, the service keeps `<state root>/by-name/<name>.sock`, a symlink
 to its real socket, and removes it on a clean stop. `ping` reports
 `outline: { name, descriptorPath, byNameSocket }` (capability `ping.outline`).
-A service refuses to start when another outline in the state root has its name,
-running or not, and says which folders both belong to.
+`outline` is absent from older services and from a service running unnamed, and
+each path is absent when that part could not be written.
+
+Names never take a service down. If the descriptor or the link cannot be
+written, the service logs why (`Outline name: …` on stderr) and keeps serving on
+its hash socket. An unreadable or empty `outline.json` is left in place and
+shown as invalid by `outlines`; the service takes its name from a `by-name`
+link that points at it, or otherwise runs unnamed until the file is fixed or
+removed. `OUTLINER_OUTLINE_NAME` never renames an existing outline; the service
+warns when it differs. Only folders named like a storage key (12 lowercase hex
+characters) are scanned, so a backup beside them is not an outline. The service
+refuses to start only when another running service has its name, or when a new
+outline would take a name another outline holds; a stopped copy carrying the
+name this outline already has is a warning.
 
 ```sh
 bun run cli outlines            # every outline: name, status, root, address, storage, aliases
@@ -2043,6 +2055,10 @@ bun run cli outlines --json     # the same for agents; creates nothing
 bun run cli outline rename jam-shelf fig-crate        # only while stopped
 bun run cli outline set-root jam-shelf /work/moved/jam-shelf
 ```
+
+Both commands accept a storage key (the 12-hex folder name) in place of the
+name, and refuse a name that more than one stored outline carries, listing
+their storage keys.
 
 `outlines` includes databases that have no descriptor yet (they get one the
 next time their service starts) and folders whose client config points at an

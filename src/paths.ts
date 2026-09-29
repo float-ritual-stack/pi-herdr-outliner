@@ -38,6 +38,18 @@ export function workspaceKey(workspaceRoot: string): string {
   return createHash("sha256").update(workspaceRoot).digest("hex").slice(0, 12);
 }
 
+/** A state folder's name: the first 12 hex characters of its root's SHA-256. */
+export const WORKSPACE_KEY_PATTERN = /^[0-9a-f]{12}$/;
+
+/** The files inside one outline's state folder. */
+export function stateDirPaths(stateDir: string): { database: string; socket: string; descriptor: string } {
+  return {
+    database: join(stateDir, "outliner.sqlite"),
+    socket: join(stateDir, "outliner.sock"),
+    descriptor: join(stateDir, "outline.json"),
+  };
+}
+
 function readableWorkspaceName(workspaceRoot: string): string {
   const name = basename(workspaceRoot) || "root";
   return name.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "workspace";
@@ -200,13 +212,9 @@ export function resolvePaths(env: NodeJS.ProcessEnv = process.env): OutlinerPath
   const baseStateDir = resolveStateRoot(env);
   const workspaceKeyPart = workspaceKey(workspaceRoot);
   const stateDir = join(baseStateDir, workspaceKeyPart);
+  const { database, socket } = stateDirPaths(stateDir);
 
-  return {
-    stateDir,
-    database: join(stateDir, "outliner.sqlite"),
-    socket: join(stateDir, "outliner.sock"),
-    workspaceRoot,
-  };
+  return { stateDir, database, socket, workspaceRoot };
 }
 
 export function resolveClientPaths(

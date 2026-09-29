@@ -71,7 +71,7 @@ async function runOutlinesCommand(group: "outlines" | "outline", args: string[])
     } else if (operation === "rename" && positionals.length === 2) {
       descriptor = await renameOutline({ stateRoot, from: positionals[0]!, to: positionals[1]! });
     } else {
-      throw new Error("outline expects: set-root <name> <path> | rename <old> <new>");
+      throw new Error("outline expects: set-root <name|storage-key> <path> | rename <name|storage-key> <new-name>");
     }
     console.log(values.json ? JSON.stringify(descriptor, null, 2) : `${descriptor.name}  ${descriptor.root}`);
     return 0;

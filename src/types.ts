@@ -1666,15 +1666,22 @@ export interface OutlinerServiceStatus {
   /** Absent from services older than protocol 82. */
   capabilities?: readonly string[];
   location?: {hostname:string;workspaceRoot:string;database:string;stateDirectory:string};
-  /** Present when the service runs a named outline (capability `ping.outline`). */
+  /**
+   * Present when the service runs a named outline (capability `ping.outline`).
+   * Absent from older services and from a service running unnamed.
+   */
   outline?: OutlinerServiceOutline;
 }
 
-/** How an outline is addressed: by name, through its by-name socket. */
+/**
+ * How an outline is addressed: by name, through its by-name socket. The service
+ * keeps serving when it cannot write its descriptor or link, so either path is
+ * absent when that part does not exist.
+ */
 export interface OutlinerServiceOutline {
   name: string;
-  descriptorPath: string;
-  byNameSocket: string;
+  descriptorPath?: string;
+  byNameSocket?: string;
 }
 
 export interface ResourceProviderCommandResult {

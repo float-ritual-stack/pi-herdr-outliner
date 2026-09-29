@@ -7,6 +7,8 @@ import {
   readClientConfig,
   resolveClientConfigPath,
   resolveClientPaths,
+  stateDirPaths,
+  WORKSPACE_KEY_PATTERN,
 } from "./paths";
 import type { OutlinerServiceStatus } from "./types";
 
@@ -37,8 +39,6 @@ export function detectOutline(env: NodeJS.ProcessEnv): OutlinePresence {
   return { kind: "missing", paths, configPath };
 }
 
-/** The file beside `outliner.sqlite` in which a database describes itself. */
-export const OUTLINE_DESCRIPTOR_FILE = "outline.json";
 /** A short slug that addresses an outline, unique per state root. */
 export const OUTLINE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
@@ -64,7 +64,7 @@ export type OutlineDescriptorRead =
   | { kind: "invalid"; error: string };
 
 export function outlineDescriptorPath(stateDir: string): string {
-  return join(stateDir, OUTLINE_DESCRIPTOR_FILE);
+  return stateDirPaths(stateDir).descriptor;
 }
 
 /** The name-addressed socket: a symlink the running service keeps to its real socket. */
@@ -111,23 +111,30 @@ export interface StoredOutline {
   descriptor: OutlineDescriptorRead;
 }
 
-/** Every database in a state root. Reads only; never creates the root. */
+/**
+ * Every database in a state root, in folders named like a workspace key. A
+ * backup or copy under another folder name is not an outline. Reads only;
+ * never creates the root.
+ */
 export function scanStoredOutlines(stateRoot: string): StoredOutline[] {
   const root = resolve(stateRoot);
   return directories(root)
+    .filter(stateKey => WORKSPACE_KEY_PATTERN.test(stateKey))
     .map(stateKey => join(root, stateKey))
-    .filter(stateDir => existsSync(join(stateDir, "outliner.sqlite")))
+    .filter(stateDir => existsSync(stateDirPaths(stateDir).database))
     .map(stateDir => ({
       stateKey: basename(stateDir),
       stateDir,
-      socket: join(stateDir, "outliner.sock"),
+      socket: stateDirPaths(stateDir).socket,
       descriptor: readOutlineDescriptor(stateDir),
     }));
 }
 
-/** The stored outline whose descriptor carries a name, if any. */
-export function findOutlineByName(stateRoot: string, name: string): (StoredOutline & { descriptor: { kind: "ok"; descriptor: OutlineDescriptor } }) | undefined {
-  return scanStoredOutlines(stateRoot).find((stored): stored is StoredOutline & { descriptor: { kind: "ok"; descriptor: OutlineDescriptor } } =>
+export type NamedStoredOutline = StoredOutline & { descriptor: { kind: "ok"; descriptor: OutlineDescriptor } };
+
+/** Every stored outline whose descriptor carries a name; more than one means the name is ambiguous. */
+export function findOutlinesByName(stateRoot: string, name: string): NamedStoredOutline[] {
+  return scanStoredOutlines(stateRoot).filter((stored): stored is NamedStoredOutline =>
     stored.descriptor.kind === "ok" && stored.descriptor.descriptor.name === name);
 }
 
@@ -221,8 +228,9 @@ export function localOutlineOwner(
   options: { stateRoot: string; configRoot: string },
 ): { stateDir: string; stateKey: string; root?: string } | undefined {
   const stateDir = dirname(resolve(socket));
-  if (basename(socket) !== "outliner.sock" || dirname(stateDir) !== resolve(options.stateRoot)) return undefined;
-  if (!existsSync(join(stateDir, "outliner.sqlite"))) return undefined;
+  const layout = stateDirPaths(stateDir);
+  if (resolve(socket) !== layout.socket || dirname(stateDir) !== resolve(options.stateRoot)) return undefined;
+  if (!existsSync(layout.database)) return undefined;
   const stateKey = basename(stateDir);
   let root = recordedRoot(stateDir);
   for (const name of root ? [] : directories(options.configRoot).filter(name => name.endsWith(`--${stateKey}`))) {
@@ -344,8 +352,8 @@ export async function listKnownOutlines(options: ListKnownOutlinesOptions): Prom
     // A local config names its own state directory through the same hash suffix.
     const stateKey = name.slice(name.lastIndexOf("--") + 2);
     const stateDir = join(stateRoot, stateKey);
-    if (!existsSync(join(stateDir, "outliner.sqlite"))) continue;
-    const entry = candidate(join(stateDir, "outliner.sock"));
+    if (!existsSync(stateDirPaths(stateDir).database)) continue;
+    const entry = candidate(stateDirPaths(stateDir).socket);
     entry.stateKey = stateKey;
     entry.stateDir = stateDir;
     // The database's own descriptor says where it lives now; an older folder is an alias.
@@ -357,13 +365,17 @@ export async function listKnownOutlines(options: ListKnownOutlinesOptions): Prom
   const timeoutMs = options.pingTimeoutMs ?? 400;
   const ping = options.ping ?? defaultPing;
   const listed = await Promise.all([...candidates.values()].map(async (entry): Promise<KnownOutline> => {
-    const status = await boundedPing(ping, entry.socket, timeoutMs);
+    const local = entry.stateDir !== undefined || entry.socket.startsWith(`${stateRoot}${sep}`);
+    // Together, so a busy local service costs one timeout, not two. A service too
+    // busy to answer the ping still holds its socket.
+    const [status, absent] = await Promise.all([
+      boundedPing(ping, entry.socket, timeoutMs),
+      local ? socketAbsent(entry.socket, timeoutMs) : Promise.resolve(true),
+    ]);
     const serviceRoot = status?.location?.workspaceRoot;
     const root = entry.root ?? (serviceRoot?.trim() ? serviceRoot : undefined);
     const aliases = [...entry.aliases].filter(alias => alias !== root).sort();
-    const local = entry.stateDir !== undefined || entry.socket.startsWith(`${stateRoot}${sep}`);
-    // A local service that is too busy to answer the ping still holds its socket.
-    const running = status !== null || (local && !await socketAbsent(entry.socket, timeoutMs));
+    const running = status !== null || !absent;
     return {
       socket: entry.socket,
       label: entry.label ?? entry.name ?? (root ? basename(root) || root : entry.stateKey ? `outline ${entry.stateKey}` : basename(entry.socket)),

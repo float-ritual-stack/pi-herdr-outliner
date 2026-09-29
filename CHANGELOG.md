@@ -13,10 +13,14 @@ This file records notable user-facing changes. The project remains active dogfoo
   service publishes `<state root>/by-name/<name>.sock` and `ping` reports
   `outline` (capability `ping.outline`). `outliner outlines [--json]` lists
   outlines by scanning; `outline rename` and `outline set-root` change a
-  stopped outline explicitly, and `OUTLINER_OUTLINE=<name>` starts the service
+  stopped outline explicitly (by name or storage key; an ambiguous name is
+  refused), and `OUTLINER_OUTLINE=<name>` starts the service
   on a moved outline's existing database. Starting by folder at a root another
   outline already claims is refused instead of creating a second database.
-  Clients still address local outlines by hash until they resolve names.
+  Writing the descriptor or the link never stops a service: failures are
+  logged and it keeps serving on its hash socket, and an unreadable descriptor
+  is left in place. Clients still address local outlines by hash until they
+  resolve names.
 
 - Who moved, trashed or restored a block: `move`, `delete` and `trash.restore`
   accept an optional `mutation` (capability `mutations.provenance`), recorded

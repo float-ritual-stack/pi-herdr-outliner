@@ -433,13 +433,22 @@ service:
 2. decides its name (the existing descriptor's, else `OUTLINER_OUTLINE_NAME`,
    else the root's basename with a numeric suffix on collision) and refuses when
    another descriptor in the state root has it, live or stopped;
-3. after it owns the database and socket, writes the descriptor atomically with
-   the current root and points `<state root>/by-name/<name>.sock` at its socket,
-   replacing only a link to itself or to a socket nobody serves.
+3. after it owns the database and socket, writes the descriptor (synced, then
+   renamed, then the folder synced; skipped when only `updated` would change)
+   and points `<state root>/by-name/<name>.sock` at its socket, replacing only a
+   link to itself or to a socket nobody serves.
+
+Step 3 is optional until clients resolve names: a failure is logged and the
+service keeps serving on its hash socket. An unreadable descriptor is left in
+place; the name then comes from a by-name link to this outline, or the service
+runs unnamed. Step 2 refuses only a name held by another running service, or a
+new outline asking for a held name; a stopped copy of an outline's own name is a
+warning. Only folders named like a workspace key count as stored outlines.
+`paths.ts` owns a state folder's layout (`stateDirPaths`).
 
 A clean stop removes the by-name link only if it still points at this service.
-`ping` adds `outline: { name, descriptorPath, byNameSocket }` under the
-`ping.outline` capability. `listKnownOutlines` derives every list of outlines by
+`ping` adds `outline: { name, descriptorPath?, byNameSocket? }` under the
+`ping.outline` capability; it is absent from older services and unnamed ones. `listKnownOutlines` derives every list of outlines by
 scanning descriptors and client configs; no registry is kept by hand.
 Clients still resolve local outlines by hash in this slice.
 
