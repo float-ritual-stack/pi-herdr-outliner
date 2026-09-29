@@ -6,6 +6,7 @@ import {blockDisplayTitle} from './references';
 import {propertyInspectorAuthoredText} from './property-inspector';
 import type {ReferencedPathCandidate} from './files';
 import type {Block, BlockSearchQuery, PageAddressCollection, SelectionContext, VisibleBlockCollection} from './types';
+import type {FragmentCandidateCollection, FragmentCandidateQuery} from './fragment-search';
 import type {TextBuffer} from './text-buffer';
 
 export interface ReferenceCompletionItem {
@@ -16,7 +17,8 @@ export interface ReferenceCompletionItem {
   fragmentId?:string;
   kind?:string;
   context?:string;
-  anchor?:{blockId:string;fragmentId:string;lineIndex:number;text:string;expectedRevision:number};
+  /** A heading that gets its anchor when chosen: in another note through the service, in the draft as `line`. */
+  anchor?:{blockId:string;fragmentId:string;lineIndex:number;line:string;text?:string;expectedRevision:number};
 }
 export interface ReferenceCompletionState {
   start:number;end:number;index:number;items:ReferenceCompletionItem[];
@@ -32,7 +34,12 @@ export interface ReferenceCompletionProvider {
   completeFiles(query:string):Promise<ReferencedPathCandidate[]>;
   readContext(blockId:string):Promise<SelectionContext>;
   updateBlock(input:{blockId:string;text:string;expectedRevision:number}):Promise<Block>;
+  /** The service's fragment completion over every note (PIE-424, PIE-295); without it, the first 500 blocks are searched here. */
+  fragmentCandidates?(query:FragmentCandidateQuery):Promise<FragmentCandidateCollection>;
+  /** The service writes a heading's anchor, revision-checked. */
+  ensureFragment?(input:{blockId:string;lineIndex:number;expectedRevision:number}):Promise<{fragmentId:string;created:boolean}>;
 }
+const unsupportedAction=(error:unknown)=>/unsupported action|unknown action/i.test(error instanceof Error?error.message:String(error));
 export interface CompletionDraft {blockId:string;text:string}
 const LIMIT=20;
 function snippet(text:string):string {
@@ -52,6 +59,20 @@ export async function lookupReferenceCompletion(provider:ReferenceCompletionProv
     message='No matching named addresses; [[target|label]] labels a target, ((...)) searches blocks';
   } else {
     const fragment=parseFragmentCompletionQuery(target.query);
+    if(fragment&&provider.fragmentCandidates){
+      // The service searches every note by its own fragment rules (PIE-424); PIE-295's 500-block cap is gone.
+      try{
+        const found=await provider.fragmentCandidates({...(fragment.blockQuery?{noteQuery:fragment.blockQuery}:{}),fragmentQuery:fragment.fragmentQuery,mode:fragment.mode,limit:LIMIT,...(draft?{draft}:{})});
+        items=found.items.map(hit=>{
+          const fragmentId=hit.fragmentId??hit.anchor!.fragmentId;
+          return {label:`${hit.title} › ${hit.kind==='heading'?'#':'¶'} ${hit.label}${hit.fragmentId?` · ^${hit.fragmentId}`:' · create anchor'}`,blockId:hit.blockId,fragmentId,kind:'fragment',insertion:`((${hit.blockId}^${fragmentId}))`,
+            ...(hit.anchor?{anchor:{blockId:hit.blockId,fragmentId,lineIndex:hit.lineIndex,line:hit.anchor.line,expectedRevision:hit.revision}}:{})};
+        });
+        if(found.completeness.kind==='truncated'){truncatedLimit=found.completeness.limit;incompleteness=`Showing first ${found.completeness.limit} fragments`;}
+        const message='No matching block fragments';
+        return {start:target.start,end:target.end,index:0,items,truncatedLimit,incompleteness,message:items.length?incompleteness:message};
+      }catch(error){if(!unsupportedAction(error))throw error;}
+    }
     const result=await provider.queryBlocks(fragment?{limit:500}:{text:target.query||undefined,limit:LIMIT});
     if(result.completeness.kind==='truncated'){truncatedLimit=result.completeness.limit;incompleteness=fragment?`Searched only ${result.blocks.length} blocks; more blocks were not checked`:'';}
     if(!fragment)items=result.blocks.map(block=>({label:blockDisplayTitle(block),blockId:block.id,kind:'block',context:snippet(block.text),insertion:`((${block.id}))`}));
@@ -65,7 +86,7 @@ export async function lookupReferenceCompletion(provider:ReferenceCompletionProv
           candidates++;
           if(items.length>=LIMIT)break outer;
           const anchor=candidate.fragmentId?{text:source,fragmentId:candidate.fragmentId,created:false}:ensureHeadingFragment(source,candidate.lineIndex);
-          items.push({label:`${blockDisplayTitle(block)} › ${candidate.kind==='heading'?'#':'¶'} ${candidate.label}${candidate.fragmentId?` · ^${candidate.fragmentId}`:' · create anchor'}`,blockId:block.id,fragmentId:anchor.fragmentId,kind:'fragment',context:snippet(source),insertion:`((${block.id}^${anchor.fragmentId}))`,...(anchor.created?{anchor:{blockId:block.id,fragmentId:anchor.fragmentId,lineIndex:candidate.lineIndex,text:anchor.text,expectedRevision:block.revision}}:{})});
+          items.push({label:`${blockDisplayTitle(block)} › ${candidate.kind==='heading'?'#':'¶'} ${candidate.label}${candidate.fragmentId?` · ^${candidate.fragmentId}`:' · create anchor'}`,blockId:block.id,fragmentId:anchor.fragmentId,kind:'fragment',context:snippet(source),insertion:`((${block.id}^${anchor.fragmentId}))`,...(anchor.created?{anchor:{blockId:block.id,fragmentId:anchor.fragmentId,lineIndex:candidate.lineIndex,line:anchor.text.split(/\r?\n/)[candidate.lineIndex]!,text:anchor.text,expectedRevision:block.revision}}:{})});
         }
       }
       if(candidates>LIMIT){truncatedLimit=LIMIT;incompleteness=[incompleteness,`Showing first ${LIMIT} fragments`].filter(Boolean).join(' · ');}
@@ -131,16 +152,20 @@ export class ReferenceCompletionSession {
           if(resolveFragment(source,item.fragmentId).status!=='resolved')throw Error('Fragment changed or is ambiguous; search again');
         }
         if(item.anchor&&item.blockId!==this.draft()?.blockId){
-          await this.provider.updateBlock({blockId:item.anchor.blockId,text:item.anchor.text,expectedRevision:item.anchor.expectedRevision});
+          const anchor=item.anchor;
+          if(this.provider.ensureFragment){
+            // The service writes the anchor, revision-checked; a different id than offered means the note moved on.
+            const written=await this.provider.ensureFragment({blockId:anchor.blockId,lineIndex:anchor.lineIndex,expectedRevision:anchor.expectedRevision});
+            if(written.fragmentId!==anchor.fragmentId)throw Error('Fragment changed; search again');
+          }else if(anchor.text!==undefined)await this.provider.updateBlock({blockId:anchor.blockId,text:anchor.text,expectedRevision:anchor.expectedRevision});
+          else throw Error('This service cannot add the anchor; search again');
           if(!this.current(generation))return false;
         }
       }
       const b=this.buffer();
       b.editTogether(()=>{
       if(item.anchor&&item.blockId===this.draft()?.blockId){
-        const line=item.anchor.text.split(/\r?\n/)[item.anchor.lineIndex];
-        if(line===undefined)throw Error('Fragment heading is no longer available');
-        b.replaceLine(item.anchor.lineIndex,line);
+        b.replaceLine(item.anchor.lineIndex,item.anchor.line);
       }
       b.replaceCurrentLine(state.start,state.end,item.insertion);
       });this.dismiss();return true;
@@ -151,6 +176,8 @@ export class ReferenceCompletionSession {
 export function referenceCompletionProvider(client:OutlinerRequester,actorId:string):ReferenceCompletionProvider {
   return {
     queryBlocks:query=>client.request({action:"blocks.query",query}),
+    fragmentCandidates:query=>client.request({action:"fragments.candidates",query}),
+    ensureFragment:input=>client.request({action:"fragments.ensure",...input,mutation:{author:"user",actorId}}),
     queryPageAddresses:(query,limit)=>client.request({action:"pages.complete",query,limit}),
     completeFiles:prefix=>client.request({action:"files.complete",prefix}),
     readContext:blockId=>client.request({action:"blocks.context",blockId}),

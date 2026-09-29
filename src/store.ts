@@ -3,6 +3,8 @@ import {placeOrderedItems} from "./virtual-placement";
 import {WorkingSelectionRepository} from "./working-selection";
 import { ChangeFeed, raiseChangeFeedFloor, type SequenceChange } from "./change-feed";
 import { checklistItems, queryChecklistItems, updateChecklistText, validateChecklistIdentityChanges } from "./checklist-items";
+import { searchFragmentCandidates, type FragmentCandidateCollection, type FragmentCandidateQuery } from "./fragment-search";
+import { ensureHeadingFragment } from "./fragments";
 import { readFragment, readTransclusions, type FragmentRead, type TransclusionOptions, type TransclusionRead, type TransclusionTarget } from "./transclusions";
 import type { ChecklistCollection, ChecklistIdentityChange, ChecklistQuery, ChecklistSearchQuery, ChecklistSearchCollection, ChecklistUpdateInput, ChecklistUpdateReceipt } from "./types";
 import type {QueryExpression, SavedViewReadOptions, SavedViewReadProblem, SavedViewReadResult, VirtualBranchOrder, VirtualBranchPlacementInput} from "./types";
@@ -1493,6 +1495,27 @@ export class OutlinerStore {
   /** `((id^fragment))`'s slice of its note, read in one transaction (src/transclusions.ts owns the rules). */
   readFragment(id: string, fragmentId: string): FragmentRead {
     return this.database.transaction(() => readFragment(this.requireActive(id), fragmentId))();
+  }
+
+  /** Fragment completion across every active note, in one read (src/fragment-search.ts owns the rules). */
+  fragmentCandidates(query: FragmentCandidateQuery): FragmentCandidateCollection {
+    return this.database.transaction(() => searchFragmentCandidates(this.traverseLoadedGraph(this.loadGraph(), {}), query))();
+  }
+
+  /**
+   * Give the heading on `lineIndex` its anchor, as completion offered it: refused when the note moved past
+   * `expectedRevision` (the offer was for other text), a no-op when it already has one.
+   */
+  ensureFragment(id: string, lineIndex: number, expectedRevision: number, mutation: MutationProvenance): { blockId: string; fragmentId: string; created: boolean; block: Block } {
+    normalizeMutationProvenance(mutation);
+    if (!Number.isSafeInteger(lineIndex) || lineIndex < 0) throw new Error("fragments.ensure needs a lineIndex");
+    return this.database.transaction(() => {
+      const before = this.requireActive(id);
+      if (before.revision !== expectedRevision) throw new Error("The note changed since the fragment was offered; search again");
+      const anchored = ensureHeadingFragment(before.text, lineIndex);
+      const block = anchored.created ? this.update(id, anchored.text, before.revision, mutation) : before;
+      return { blockId: id, fragmentId: anchored.fragmentId, created: anchored.created, block };
+    })();
   }
 
   /** Transclusions as readers show them, nested and cycle-safe, from one consistent read. */

@@ -1,4 +1,5 @@
 import type { MentionMessage, MentionScope } from "./mentions-types";
+import type { FragmentCandidateQuery } from "./fragment-search";
 import type { AuthoredResourceReference } from "./resource-references";
 import type { PromptRevision } from "./ai-prompts";
 import type {
@@ -1645,6 +1646,10 @@ export const OUTLINER_MIN_CLIENT_PROTOCOL = 82;
 export const OUTLINER_CAPABILITIES = [
   "blocks.read",
   "changes.since",
+  /** `fragments.candidates`: `((note#…` / `((note^…` completion over every active note (PIE-424, PIE-295). */
+  "fragments.candidates",
+  /** `fragments.ensure`: write a heading's anchor, revision-checked, for completion to link to. */
+  "fragments.ensure",
   /** `fragments.read`: a `((id^fragment))` slice, its kind, label, lines and offsets (PIE-424). */
   "fragments.read",
   /**
@@ -2155,6 +2160,10 @@ export type OutlinerRequestAction =
   | { id: string; action: "fragments.read"; blockId: string; fragmentId: string }
   /** Transclusions projected as readers show them, nested and cycle-safe (src/transclusions.ts). */
   | { id: string; action: "transclusions.read"; targets: { blockId: string; fragmentId?: string }[]; hostBlockId?: string; maxDepth?: number }
+  /** Fragment completion over every active note (src/fragment-search.ts). */
+  | { id: string; action: "fragments.candidates"; query: FragmentCandidateQuery }
+  /** Give a heading its anchor (`## Beds ^beds`), if the note is still at `expectedRevision`. */
+  | { id: string; action: "fragments.ensure"; blockId: string; lineIndex: number; expectedRevision: number; mutation: MutationProvenance }
   /** `mutation` needs capability `mutations.provenance`; without it the change is unattributed. */
   | { id: string; action: "move"; blockId: string; parentId: string | null; position?: number; mutation?: MutationProvenance }
   | { id: string; action: "delete"; blockId: string; mutation?: MutationProvenance }

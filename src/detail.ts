@@ -1,3 +1,4 @@
+import type { FragmentCandidateCollection } from "./fragment-search";
 import {StdinBuffer, getOsc8LinkAtColumn} from "@earendil-works/pi-tui";
 import {isTreeMouseSequence, parseTreePlainClick, parseTreeWheelEvent} from "./tree-mouse";
 import {parsePreviewRegionActionUri} from "./detail-preview-regions";
@@ -506,6 +507,12 @@ const effects: DetailEffects = {
   },
   async queryBlocks(query) {
     return client.request<VisibleBlockCollection>({ action: "blocks.query", query });
+  },
+  async fragmentCandidates(query) {
+    return client.request<FragmentCandidateCollection>({ action: "fragments.candidates", query });
+  },
+  async ensureFragment(input) {
+    return client.request<{ fragmentId: string; created: boolean }>({ action: "fragments.ensure", ...input, mutation: { author: "user", actorId: "detail" } });
   },
   async queryPageAddresses(query, limit) {
     return client.request<PageAddressCollection>({ action: "pages.complete", query, limit });

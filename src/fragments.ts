@@ -1,4 +1,4 @@
-import { standaloneListItemText, markdownListItems, markdownSourceTokens, type MarkdownSourceToken } from "./markdown-structure";
+import { standaloneListItemText, markdownSourceTokens, type MarkdownListItem, type MarkdownSourceToken } from "./markdown-structure";
 
 const FRAGMENT_ID_SOURCE = String.raw`[A-Za-z0-9][A-Za-z0-9_-]{0,63}`;
 const FRAGMENT_ANCHOR_PATTERN = new RegExp(String.raw`(?:^|\s)\^(${FRAGMENT_ID_SOURCE})\s*$`);
@@ -87,25 +87,55 @@ export function isFragmentId(value: string): boolean {
   return new RegExp(`^${FRAGMENT_ID_SOURCE}$`).test(value);
 }
 
-/** The lines inside fenced or indented code: no anchor, heading, boundary or embed lives there (PIE-424). */
-export function codeLineSet(text: string): Set<number> {
+/**
+ * One Markdown parse of a note's text, shared by everything this module answers about it: its list
+ * items, its code lines and its anchors. The last few texts are kept, so asking about many fragments of
+ * one note (an outline of slices, a reader's embeds) parses it once. Callers get copies.
+ */
+interface ParsedNote { listItems: MarkdownListItem[]; codeLines: Set<number>; anchors?: FragmentAnchor[] }
+const PARSED_NOTES = 32;
+const parsedNotes = new Map<string, ParsedNote>();
+function parsedNote(text: string): ParsedNote {
+  const hit = parsedNotes.get(text);
+  if (hit) { parsedNotes.delete(text); parsedNotes.set(text, hit); return hit; }
+  const listItems: MarkdownListItem[] = [];
   const codeLines = new Set<number>();
-  const excludeCode = (nodes: MarkdownSourceToken[]): void => {
+  const visit = (nodes: readonly MarkdownSourceToken[], depth: number, parentStart?: number): void => {
     for (const node of nodes) {
       if (node.token.type === "code") {
         for (let line = node.span.startLine; line <= node.span.endLine; line++) codeLines.add(line);
-      } else excludeCode(node.children);
+      } else if (node.token.type === "list_item") {
+        listItems.push({ span: node.span, depth, ...(parentStart === undefined ? {} : { parentStart }) });
+        visit(node.children, depth + 1, node.span.start);
+      } else visit(node.children, depth, parentStart);
     }
   };
-  excludeCode(markdownSourceTokens(text));
-  return codeLines;
+  visit(markdownSourceTokens(text), 0);
+  const note = { listItems, codeLines };
+  parsedNotes.set(text, note);
+  if (parsedNotes.size > PARSED_NOTES) parsedNotes.delete(parsedNotes.keys().next().value!);
+  return note;
 }
 
+/** The lines inside fenced or indented code: no anchor, heading, boundary or embed lives there (PIE-424). */
+export function codeLineSet(text: string): Set<number> {
+  // Without a fence or an indented line there's no code to find, and nothing to parse.
+  if (!MAY_HOLD_CODE.test(text)) return new Set();
+  return new Set(parsedNote(text).codeLines);
+}
+const MAY_HOLD_CODE = /^(?: {4}|\t| {0,3}(?:```|~~~))/m;
+
 export function fragmentAnchors(text: string): FragmentAnchor[] {
+  const note = parsedNote(text);
+  note.anchors ??= parseAnchors(text, note);
+  return note.anchors.map(anchor => ({ ...anchor }));
+}
+
+function parseAnchors(text: string, note: ParsedNote): FragmentAnchor[] {
   const lines = text.split(/\r?\n/);
   const offsets = lineOffsets(text);
-  const items = new Map(markdownListItems(text).map(item => [item.span.startLine, item]));
-  const codeLines = codeLineSet(text);
+  const items = new Map(note.listItems.map(item => [item.span.startLine, item]));
+  const codeLines = note.codeLines;
   const anchors: FragmentAnchor[] = [];
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
     if (codeLines.has(lineIndex)) continue;
@@ -147,7 +177,7 @@ export function resolveFragmentSlice(
   let startLine = anchor.lineIndex;
   let endLine = anchor.lineIndex;
   if (anchor.kind === "list-item") {
-    const item = markdownListItems(text).find(item => item.span.startLine === anchor.lineIndex)!;
+    const item = parsedNote(text).listItems.find(item => item.span.startLine === anchor.lineIndex)!;
     endLine = item.span.endLine;
   } else if (anchor.kind === "heading") {
     const heading = contentBeforeAnchor(
@@ -157,7 +187,7 @@ export function resolveFragmentSlice(
     const depth = heading[1]!.length;
     endLine = lines.length - 1;
     // A `#` line inside a code fence is code, not a heading: it never ends the section.
-    const codeLines = codeLineSet(text);
+    const codeLines = parsedNote(text).codeLines;
     for (let lineIndex = anchor.lineIndex + 1; lineIndex < lines.length; lineIndex += 1) {
       if (codeLines.has(lineIndex)) continue;
       const candidate = contentBeforeAnchor(

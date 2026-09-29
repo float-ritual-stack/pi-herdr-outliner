@@ -1,3 +1,4 @@
+import type { FragmentCandidateCollection, FragmentCandidateQuery } from "./fragment-search";
 import {captureAnnotationPassage,renderedDocumentAnnotationTarget} from './document-annotation';
 import type {DocumentSelection} from './document-frame';
 import { blockCommentTarget } from "./block-comments";
@@ -686,6 +687,10 @@ export interface DetailEffects {
   resolveReference(target: OutlinerLinkTarget): Promise<ResolvedOutlinerLinkTarget>;
   followResourceOccurrence(target: OutlinerLinkTarget): Promise<FollowResourceOccurrenceReceipt>;
   queryBlocks(query: BlockSearchQuery): Promise<VisibleBlockCollection>;
+  /** Fragment completion over every note (`fragments.candidates`); absent, completion searches blocks itself. */
+  fragmentCandidates?(query: FragmentCandidateQuery): Promise<FragmentCandidateCollection>;
+  /** Write a heading's anchor through the service (`fragments.ensure`). */
+  ensureFragment?(input: { blockId: string; lineIndex: number; expectedRevision: number }): Promise<{ fragmentId: string; created: boolean }>;
   queryPageAddresses(query: string | undefined, limit: number): Promise<PageAddressCollection>;
   readFile(block: Block): Promise<ReferencedFile>;
   completeFiles(query: string): Promise<ReferencedPathCandidate[]>;
@@ -3078,6 +3083,8 @@ export function createDetailController(
   let completionViewport:DetailViewport={width:80,height:24};
   const completions = new ReferenceCompletionSession({
     queryBlocks: query => effects.queryBlocks(query),
+    ...(effects.fragmentCandidates ? { fragmentCandidates: (query: FragmentCandidateQuery) => effects.fragmentCandidates!(query) } : {}),
+    ...(effects.ensureFragment ? { ensureFragment: (input: { blockId: string; lineIndex: number; expectedRevision: number }) => effects.ensureFragment!(input) } : {}),
     queryPageAddresses: (query, limit) => effects.queryPageAddresses(query, limit),
     completeFiles: query => effects.completeFiles(query),
     readContext: async blockId => {

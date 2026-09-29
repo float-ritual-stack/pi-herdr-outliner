@@ -9,7 +9,7 @@ import { OutlinerServer } from "../src/server";
 import { OutlinerStore } from "../src/store";
 import {
   MAX_EMBEDS_PER_DOCUMENT, readFragment, readTransclusions, TRANSCLUSION_DEFAULT_DEPTH, TRANSCLUSION_MAX_DEPTH,
-  TRANSCLUSION_MAX_NODES, TRANSCLUSION_WORDING, type FragmentRead, type TransclusionRead,
+  TRANSCLUSION_MAX_BYTES, TRANSCLUSION_MAX_NODES, TRANSCLUSION_WORDING, type FragmentRead, type TransclusionNode, type TransclusionRead,
 } from "../src/transclusions";
 import { OUTLINER_CAPABILITIES, type Block, type ChecklistUpdateReceipt, type OutlinerServiceStatus } from "../src/types";
 
@@ -58,6 +58,10 @@ test("missing and duplicate fragments say so", () => {
   expect(twice).toMatchObject({ status: "duplicate", duplicates: [{ kind: "heading", line: 1 }, { kind: "list-item", line: 13 }] });
 });
 
+/** The steps a projection shows: its note's steps (sent once per read) between the lines it shows. */
+const stepsIn = (read: TransclusionRead, node: TransclusionNode) =>
+  (read.checklists[node.blockId] ?? []).filter(i => i.span.startLine >= node.shownLines!.start && i.span.startLine <= node.shownLines!.end);
+
 const outline = (blocks: Block[]) => {
   const byId = new Map(blocks.map(b => [b.id, b]));
   return (id: string) => byId.get(id) ?? null;
@@ -72,13 +76,13 @@ test("transclusions nest, carry the steps they show, and stop at a cycle with th
   expect(r.limits).toEqual({ maxDepth: TRANSCLUSION_DEFAULT_DEPTH, maxPerDocument: MAX_EMBEDS_PER_DOCUMENT, maxNodes: TRANSCLUSION_MAX_NODES });
   const [whole, step, nested] = r.results;
   expect(whole).toMatchObject({ status: "ready", kind: "note", title: "Allotment checklist", depth: 1 });
-  expect(whole!.checklist!.map(i => i.status)).toEqual(["done", "todo", "waiting", "problem", "todo"]);
+  expect(stepsIn(r, whole!).map(i => i.status)).toEqual(["done", "todo", "waiting", "problem", "todo"]);
   expect(step).toMatchObject({ status: "ready", kind: "fragment", fragment: { startLine: 3, endLine: 5 } });
   // Only the steps inside the slice, as checklist.query reads them.
-  expect(step!.checklist!.map(i => [i.itemId, i.status, i.span.startLine])).toEqual([["t-d4e5f6", "todo", 3], ["t-0a0b0c", "waiting", 5]]);
+  expect(stepsIn(r, step!).map(i => [i.itemId, i.status, i.span.startLine])).toEqual([["t-d4e5f6", "todo", 3], ["t-0a0b0c", "waiting", 5]]);
   expect(nested!.embeds!.map(e => [e.blockId, e.status, e.depth])).toEqual([["leaf0001", "ready", 2], ["plan0001", "cycle", 2]]);
   expect(nested!.embeds![1]!.message).toBe(TRANSCLUSION_WORDING.cycle);
-  expect(nested!.embeds![0]!.checklist![0]).toMatchObject({ itemId: "t-leaf01", status: "todo" });
+  expect(stepsIn(r, nested!.embeds![0]!)[0]).toMatchObject({ itemId: "t-leaf01", status: "todo" });
   expect(new Set(r.dependencies)).toEqual(new Set(["garden01", "hub00001", "leaf0001", "plan0001"]));
 });
 
@@ -103,7 +107,9 @@ test("depth is bounded (the caller's depth clamped to the ceiling); the per-docu
 
   const many = block("many0001", ["Many", ...Array.from({ length: MAX_EMBEDS_PER_DOCUMENT + 2 }, () => "!((leaf0001))")].join("\n"));
   const r = readTransclusions(outline([many, block("leaf0001", "Leaf")]), [{ blockId: "many0001" }]);
-  expect(r.results[0]!.embeds!.slice(-3).map(e => e.status)).toEqual(["ready", "limit", "limit"]);
+  // The 17th says EMBED LIMIT; the note isn't scanned past it (the reader draws the rest as the limit too).
+  expect(r.results[0]!.embeds!).toHaveLength(MAX_EMBEDS_PER_DOCUMENT + 1);
+  expect(r.results[0]!.embeds!.slice(-2).map(e => e.status)).toEqual(["ready", "limit"]);
   expect(r.results[0]!.embeds!.at(-1)!.message).toBe(`EMBED LIMIT · maximum ${MAX_EMBEDS_PER_DOCUMENT}`);
 
   const wide = Array.from({ length: 8 }, (_, i) => block(`wide000${i}`, ["W", ...Array.from({ length: 12 }, () => "!((leaf0001))")].join("\n")));
@@ -135,6 +141,19 @@ test("embed syntax inside fenced or indented code is shown as written: no load, 
   expect(new Set(r.dependencies)).toEqual(new Set(["guide001", "leaf0001"]));
   expect(loaded).not.toContain("ghost001");
   expect(loaded).not.toContain("ghost002");
+});
+
+test("each note is sent once however often it's embedded, and a read stops sending past its byte budget", () => {
+  const big = (n: number) => block(`big0000${n}`, `Big ${n}\n${"A long line of prose with words in it.\n".repeat(3900)}`);   // about 150 KB each
+  const notes = [big(1), big(2), big(3), big(4), big(5)];
+  const r = readTransclusions(outline(notes), [...notes, notes[0]!].map(n => ({ blockId: n.id })));
+  expect(r.results.map(n => n.status)).toEqual(["ready", "ready", "ready", "too-large", "too-large", "ready"]);
+  expect(r.results[3]!.message).toStartWith("EMBED TOO LARGE · ");
+  expect(Object.keys(r.blocks)).toEqual(notes.slice(0, 3).map(n => n.id));
+  expect(Object.values(r.blocks).reduce((n, b) => n + b.text.length, 0)).toBeLessThanOrEqual(TRANSCLUSION_MAX_BYTES);
+  // A note whose steps alone would overrun the budget is too large as well.
+  const steps = block("steps001", `Steps\n${"- [ ] a step\n".repeat(4000)}`);
+  expect(readTransclusions(outline([steps]), [{ blockId: steps.id }]).results[0]!.status).toBe("too-large");
 });
 
 test("missing, trashed, missing and duplicate fragments, and a virtual branch are said, not guessed", () => {
@@ -171,7 +190,7 @@ test("fragments.read and transclusions.read round-trip through the service, adve
   await expect(client.request({ action: "fragments.read", blockId: "missing-block-id", fragmentId: "x" })).rejects.toThrow("Block not found");
 
   const first = await client.request<TransclusionRead>({ action: "transclusions.read", targets: [{ blockId: source.id, fragmentId: "t-d4e5f6" }], hostBlockId: plan.id });
-  const step = first.results[0]!.checklist![0]!;
+  const step = stepsIn(first, first.results[0]!)[0]!;
   // A step changed through the embed is a change to the source note, and the next read shows it.
   const changed = await client.request<ChecklistUpdateReceipt>({
     action: "checklist.update", blockId: source.id,
@@ -181,5 +200,5 @@ test("fragments.read and transclusions.read round-trip through the service, adve
   expect(changed.block.text).toContain("2. [x] Sow the beans ^t-d4e5f6");
   const again = await client.request<TransclusionRead>({ action: "transclusions.read", targets: [{ blockId: source.id, fragmentId: "t-d4e5f6" }], hostBlockId: plan.id });
   expect(again.results[0]).toMatchObject({ revision: changed.block.revision, fragment: { text: expect.stringContaining("[x] Sow the beans") } });
-  expect(again.results[0]!.checklist![0]!.status).toBe("done");
+  expect(stepsIn(again, again.results[0]!)[0]!.status).toBe("done");
 });

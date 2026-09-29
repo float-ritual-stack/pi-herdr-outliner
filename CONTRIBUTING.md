@@ -69,6 +69,10 @@ source evidence or distinguish authored glyphs from controls.
   per-document limit, the read budget) and what each failure is called.
   `fragments.read` and `transclusions.read` serve it; Detail's embeds use its
   limit and wording. A client asks rather than re-deriving slices.
+- `src/fragment-search.ts` owns fragment completion across every note
+  (`fragments.candidates`) and `fragments.ensure` writes a heading's anchor.
+  Every client's `((note#…` / `((note^…` completion asks it (Detail, Tree,
+  Quick Capture and ep0ch-door).
 - `src/context-resolution.ts` owns context-scoped resolution ("the nearest key"
   for a line: the line, lines above, the block, ancestors). It is the first
   slice of PIE-408; resource projections and later soft links use it rather than
