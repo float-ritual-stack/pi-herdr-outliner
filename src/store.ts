@@ -2527,7 +2527,7 @@ export class OutlinerStore {
   /** query.matches: which of `ids` (active blocks) the query holds for, with saved-view semantics. */
   matchQuery(expression: unknown, ids: unknown): { blockIds: string[] } {
     if (typeof expression !== "string" || !expression.trim()) throw new Error("Query match needs a query expression");
-    if (!Array.isArray(ids) || ids.length > 1000 || ids.some(id => typeof id !== "string")) throw new Error("Query match needs at most 1000 block IDs");
+    if (!Array.isArray(ids) || ids.length > 1000 || ids.some(id => typeof id !== "string")) throw new Error("Query match needs blockIds: an array of at most 1000 block IDs");
     const { filters, where } = parseSearchExpression(expression);
     if (filters.some(filter => filter.key === "deleted")) throw new Error("deleted=true selects Trash; it isn't a property to match");
     const test = where ? compileQueryExpression(where) : null;
