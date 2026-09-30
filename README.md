@@ -189,10 +189,21 @@ available/evicted/purged lifecycle for every PDF artifact.
 Jira and Linear Sources represent one provider instance without storing
 credentials. A remote entity Resource is keyed by the Source plus the
 provider's immutable entity ID; Jira keys and Linear identifiers remain
-mutable display locators. Opening is local-only. Explicit refresh performs the
+mutable display locators. Opening a Resource is local-only. Explicit refresh performs the
 provider request, stores an immutable structured snapshot and a versioned
 Markdown representation, updates a changed display locator without changing
 the Resource UUID, and keeps prior retained content visible after failure.
+
+A written `jira::` line is the consent to contact Jira (PIE-445): saving a
+block with `[jira::PC-1234]`, `jira:: PC-1234` or `jira::` under a line that
+names a ticket registers and fetches it in the background, and opening a note
+whose copy is older than 15 minutes fetches it again. The ticket becomes a real
+child block the Jira extension owns: title, `[jira.status::…]`-style
+properties, the description as its body, and with `--comments` one child block
+per comment. A person's or agent's write to that block is refused ("jira.status
+comes from Jira"); their own notes and `[status::]` live on the parent. While
+the service runs, one JQL search every 12 minutes refreshes the tickets that
+changed. See [extensions/jira/README.md](extensions/jira/README.md).
 
 Provider commands are a closed, schema-checked protocol union rather than
 generic mutation authority. The current Jira and Linear adapters expose
@@ -755,6 +766,13 @@ it, however deep. A published page shows "locked note" in its place (as an
 embed, or as a child in a published subtree). The lock wins over every other
 `[publish::…]`, on the block and on anything under it, and it is checked on
 every request, so it holds before the index is rebuilt.
+
+**Extension data.** A block an extension wrote (its writer is `ext:<id>`, such
+as a Jira ticket kept as a block) is left off a published page, in a subtree
+and in an embed, unless the block, a block above it or the embedding page opts
+in with `[publish.ext::jira]` (or `[publish.ext::all]`). Ticket blocks go
+wherever the outline goes; a client's ticket text never reaches a page by
+default. An embed of one shows "jira data, not published" in its place.
 
 `/` and `/index` list everything published like a little file system (title,
 URL, type, updated): HTML by default, plain text with `Accept: text/plain` or at
@@ -1543,6 +1561,12 @@ created < 2026-09-01T12:00Z
   unbalanced `)` inside a group (`(k=":)" OR a)`).
 - **NOT:** `NOT key=value` excludes blocks with that value; `NOT key` selects
   blocks without the property (in the query's property scope).
+- **child:** `child:key=value` holds when an active direct child has the
+  property, not the block itself. It compares a block with what sits under it:
+  `status=done child:jira.status NOT child:jira.status=Done` lists ticket pages
+  the person calls done that Jira doesn't (the Jira extension's drift views).
+  A write into a view can't satisfy a `child:` clause, so `views.planWrite`
+  refuses it.
 - **Ranges:** `created` or `updated`, then `<`, `<=`, `>` or `>=`, then a time,
   with or without spaces. A `YYYY-MM-DD` date is a whole UTC day:
   `> 2026-09-20` starts on the 21st and `<= 2026-09-20` includes all of the

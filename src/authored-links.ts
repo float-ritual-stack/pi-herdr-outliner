@@ -114,6 +114,8 @@ export type AuthoredResourceResolution =
 export interface AuthoredResourceLink extends AuthoredLinkEntryBase {
   readonly kind: "resource";
   readonly resourceId?: string;
+  /** The extension record block under the owner that holds this Resource (a Jira ticket kept as a block). */
+  readonly recordBlockId?: string;
   readonly resolution: AuthoredResourceResolution;
 }
 
@@ -152,6 +154,8 @@ export interface AuthoredLinksDataSource {
     getSource(sourceId: string): ResourceSource | null;
     resolveAuthoredReference(reference: AuthoredResourceReference): AuthoredResourceReferenceLookup;
   };
+  /** Extension record blocks under a block, by the Resource they hold. */
+  extensionRecords?(filter: { parentBlockId: string; role: "record" }): readonly { blockId: string; resourceId: string | null }[];
 }
 
 type ResourceReferenceCandidate =
@@ -582,12 +586,21 @@ export function readAuthoredLinks(
       diagnostics: [],
     },
     resources: {
-      entries: resources,
+      entries: withRecords(source, ownerId, resources),
       completeness: completeness(resources.length, candidateLimited, resourceEntryLimited),
       invalidCount: resourceInvalidCount,
       diagnostics: resourceDiagnostics,
     },
   };
+}
+
+function withRecords(source: AuthoredLinksDataSource, ownerId: string, resources: readonly AuthoredResourceLink[]): AuthoredResourceLink[] {
+  const records = source.extensionRecords?.({ parentBlockId: ownerId, role: "record" }) ?? [];
+  if (!records.length) return [...resources];
+  return resources.map((entry) => {
+    const found = entry.resourceId ? records.find((row) => row.resourceId === entry.resourceId) : undefined;
+    return found ? { ...entry, recordBlockId: found.blockId } : entry;
+  });
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -781,10 +794,13 @@ function decodeResource(value: unknown, index: number): AuthoredResourceLink {
   } else {
     throw new Error(`${label} resolution kind is invalid`);
   }
+  const recordBlockId = input.recordBlockId === undefined ? undefined
+    : string(input.recordBlockId, `${label} record block`, 64);
   return {
     ...decodeEntryBase(input, label),
     kind: "resource",
     ...(resourceId ? { resourceId } : {}),
+    ...(recordBlockId ? { recordBlockId } : {}),
     resolution,
   };
 }

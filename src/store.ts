@@ -16,6 +16,9 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { acquireWorkspaceOwnership } from "./workspace-ownership";
 import { AnnotationRepository } from "./annotation-repository";
+import { blockAnnotationRepresentation } from "./annotation-representations";
+import { RESOURCE_DIRECTIVE_PROVIDERS } from "./resource-references";
+import { extensionActorId, extensionWriteRefusal, type ExtensionRecordOwner } from "./extension-records";
 import { authoredTextDigest } from "./authored-links";
 import { resolveBacklinkRelation } from "./backlinks";
 import { rankBlockFocusMatches } from "./block-focus";
@@ -383,6 +386,58 @@ function normalizeMutationProvenance(
   };
 }
 
+interface ExtensionRecordDbRow {
+  block_id: string;
+  extension_id: string;
+  label: string;
+  role: "record" | "comment";
+  parent_block_id: string;
+  item_key: string;
+  resource_id: string | null;
+  synced_at: string;
+}
+
+/** One owned block (`extension_records`): who owns it and what it shows. */
+export interface ExtensionRecordRow extends ExtensionRecordOwner {
+  readonly blockId: string;
+  /** The block that asked for it (a record), or its record (a comment). */
+  readonly parentBlockId: string;
+  readonly resourceId: string | null;
+  /** When the extension last wrote or confirmed it. */
+  readonly syncedAt: string;
+}
+
+function extensionRecordRow(row: ExtensionRecordDbRow): ExtensionRecordRow {
+  return {
+    blockId: row.block_id,
+    extensionId: row.extension_id,
+    label: row.label,
+    role: row.role,
+    parentBlockId: row.parent_block_id,
+    itemKey: row.item_key,
+    resourceId: row.resource_id,
+    syncedAt: row.synced_at,
+  };
+}
+
+export interface ExtensionRecordWriteInput {
+  readonly extensionId: string;
+  readonly label: string;
+  /** The block that asked for the record; the record is its child. */
+  readonly parentBlockId: string;
+  readonly itemKey: string;
+  readonly resourceId: string | null;
+  readonly text: string;
+  /** Comment blocks, oldest first. `null` removes them; `undefined` leaves them. */
+  readonly comments?: readonly { readonly itemKey: string; readonly text: string }[] | null;
+}
+
+export interface ExtensionRecordWriteReceipt {
+  readonly record: Block;
+  /** Blocks whose text, place or existence the write changed; empty when nothing did. */
+  readonly changedBlockIds: readonly string[];
+}
+
 const CAPTURE_SOURCES = new Set<CaptureSource>(["tree", "pi", "omp", "cli", "external"]);
 
 function normalizeCaptureRequestId(requestId: string): string {
@@ -600,6 +655,8 @@ export class OutlinerStore {
   readonly annotations: AnnotationRepository;
   readonly workingSelections: WorkingSelectionRepository;
   readonly changes: ChangeFeed;
+  /** The extension writing now (`writeExtensionRecord`); owned blocks refuse every other writer. */
+  private extensionWriter: string | null = null;
 
   constructor(path: string, resourceOptions: ResourceCatalogOptions = {}) {
     this.workspaceRoot = resolve(resourceOptions.workspaceRoot ?? dirname(path));
@@ -1565,6 +1622,186 @@ export class OutlinerStore {
     return this.require(id);
   }
 
+  // ── Extension records (src/extension-records.ts) ────────────────────────
+  // A record is an ordinary block an extension owns: only that extension may
+  // change its text (the guard in writeBlockText). The table says who owns
+  // what; the text itself is canonical like any block's.
+
+  /** The extension that owns a block, when one does. */
+  extensionOwner(blockId: string): ExtensionRecordRow | null {
+    return this.database.transaction(() => this.extensionOwnerFromCurrentRead(blockId))();
+  }
+
+  /** Owned blocks under a parent, or showing one Resource. */
+  extensionRecords(filter: { parentBlockId?: string; resourceId?: string; extensionId?: string; role?: "record" | "comment" }): ExtensionRecordRow[] {
+    const clauses: string[] = [];
+    const values: string[] = [];
+    if (filter.parentBlockId) { clauses.push("parent_block_id = ?"); values.push(filter.parentBlockId); }
+    if (filter.resourceId) { clauses.push("resource_id = ?"); values.push(filter.resourceId); }
+    if (filter.extensionId) { clauses.push("extension_id = ?"); values.push(filter.extensionId); }
+    if (filter.role) { clauses.push("role = ?"); values.push(filter.role); }
+    const rows = this.database.query(`
+      SELECT record.* FROM extension_records record JOIN blocks block ON block.id = record.block_id
+      WHERE block.effective_deleted_root_id IS NULL${clauses.length ? ` AND ${clauses.map((clause) => `record.${clause}`).join(" AND ")}` : ""}
+      ORDER BY block.position, record.block_id
+    `).all(...values) as ExtensionRecordDbRow[];
+    return rows.map(extensionRecordRow);
+  }
+
+  /**
+   * Writes one record (and, when given, its comments) as the extension. An
+   * unchanged text is not written, so a refresh that finds nothing new records
+   * no change. A record in Trash is replaced by a new one: the provider line
+   * that asked for it is still there. Changed texts re-anchor their comments
+   * and highlights through the annotation repository.
+   */
+  writeExtensionRecord(input: ExtensionRecordWriteInput): ExtensionRecordWriteReceipt {
+    const actor: MutationProvenance = { author: "agent", actorId: extensionActorId(input.extensionId) };
+    const changed: string[] = [];
+    const now = new Date().toISOString();
+    let recordId = "";
+    this.database.transaction(() => {
+      this.extensionWriter = input.extensionId;
+      try {
+        this.requireActive(input.parentBlockId);
+        recordId = this.writeOwnedBlockFromCurrentRead(input, "record", input.parentBlockId, input.itemKey, input.text, 0, actor, now, changed);
+        if (input.comments !== undefined) {
+          const wanted = input.comments ?? [];
+          const keys = new Set(wanted.map((comment) => comment.itemKey));
+          for (const row of this.extensionRecords({ parentBlockId: recordId, extensionId: input.extensionId, role: "comment" })) {
+            if (keys.has(row.itemKey)) continue;
+            this.delete(row.blockId, actor);
+            this.database.query("DELETE FROM extension_records WHERE block_id = ?").run(row.blockId);
+            changed.push(row.blockId);
+          }
+          const ids = wanted.map((comment) => this.writeOwnedBlockFromCurrentRead(input, "comment", recordId, comment.itemKey, comment.text, undefined, actor, now, changed));
+          const order = this.children(recordId).map((child) => child.id).filter((id) => ids.includes(id));
+          if (order.join() !== ids.join()) {
+            for (const id of ids) this.move(id, recordId, undefined, actor);
+          }
+        }
+      } finally {
+        this.extensionWriter = null;
+      }
+    })();
+    return { record: this.require(recordId), changedBlockIds: [...new Set(changed)] };
+  }
+
+  /** Moves an extension's records under a parent to Trash, except the keys still asked for. */
+  removeExtensionRecords(parentBlockId: string, extensionId: string, keep: ReadonlySet<string>): string[] {
+    const actor: MutationProvenance = { author: "agent", actorId: extensionActorId(extensionId) };
+    const removed: string[] = [];
+    this.database.transaction(() => {
+      for (const row of this.extensionRecords({ parentBlockId, extensionId, role: "record" })) {
+        if (keep.has(row.itemKey)) continue;
+        this.delete(row.blockId, actor);
+        removed.push(row.blockId);
+      }
+    })();
+    return removed;
+  }
+
+  /**
+   * The page a ticket key names (PIE-408's ticket keys): the active block whose
+   * own `[jira::KEY]` names it, else the block a record for it sits under. The
+   * earliest wins when several do.
+   */
+  ticketPage(key: string): Block | null {
+    return this.database.transaction(() => this.ticketPageFromCurrentRead(key))();
+  }
+
+  /** Every ticket key with a page, as `ticketPage` would answer each one. */
+  private ticketPagesFromCurrentRead(): Map<string, string> {
+    const keys = [...new Set([...RESOURCE_DIRECTIVE_PROVIDERS.map((provider) => provider.propertyKey),
+      ...(this.database.query("SELECT DISTINCT extension_id FROM extension_records").all() as Array<{ extension_id: string }>)
+        .map((row) => row.extension_id)])];
+    const pages = new Map<string, string>();
+    const rows = [
+      ...this.database.query(`
+        SELECT upper(trim(property.value)) AS key, block.id FROM block_properties property JOIN blocks block ON block.id = property.block_id
+        WHERE property.scope = 'block' AND property.key IN (${keys.map(() => "?").join(", ")}) AND block.effective_deleted_root_id IS NULL
+        ORDER BY block.created_at, block.id
+      `).all(...keys) as Array<{ key: string; id: string }>,
+      ...this.database.query(`
+        SELECT record.item_key AS key, block.id FROM extension_records record
+        JOIN blocks block ON block.id = record.parent_block_id JOIN blocks owned ON owned.id = record.block_id
+        WHERE record.role = 'record' AND block.effective_deleted_root_id IS NULL AND owned.effective_deleted_root_id IS NULL
+        ORDER BY block.created_at, block.id
+      `).all() as Array<{ key: string; id: string }>,
+    ];
+    for (const row of rows) {
+      if (/^[A-Z][A-Z0-9_]*-[1-9][0-9]*$/.test(row.key) && !pages.has(row.key)) pages.set(row.key, row.id);
+    }
+    return pages;
+  }
+
+  private ticketPageFromCurrentRead(key: string): Block | null {
+    const normalized = key.trim().toUpperCase();
+    if (!/^[A-Z][A-Z0-9_]*-[1-9][0-9]*$/.test(normalized)) return null;
+    const keys = [...new Set([...RESOURCE_DIRECTIVE_PROVIDERS.map((provider) => provider.propertyKey),
+      ...(this.database.query("SELECT DISTINCT extension_id FROM extension_records").all() as Array<{ extension_id: string }>)
+        .map((row) => row.extension_id)])];
+    const page = this.database.query(`
+      SELECT block.id FROM block_properties property JOIN blocks block ON block.id = property.block_id
+      WHERE property.scope = 'block' AND property.key IN (${keys.map(() => "?").join(", ")})
+        AND upper(trim(property.value)) = ? AND block.effective_deleted_root_id IS NULL
+      ORDER BY block.created_at, block.id LIMIT 1
+    `).get(...keys, normalized) as { id: string } | null;
+    const id = page?.id ?? (this.database.query(`
+      SELECT record.parent_block_id AS id FROM extension_records record
+      JOIN blocks block ON block.id = record.parent_block_id
+      JOIN blocks owned ON owned.id = record.block_id
+      WHERE record.role = 'record' AND record.item_key = ?
+        AND block.effective_deleted_root_id IS NULL AND owned.effective_deleted_root_id IS NULL
+      ORDER BY block.created_at, block.id LIMIT 1
+    `).get(normalized) as { id: string } | null)?.id;
+    return id ? this.getFromCurrentRead(id) : null;
+  }
+
+  private writeOwnedBlockFromCurrentRead(
+    input: ExtensionRecordWriteInput,
+    role: "record" | "comment",
+    parentBlockId: string,
+    itemKey: string,
+    text: string,
+    position: number | undefined,
+    actor: MutationProvenance,
+    now: string,
+    changed: string[],
+  ): string {
+    const row = this.database.query(`
+      SELECT block_id FROM extension_records
+      WHERE parent_block_id = ? AND extension_id = ? AND role = ? AND item_key = ?
+    `).get(parentBlockId, input.extensionId, role, itemKey) as { block_id: string } | null;
+    let block = row ? this.getFromCurrentRead(row.block_id) : null;
+    if (row && (!block || block.effectiveDeletedRootId)) {
+      this.database.query("DELETE FROM extension_records WHERE block_id = ?").run(row.block_id);
+      block = null;
+    }
+    if (!block) {
+      block = this.createAt(text, parentBlockId, "agent", { actorId: actor.actorId! }, now, position);
+      this.database.query(`
+        INSERT INTO extension_records (block_id, extension_id, label, role, parent_block_id, item_key, resource_id, synced_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(block.id, input.extensionId, input.label, role, parentBlockId, itemKey, input.resourceId, now);
+      changed.push(block.id);
+      return block.id;
+    }
+    if (block.text !== text) {
+      const updated = this.update(block.id, text, block.revision, actor);
+      changed.push(block.id);
+      this.annotations.reconcile({ subject: { kind: "block", blockId: block.id }, newRepresentation: blockAnnotationRepresentation(updated) });
+    }
+    this.database.query("UPDATE extension_records SET synced_at = ?, resource_id = ?, label = ? WHERE block_id = ?")
+      .run(now, input.resourceId, input.label, block.id);
+    return block.id;
+  }
+
+  private extensionOwnerFromCurrentRead(blockId: string): ExtensionRecordRow | null {
+    const row = this.database.query("SELECT * FROM extension_records WHERE block_id = ?").get(blockId) as ExtensionRecordDbRow | null;
+    return row ? extensionRecordRow(row) : null;
+  }
+
   /** Records who changed a block, in the transaction that changes it. */
   private recordActivity(
     id: string,
@@ -1591,6 +1828,10 @@ export class OutlinerStore {
     }
     const current = this.require(id);
     if (current.revision !== expectedRevision) throw new Error(`Block changed since editing began: ${id}`);
+    const owner = this.extensionOwnerFromCurrentRead(id);
+    if (owner && owner.extensionId !== this.extensionWriter && text !== current.text) {
+      throw new Error(extensionWriteRefusal(owner, current.text, text));
+    }
     validateChecklistIdentityChanges(current.text, text, identityChanges);
     this.validateRoadmapText(text);
     if (this.roadmapMembersOfBatches([id]).length) {
@@ -1678,6 +1919,8 @@ export class OutlinerStore {
     limit?: number;
     author?: BlockAuthor;
     kinds?: readonly BlockActivityKind[];
+    /** `exclude`: leave out extension writes (`actor_id` `ext:…`); `only`: just those. */
+    extensions?: "exclude" | "only";
   } = {}): BlockEditActivityPage {
     const afterCursor = options.afterCursor ?? 0;
     if (!Number.isSafeInteger(afterCursor) || afterCursor < 0) {
@@ -1702,7 +1945,12 @@ export class OutlinerStore {
     }
     const kinds = listed as BlockActivityKind[];
     // Filtered before grouping, so a block's latest edit still shows after a later move.
-    const kindClause = `kind IN (${kinds.map(() => "?").join(", ")})`;
+    if (options.extensions !== undefined && options.extensions !== "exclude" && options.extensions !== "only") {
+      throw new Error("Activity extensions must be exclude or only");
+    }
+    const kindClause = `kind IN (${kinds.map(() => "?").join(", ")})${
+      options.extensions === "exclude" ? " AND (actor_id IS NULL OR actor_id NOT LIKE 'ext:%')"
+        : options.extensions === "only" ? " AND actor_id LIKE 'ext:%'" : ""}`;
     const cursorRow = this.database.query(`
       SELECT COALESCE(MAX(activity_id), ?) AS cursor
       FROM block_edit_activity
@@ -2069,6 +2317,11 @@ export class OutlinerStore {
       const addressTargets = new Map(
         addressRows.map((row) => [row.normalized_address, row.block_id]),
       );
+      // A ticket key with no page of its own links to its ticket page (PIE-408's ticket keys).
+      for (const [key, blockId] of this.ticketPagesFromCurrentRead()) {
+        const normalized = tryNormalizePageAddress(key)?.normalizedAddress;
+        if (normalized && !addressTargets.has(normalized)) addressTargets.set(normalized, blockId);
+      }
       return resolveBacklinkRelation({
         query,
         target,
@@ -2534,7 +2787,8 @@ export class OutlinerStore {
     return this.database.transaction(() => ({
       blockIds: (ids as string[]).filter(id => {
         const block = this.getFromCurrentRead(id);
-        return !!block && !block.effectiveDeletedRootId && matchesFilters(block.properties, filters) && (!test || test(block, block.properties));
+        return !!block && !block.effectiveDeletedRootId && matchesFilters(block.properties, filters) &&
+          (!test || test({ ...block, childProperties: () => this.childrenFromCurrentRead(block.id).map((child) => child.properties) }, block.properties));
       }),
     }))();
   }
@@ -3105,7 +3359,8 @@ export class OutlinerStore {
         deletionMatches &&
         (!options.filters?.length ||
           matchesFilters(propertyRecords, options.filters, propertyScope)) &&
-        (!where || where(block, propertyRecords, propertyScope)) &&
+        (!where || where({ ...block, childProperties: () => (graph.byParent.get(block.id) ?? [])
+          .filter((child) => !child.effectiveDeletedRootId).map((child) => child.properties) }, propertyRecords, propertyScope)) &&
         (!filterText || block.text.toLowerCase().includes(filterText));
       if (matches) {
         const children = (graph.byParent.get(block.id) ?? []).filter((child) =>
@@ -3297,6 +3552,18 @@ export class OutlinerStore {
         revision INTEGER NOT NULL CHECK (revision >= 1),
         updated_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS extension_records (
+        block_id TEXT PRIMARY KEY REFERENCES blocks(id) ON DELETE CASCADE,
+        extension_id TEXT NOT NULL,
+        label TEXT NOT NULL,
+        role TEXT NOT NULL CHECK (role IN ('record', 'comment')),
+        parent_block_id TEXT NOT NULL,
+        item_key TEXT NOT NULL,
+        resource_id TEXT,
+        synced_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS extension_records_parent ON extension_records(parent_block_id, extension_id, item_key);
+      CREATE INDEX IF NOT EXISTS extension_records_resource ON extension_records(resource_id);
       CREATE TABLE IF NOT EXISTS annotation_requests (
         request_id TEXT PRIMARY KEY,
         payload_hash TEXT,
@@ -3995,6 +4262,17 @@ export class OutlinerStore {
     normalized: NormalizedPageAddress,
   ): PageAddressResolution {
     const row = this.pageAddressRowFromCurrentRead(normalized.normalizedAddress);
+    const ticket = row ? null : this.ticketPageFromCurrentRead(normalized.displayAddress);
+    if (ticket) {
+      return {
+        address: normalized.displayAddress,
+        normalizedAddress: normalized.normalizedAddress,
+        status: ticket.effectiveDeletedRootId ? "deleted" : "resolved",
+        registeredAddress: normalized.displayAddress.trim().toUpperCase(),
+        kind: "alias",
+        block: ticket,
+      };
+    }
     if (!row) {
       return {
         address: normalized.displayAddress,
@@ -4261,7 +4539,8 @@ export class OutlinerStore {
       const { config } = parseVirtualBranchConfig(branch, []);
       if (!config) continue;
       if (!matchesFilters(block.properties, config.filters)) continue;
-      if (config.where && !compileQueryExpression(config.where)(block, block.properties)) continue;
+      if (config.where && !compileQueryExpression(config.where)({ ...block,
+        childProperties: () => this.childrenFromCurrentRead(block.id).map((child) => child.properties) }, block.properties)) continue;
       const rank = this.database.query(
         "SELECT rank FROM virtual_occurrence_ranks WHERE view_id = ? AND block_id = ?",
       ).get(branch.id, block.id) as { rank: number } | null;

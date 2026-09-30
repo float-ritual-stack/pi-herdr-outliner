@@ -39,6 +39,34 @@ const Document = Type.Object(
     ),
     externalUrl: Type.String({ maxLength: 4096 }),
     updatedAt: Type.String({ minLength: 1, maxLength: 100 }),
+    /** Contract 2: the record the service keeps as blocks (src/extension-records.ts). */
+    record: Type.Optional(Type.Object(
+      {
+        title: Type.String({ minLength: 1, maxLength: 4000 }),
+        fields: Type.Array(Type.Object({
+          key: Type.String({ pattern: "^[a-z][a-z0-9_-]{0,39}$" }),
+          value: Type.Union([
+            Type.String({ maxLength: 4000 }),
+            Type.Array(Type.String({ maxLength: 4000 }), { maxItems: 200 }),
+            Type.Null(),
+          ]),
+        }, { additionalProperties: false }), { maxItems: 64 }),
+        body: Type.String({ maxLength: 400000 }),
+        comments: Type.Optional(Type.Array(Type.Object({
+          id: Type.String({ minLength: 1, maxLength: 255 }),
+          author: Type.String({ maxLength: 1000 }),
+          createdAt: Type.String({ maxLength: 100 }),
+          body: Type.String({ maxLength: 100000 }),
+        }, { additionalProperties: false }), { maxItems: 100 })),
+      },
+      { additionalProperties: false },
+    )),
+  },
+  { additionalProperties: false },
+);
+const Changed = Type.Object(
+  {
+    items: Type.Array(Identity, { maxItems: 1000 }),
   },
   { additionalProperties: false },
 );
@@ -54,7 +82,7 @@ export class InstalledResourceProviderClient
   implements RemoteEntityProviderClient
 {
   constructor(
-    private readonly runtime = new ResourceExtensionRuntime(),
+    readonly runtime = new ResourceExtensionRuntime(),
     private readonly builtin: RemoteEntityProviderClient = new DefaultRemoteEntityProviderClient(
       {
         fetch: globalThis.fetch,
@@ -82,6 +110,23 @@ export class InstalledResourceProviderClient
     } catch {
       throw invalid();
     }
+  }
+  async changedSince(source: RemoteEntitySource, locators: readonly string[], sinceMinutes: number) {
+    if (source.provider !== "jira") return this.builtin.changedSince?.(source, locators, sinceMinutes) ?? [];
+    const result = await this.runtime.invoke("jira", "changed", {
+      source: source.boundary,
+      locators: [...locators],
+      sinceMinutes: Math.max(1, Math.ceil(sinceMinutes)),
+    });
+    try {
+      return Parse(Changed, result.value).items;
+    } catch {
+      throw invalid();
+    }
+  }
+  /** The installed extension behind a provider key, when there is one (wave A: Jira). */
+  describeExtension(provider: string) {
+    return this.runtime.describe(provider);
   }
   async observe(
     resource: RemoteEntityResource,
@@ -124,6 +169,7 @@ export class InstalledResourceProviderClient
       );
       const now = new Date().toISOString();
       return {
+        ...(value.record ? { record: value.record } : {}),
         title: value.title,
         metadata: value.metadata,
         markdown: value.markdown,

@@ -513,11 +513,14 @@ class ExpressionParser {
       }
       return { kind: "time", field, op: comparison.op, value: value.text };
     }
-    const clause = parsePropertyFilterClause(token.text, token.start);
+    // `child:key=value` holds when a direct child has the property. `:` was never
+    // valid in a key, so no query that parsed before changes meaning.
+    const relation = /^child:/i.test(token.text) ? "child" as const : undefined;
+    const clause = parsePropertyFilterClause(relation ? token.text.slice(6) : token.text, token.start + (relation ? 6 : 0));
     if (this.rejectDeleted && clause.key === "deleted") {
       syntaxError("deleted=true selects Trash and cannot be combined with OR, NOT, groups or ranges", token.start);
     }
-    return { kind: "property", ...clause };
+    return { kind: "property", ...clause, ...(relation ? { relation } : {}) };
   }
 }
 
@@ -534,7 +537,9 @@ export function parseQueryExpression(input: string): QueryExpression {
  */
 export function parseSearchExpression(input: string): { filters: PropertyFilter[]; where?: QueryExpression } {
   const { tokens, simple } = lexQueryExpression(input);
-  if (simple) return { filters: parsePropertyFilterExpression(input) };
+  if (simple && !tokens.some((token) => token.kind === "word" && /^child:/i.test(token.text))) {
+    return { filters: parsePropertyFilterExpression(input) };
+  }
   return { filters: [], where: new ExpressionParser(tokens, input.length, true).parse() };
 }
 
@@ -546,7 +551,8 @@ function normalizeQueryExpression(expression: QueryExpression, depth = 0, leaves
       if ((leaves.count += 1) > MAX_QUERY_EXPRESSION_LEAVES) throw new BlockQueryError("Query expression has too many clauses");
       const filter = normalizePropertyFilter({ key: expression.key, ...(expression.value === undefined ? {} : { value: expression.value }) });
       if (filter.key === "deleted") throw new BlockQueryError("deleted=true cannot appear inside a query expression; use filters or includeDeleted");
-      return { kind: "property", ...filter };
+      if (expression.relation !== undefined && expression.relation !== "child") throw new BlockQueryError(`Unknown query relation: ${String(expression.relation)}`);
+      return { kind: "property", ...filter, ...(expression.relation ? { relation: expression.relation } : {}) };
     }
     case "time": {
       if ((leaves.count += 1) > MAX_QUERY_EXPRESSION_LEAVES) throw new BlockQueryError("Query expression has too many clauses");
@@ -576,6 +582,8 @@ function normalizeQueryExpression(expression: QueryExpression, depth = 0, leaves
 export interface QueryExpressionSubject {
   createdAt: string;
   updatedAt: string;
+  /** The block's active direct children's properties, for `child:` clauses; without it they never match. */
+  childProperties?: () => readonly (readonly (BlockProperty | PropertyRecord)[])[];
 }
 
 export type CompiledQueryExpression = (
@@ -589,6 +597,9 @@ export function compileQueryExpression(expression: QueryExpression, now = Date.n
   switch (expression.kind) {
     case "property": {
       const filter = [{ key: expression.key, ...(expression.value === undefined ? {} : { value: expression.value }) }];
+      if (expression.relation === "child") {
+        return (subject) => (subject.childProperties?.() ?? []).some((properties) => matchesFilters(properties, filter));
+      }
       return (_subject, properties, scope) => matchesFilters(properties, filter, scope);
     }
     case "time": {
@@ -633,7 +644,7 @@ export function compileQueryExpression(expression: QueryExpression, now = Date.n
 /** Property clauses that can contribute match context (not under NOT). */
 export function positivePropertyFilters(expression: QueryExpression): PropertyFilter[] {
   switch (expression.kind) {
-    case "property": return [{ key: expression.key, ...(expression.value === undefined ? {} : { value: expression.value }) }];
+    case "property": return expression.relation ? [] : [{ key: expression.key, ...(expression.value === undefined ? {} : { value: expression.value }) }];
     case "time":
     case "not": return [];
     default: return expression.operands.flatMap(positivePropertyFilters);

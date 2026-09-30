@@ -1291,7 +1291,13 @@ export type QueryComparison = "<" | "<=" | ">" | ">=";
  * values resolve when the service evaluates the query.
  */
 export type QueryExpression =
-  | { kind: "property"; key: string; value?: string }
+  /**
+   * `relation: "child"` (`child:key=value` in query text): some active direct
+   * child has the property, not the block itself. It lets a view compare a
+   * block with what sits under it (a ticket page's `[status::]` with its
+   * Jira record's `jira.status`).
+   */
+  | { kind: "property"; key: string; value?: string; relation?: "child" }
   | { kind: "time"; field: QueryTimeField; op: QueryComparison; value: string }
   | { kind: "not"; operand: QueryExpression }
   | { kind: "and" | "or"; operands: QueryExpression[] };
@@ -1690,6 +1696,20 @@ export const OUTLINER_CAPABILITIES = [
   "query.matches",
   /** `ping` reports `propertyGrammar`: the version of src/property-grammar.ts, which clients may copy (PIE-490). */
   "ping.propertyGrammar",
+  /** `blocks.authored-links`: a block's outlinks and resources with their spans (PIE-324); records name their block. */
+  "blocks.authored-links",
+  /** `resources.describe`, `resources.open` and `resources.refresh` without a Detail destination (any client, or none). */
+  "resources.observer-reads",
+  /** `resources.follow-authored` takes `mutation`; the receipt and the change feed carry who registered it. */
+  "resources.follow-authored.provenance",
+  /** `resources.projection.read` takes `materialize`; projections carry `fetching`, `record` and `fetchedAt`. */
+  "resources.projection.materialize",
+  /** `resources.projection.refresh`: fetch one ticket now, from any client (PIE-445). */
+  "resources.projection.refresh",
+  /** Extension records: owned blocks (`extension.owner` on `blocks.owner`), refused writes, `[publish.ext::…]`. */
+  "extensions.records",
+  /** `activity.recent` takes `extensions` (`exclude` or `only`); `changes.since` entries keep `actor`. */
+  "activity.extensions",
 ] as const;
 
 /**
@@ -1845,7 +1865,25 @@ export type OutlinerRequestAction =
   | { id: string; action: "query.matches"; expression: string; blockIds: string[] }
   | { id: string; action: "blocks.authored-links"; ownerBlockId: string }
   /** Capability `resources.projection`. Stored ticket details for provider lines; never fetches. */
-  | { id: string; action: "resources.projection.read"; blockId: string; line?: number }
+  | {
+      id: string;
+      action: "resources.projection.read";
+      blockId: string;
+      line?: number;
+      /**
+       * Capability `resources.projection.materialize`: register and fetch in the
+       * background what the block asks for when it isn't fetched or is stale.
+       * The read answers at once with the stored state (`fetching` while it runs).
+       */
+      materialize?: boolean;
+    }
+  | {
+      id: string;
+      action: "resources.projection.refresh";
+      /** A block with provider lines (or a ticket page), or an extension record block. */
+      blockId: string;
+      line?: number;
+    }
   | { id: string; action: "get"; blockId: string }
   | { id: string; action: "children"; parentId: string | null }
   | { id: string; action: "files.read"; path: string }
@@ -1896,6 +1934,8 @@ export type OutlinerRequestAction =
       id: string;
       action: "resources.follow-authored";
       reference: AuthoredResourceReference;
+      /** Capability `resources.follow-authored.provenance`: who registered it, echoed and on the change feed. */
+      mutation?: MutationProvenance;
     }
   | { id: string; action: "resources.get"; resourceId: string }
   | { id: string; action: "resources.relocate"; input: RelocateResourceInput }
@@ -1910,19 +1950,22 @@ export type OutlinerRequestAction =
       id: string;
       action: "resources.describe";
       target: ResourceTarget;
-      destinationClientId: string;
+      /** Optional with capability `resources.observer-reads`: without it, the terminal presentation. */
+      destinationClientId?: string;
     }
   | {
       id: string;
       action: "resources.open";
       target: ResourceTarget;
-      destinationClientId: string;
+      /** Optional with capability `resources.observer-reads`: without it, the terminal presentation. */
+      destinationClientId?: string;
     }
   | {
       id: string;
       action: "resources.refresh";
       resourceId: string;
-      destinationClientId: string;
+      /** Optional with capability `resources.observer-reads`. */
+      destinationClientId?: string;
     }
   | {
       id: string;
@@ -2254,6 +2297,12 @@ export type OutlinerRequestAction =
       author?: BlockAuthor;
       /** Capability `mutations.provenance`. Defaults to the edit kinds, `text` and `properties`. */
       kinds?: BlockActivityKind[];
+      /**
+       * Capability `activity.extensions`: `exclude` leaves out what extensions
+       * wrote (`actorId` `ext:…`, a refreshed ticket), `only` keeps just that.
+       * Absent: everything, as before.
+       */
+      extensions?: "exclude" | "only";
     }
   | {
       id: string;

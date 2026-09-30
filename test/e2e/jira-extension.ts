@@ -57,30 +57,15 @@ try {
   const result = await runHerdrScenario({
     name: "jira-extension",
     async prepare(root) {
-      const extension = join(root, "installed-jira");
-      await cp(join(import.meta.dir, "../../extensions/jira"), extension, {
-        recursive: true,
-      });
-      const manifestPath = join(extension, "manifest.json");
-      const manifest = await Bun.file(manifestPath).json();
-      manifest.command = [process.execPath, "jira.ts"];
-      await writeFile(manifestPath, JSON.stringify(manifest));
+      // The contract 2 folder in the service's user extensions folder, as `outliner ext add jira` installs it.
       const configDir = join(dirname(root), "xdg-config/pi-herdr-outliner");
-      await mkdir(configDir, { recursive: true });
-      await writeFile(
-        join(configDir, "resource-extensions.json"),
-        JSON.stringify({
-          version: 1,
-          providers: {
-            jira: {
-              manifest: manifestPath,
-              enabled: true,
-              config: { authMode: "basic", email: "fixture@example.test" },
-              credentials: { token: { env: "LANG" } },
-            },
-          },
-        }),
-      );
+      const extension = join(configDir, "extensions", "jira");
+      await mkdir(dirname(extension), { recursive: true });
+      await cp(join(import.meta.dir, "../../extensions/jira"), extension, { recursive: true });
+      await writeFile(join(extension, "config.json"), JSON.stringify({
+        config: { authMode: "basic", email: "fixture@example.test" },
+        secrets: { token: { env: "LANG" } },
+      }));
     },
     async run(s) {
       const terminal=await s.attachClient();await terminal.resize(300,80);

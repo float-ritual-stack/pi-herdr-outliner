@@ -117,31 +117,19 @@ test("installed Jira supports explicit Basic/Bearer, immutable identity, readabl
     updatedAt: source.updatedAt,
   };
   try {
-    await cp(
-      join(import.meta.dir, "../extensions/jira"),
-      join(dir, "extension"),
-      { recursive: true },
-    );
-    const manifestPath = join(dir, "extension/manifest.json");
-    const manifest = await Bun.file(manifestPath).json();
-    manifest.command = [process.execPath, "jira.ts"];
-    await writeFile(manifestPath, JSON.stringify(manifest));
-    const configPath = join(dir, "registry.json");
-    const config = {
-      version: 1,
-      providers: {
-        jira: {
-          manifest: manifestPath,
-          enabled: true,
-          config: { authMode: "basic", email: "reader@example.test" },
-          credentials: { token: { env: secretName } },
-        },
-      },
+    // The contract 2 folder, as `outliner ext add jira` installs it.
+    const extensions = join(dir, "extensions");
+    await cp(join(import.meta.dir, "../extensions/jira"), join(extensions, "jira"), { recursive: true });
+    const configPath = join(extensions, "jira", "config.json");
+    const folder = {
+      config: { authMode: "basic", email: "reader@example.test" } as Record<string, string>,
+      secrets: { token: { env: secretName } },
     };
-    const save = () => writeFile(configPath, JSON.stringify(config));
+    const config = { providers: { jira: { config: folder.config } } };
+    const save = () => writeFile(configPath, JSON.stringify(folder));
     await save();
     const client = new InstalledResourceProviderClient(
-      new ResourceExtensionRuntime(configPath),
+      new ResourceExtensionRuntime(join(dir, "no-legacy-registry.json"), 15_000, [extensions]),
     );
     expect(await client.resolveLocator(source, "pc-762")).toEqual({
       entityId: "10001",

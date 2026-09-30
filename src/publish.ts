@@ -139,6 +139,31 @@ export function blockPublishIntent(properties: readonly BlockProperty[]): Return
   return values.includes("off") ? "off" : values[0];
 }
 
+/** `[publish.ext::jira]` on a block or page lets that extension's blocks under it be published. */
+export const PUBLISH_EXTENSION_PROPERTY = "publish.ext";
+
+/**
+ * The extension whose data a block holds: its writer is `ext:<id>` (an
+ * extension record, such as a Jira ticket kept as a block). Real blocks go
+ * wherever the outline goes, so these are left off a published page unless
+ * the block or a block above it opts in with `[publish.ext::<id>]` (or `all`).
+ */
+export function extensionSource(block: { author?: string; actorId?: string }): string | undefined {
+  return block.author === "agent" && block.actorId?.startsWith("ext:") ? block.actorId.slice(4) || undefined : undefined;
+}
+
+/** Whether these properties opt an extension's blocks in. */
+export function publishesExtension(properties: readonly BlockProperty[], extensionId: string): boolean {
+  return properties.some((property) => property.key === PUBLISH_EXTENSION_PROPERTY &&
+    property.value.split(/[\s,]+/).some((value) => {
+      const lowered = value.trim().toLowerCase();
+      return lowered === extensionId || lowered === "all" || lowered === "true";
+    }));
+}
+
+/** What an extension's block shows in its place when it isn't opted in. */
+export const EXTENSION_HIDDEN = (extensionId: string) => `${extensionId} data, not published (add [publish.ext::${extensionId}] to publish it)`;
+
 /** Said on the index: what a published page may show besides the published blocks. */
 export const EMBED_NOTICE = "Embeds (!((note))) show the embedded note's text even when that note is not published: " +
   "this publisher is for the tailnet. Mark a note [publish::never] to lock it and everything under it.";
@@ -589,7 +614,44 @@ export class Publisher {
       for (const inner of node.embeds ?? []) visit(inner);
     };
     for (const node of read.results) visit(node);
-    return { read, locked: ids.size ? await this.lockedIds([...ids]) : new Set(), cursor: { next: 0 } };
+    const extensionBlocks = new Map([...ids].flatMap((id) => {
+      const extension = read.blocks[id] ? extensionSource(read.blocks[id]!) : undefined;
+      return extension ? [[id, extension] as const] : [];
+    }));
+    return {
+      read,
+      locked: ids.size ? await this.lockedIds([...ids]) : new Set(),
+      ...(extensionBlocks.size ? { extensionHidden: await this.extensionHiddenIds(extensionBlocks, hostBlockId) } : {}),
+      cursor: { next: 0 },
+    };
+  }
+
+  /**
+   * Which embedded extension blocks stay hidden: those with no
+   * `[publish.ext::<id>]` on themselves, their ancestors or the page that
+   * embeds them. Walks up one level per request, as `lockedIds` does.
+   */
+  private async extensionHiddenIds(blocks: ReadonlyMap<string, string>, hostBlockId: string): Promise<Map<string, string>> {
+    const hidden = new Map<string, string>();
+    for (const [id, extension] of blocks) {
+      let frontier: string | null = id;
+      let opted = false;
+      for (const start of [hostBlockId]) {
+        const host = await this.client.request<BlockReadCollection>({ action: "blocks.read", ids: [start], fields: ["properties"] });
+        opted ||= host.blocks.some((block) => publishesExtension(block.properties ?? [], extension));
+      }
+      for (let level = 0; frontier && !opted && level < LOCK_WALK_LIMIT; level++) {
+        const read: BlockReadCollection = await this.client.request<BlockReadCollection>({
+          action: "blocks.read", ids: [frontier], fields: ["parent", "properties"],
+        });
+        const block = read.blocks[0];
+        if (!block) break;
+        opted = publishesExtension(block.properties ?? [], extension);
+        frontier = block.parentId ?? null;
+      }
+      if (!opted) hidden.set(id, extension);
+    }
+    return hidden;
   }
 
   /**
@@ -613,7 +675,7 @@ export class Publisher {
     const subtree = await this.client.request<ProjectedBlockCollection>({
       action: "blocks.query",
       query: { subtreeRootId: entry.blockId, limit: PUBLISH_QUERY_LIMIT },
-      fields: ["text", "parent", "properties"],
+      fields: ["text", "parent", "properties", "author"],
     });
     const shown = shownSubtree(subtree).filter((row) => !row.locked).map((row) => row.block.text ?? "");
     const pages = await this.resolvePages(shown);
@@ -643,6 +705,8 @@ function normalizeBasePath(value: string | undefined): string {
 export interface EmbedExpansion {
   read: TransclusionRead;
   locked: ReadonlySet<string>;
+  /** Embedded extension blocks nothing opted in, by id, with their extension. */
+  extensionHidden?: ReadonlyMap<string, string>;
   cursor: { next: number };
 }
 
@@ -683,6 +747,8 @@ function renderEmbed(node: TransclusionNode | undefined, context: TextContext): 
     return placeholder(node.message ?? "not shown");
   }
   if (expansion.locked.has(node.blockId)) return placeholder(LOCKED_NOTE);
+  const hidden = expansion.extensionHidden?.get(node.blockId);
+  if (hidden) return placeholder(EXTENSION_HIDDEN(hidden));
   if (node.kind === "view") return placeholder("a view; views are not published");
   const block = expansion.read.blocks[node.blockId];
   if (!block) return placeholder("missing note");
@@ -791,7 +857,14 @@ export function shownSubtree(subtree: ProjectedBlockCollection): Array<{ block: 
     decided.set(block.id, "hidden"); // a cycle is never shown
     const parent = block.parentId ? byId.get(block.parentId) : undefined;
     const intent = blockPublishIntent(block.properties ?? []);
+    const extension = extensionSource(block);
+    const optedIn = (id: string | null | undefined, depth = 0): boolean => {
+      const at = id ? byId.get(id) : undefined;
+      return !!at && depth <= subtree.blocks.length &&
+        (publishesExtension(at.properties ?? [], extension!) || optedIn(at.parentId, depth + 1));
+    };
     const value: Decision = parent === undefined || decide(parent) !== "shown" || intent === "off" ? "hidden"
+      : extension && !optedIn(block.id) ? "hidden"
       : intent === "never" ? "locked" : "shown";
     decided.set(block.id, value);
     return value;
