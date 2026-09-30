@@ -101,6 +101,13 @@ source evidence or distinguish authored glyphs from controls.
 - `src/door-control.ts` is a client of ep0ch-door's control socket (the door's
   `docs/AGENT-INTERFACE.md`). The door owns what its actions do; the Claude mod's
   `show` only asks it for an agent's `open` when Claude runs in a door tile.
+- `src/publish.ts` is the read-only publisher (`outliner publish serve`): a
+  client that finds `[publish::…]` blocks with `blocks.query`, resolves `[[page]]`
+  links with `pages.resolve`, reads attached `[file::…]` content with
+  `files.read` and follows the content event feed as an observer. It never
+  writes. `src/publish-attachments.ts` owns which attached files may be served
+  (allowed roots, symlinks, `..`, hidden paths, file type and size); widen what
+  is published there, not in the HTTP handler.
 - `pi-extension/index.ts` is a host adapter, not a second implementation of the service.
 - `src/known-outlines.ts` owns whether a folder has an outline (`detectOutline`)
   and the read-only list of outlines on this machine (`listKnownOutlines`,

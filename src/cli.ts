@@ -92,6 +92,65 @@ if (process.argv[2] === "door-open") {
 if (process.argv[2] === "outlines" || process.argv[2] === "outline") {
   process.exit(await runOutlinesCommand(process.argv[2], process.argv.slice(3)));
 }
+/**
+ * `publish serve [--port N] [--root DIR]… [--max-bytes N] [--base-path /pub] [--allow-host NAME]… [--outline NAME]`:
+ * serves blocks carrying `[publish::…]` read-only on 127.0.0.1 (src/publish.ts).
+ * `publish list [--json]` prints the same index once.
+ */
+if (process.argv[2] === "publish") {
+  process.exit(await runPublishCommand(process.argv[3], process.argv.slice(4)));
+}
+
+async function runPublishCommand(operation: string | undefined, args: string[]): Promise<number> {
+  try {
+    if (operation !== "serve" && operation !== "list") {
+      throw new Error("publish expects: serve [--port N] [--root DIR]… [--max-bytes N] [--base-path /pub] [--allow-host NAME]… [--outline NAME] | list [--json]");
+    }
+    const { values } = parseArgs({
+      args, strict: true,
+      options: {
+        port: { type: "string" }, root: { type: "string", multiple: true }, "max-bytes": { type: "string" },
+        "base-path": { type: "string" }, "allow-host": { type: "string", multiple: true }, outline: { type: "string" },
+        json: { type: "boolean" },
+      },
+    });
+    if (values.outline) process.env.OUTLINER_OUTLINE = values.outline;
+    const port = values.port === undefined ? 8790 : Number(values.port);
+    const maxBytes = values["max-bytes"] === undefined ? undefined : Number(values["max-bytes"]);
+    if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("--port must be a port number");
+    if (maxBytes !== undefined && (!Number.isInteger(maxBytes) || maxBytes < 1)) throw new Error("--max-bytes must be a positive integer");
+    const { Publisher, servePublisher, renderIndexText } = await import("./publish");
+    const publisher = new Publisher({
+      client: createOutlinerClient(resolveClientPaths()),
+      roots: (values.root ?? []).map(root => resolve(root)),
+      ...(maxBytes === undefined ? {} : { maxBytes }),
+      ...(values["base-path"] === undefined ? {} : { basePath: values["base-path"] }),
+      ...(values["allow-host"] === undefined ? {} : { allowedHosts: values["allow-host"] }),
+      log: line => console.error(line),
+    });
+    const status = await publisher.start();
+    if (operation === "list") {
+      const index = await publisher.readIndex();
+      await publisher.stop();
+      console.log(values.json ? JSON.stringify(index, null, 2) : renderIndexText(index, publisher.basePath).trimEnd());
+      return 0;
+    }
+    const server = servePublisher(publisher, port);
+    console.log(JSON.stringify({
+      status: "publishing", url: `http://127.0.0.1:${server.port}${publisher.basePath}/`,
+      outline: status.outline?.name ?? process.env.OUTLINER_OUTLINE ?? null, roots: publisher.roots,
+    }));
+    const stopped = Promise.withResolvers<void>();
+    for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => stopped.resolve());
+    await stopped.promise;
+    server.stop(true);
+    await publisher.stop();
+    return 0;
+  } catch (error) {
+    console.error(`error: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+}
 const paths = resolveClientPaths();
 
 function describeOutline(outline: KnownOutline): string {

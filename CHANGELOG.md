@@ -4,6 +4,18 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+- Outline as server: `outliner publish serve` gives every block carrying
+  `[publish::…]` a URL on 127.0.0.1 (`/p/<page address|block id|slug>`), serving
+  an attached `.html`/`.md` file or the block and its subtree as markdown (with
+  `?view=html`), and `/index` lists them all. Read-only; attachments are served
+  only from allowed roots, never through `..`, escaping symlinks, hidden paths
+  or non-regular files, never from `/` or the home folder, and not at all when the
+  service runs on another machine. Attached HTML runs sandboxed, with an opaque
+  origin. Embeds, titles and links never show an unpublished block's text or id.
+  Any `[publish::false]` on a block wins, and a request naming a foreign Host is
+  refused.
+  Expose it with `tailscale serve --set-path /pub`. See README "Publishing blocks".
+
 - In an ep0ch-door tile, `show` and a click on a reference open the note from
   Claude's own tile (`door-open --from $EP0CH_TILE`): the door puts it where
   that tile's opens land and says which reader, instead of the mod assuming a
