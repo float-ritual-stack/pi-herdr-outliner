@@ -1,0 +1,20 @@
+# CodeRabbit review budget (see docs/…/rate-limits and usage-based add-on).
+# Agents open many PRs here, so reviews are opt-out per PR and one pass each:
+# - a title containing [skip review] (or WIP), or the label no-review, gets no review;
+# - later pushes to an open PR aren't reviewed again (ask with @coderabbitai review when it matters);
+# - only PRs into main are reviewed, so slices into a feature branch cost nothing.
+reviews:
+  auto_review:
+    enabled: true
+    auto_incremental_review: false
+    ignore_title_keywords:
+      - "[skip review]"
+      - "[no review]"
+      - "WIP"
+    labels:
+      - "!no-review"
+    drafts: false
+  path_filters:
+    - "!bun.lock"
+    - "!**/*.lock"
+    - "!docs/review/**"
