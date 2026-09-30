@@ -9,14 +9,29 @@ import { MAX_TEXT_FILE_BYTES, resolveReferencedPath } from "./files";
  * uses); this module decides first whether that path may leave the machine.
  */
 
-export type PublishedFileType = "html" | "markdown" | "text";
+export type PublishedFileType = "html" | "markdown" | "text" | "react" | "svg" | "mermaid";
 
+/**
+ * What each extension is served as. The claude.ai artifact kinds are here:
+ * HTML, React (`.jsx`/`.tsx`, compiled by `publish-artifacts.ts`), SVG,
+ * mermaid and markdown; a code artifact downloads under its language's
+ * extension and is served as plain text, as claude.ai shows it.
+ */
 export const PUBLISHED_FILE_TYPES: Readonly<Record<string, PublishedFileType>> = {
   ".html": "html",
   ".htm": "html",
   ".md": "markdown",
   ".markdown": "markdown",
   ".txt": "text",
+  ".jsx": "react",
+  ".tsx": "react",
+  ".svg": "svg",
+  ".mermaid": "mermaid",
+  ".mmd": "mermaid",
+  ...Object.fromEntries([
+    ".js", ".mjs", ".ts", ".py", ".css", ".json", ".csv", ".sh", ".yaml", ".yml", ".toml", ".sql",
+    ".rs", ".go", ".java", ".c", ".h", ".cpp", ".rb", ".php", ".swift", ".kt", ".lua",
+  ].map((extension) => [extension, "text" as const])),
 };
 
 export type AttachmentRefusal =

@@ -2,7 +2,7 @@ import { createBlockComment } from "./block-comments";
 import { readSavedView } from "./saved-view-read";
 import {inspectWorkspaceConnection} from './workspace-diagnostics';
 import { realpathSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { parseArgs, type ParseArgsOptionsConfig } from "node:util";
 import { normalizePropertyQueryScope, parsePropertyFilterClause } from "./block-query";
 import {
@@ -93,8 +93,9 @@ if (process.argv[2] === "outlines" || process.argv[2] === "outline") {
   process.exit(await runOutlinesCommand(process.argv[2], process.argv.slice(3)));
 }
 /**
- * `publish serve [--port N] [--root DIR]… [--max-bytes N] [--base-path /pub] [--allow-host NAME]… [--outline NAME]`:
+ * `publish serve [--port N] [--root DIR]… [--max-bytes N] [--base-path /pub] [--allow-host NAME]… [--artifact-cache DIR] [--outline NAME]`:
  * serves blocks carrying `[publish::…]` read-only on 127.0.0.1 (src/publish.ts).
+ * React artifacts compile into `--artifact-cache` (default `<state root>/publish/artifacts`).
  * `publish list [--json]` prints the same index once.
  */
 if (process.argv[2] === "publish") {
@@ -104,13 +105,14 @@ if (process.argv[2] === "publish") {
 async function runPublishCommand(operation: string | undefined, args: string[]): Promise<number> {
   try {
     if (operation !== "serve" && operation !== "list") {
-      throw new Error("publish expects: serve [--port N] [--root DIR]… [--max-bytes N] [--base-path /pub] [--allow-host NAME]… [--outline NAME] | list [--json]");
+      throw new Error("publish expects: serve [--port N] [--root DIR]… [--max-bytes N] [--base-path /pub] [--allow-host NAME]… [--artifact-cache DIR] [--outline NAME] | list [--json]");
     }
     const { values } = parseArgs({
       args, strict: true,
       options: {
         port: { type: "string" }, root: { type: "string", multiple: true }, "max-bytes": { type: "string" },
         "base-path": { type: "string" }, "allow-host": { type: "string", multiple: true }, outline: { type: "string" },
+        "artifact-cache": { type: "string" },
         json: { type: "boolean" },
       },
     });
@@ -126,6 +128,7 @@ async function runPublishCommand(operation: string | undefined, args: string[]):
       ...(maxBytes === undefined ? {} : { maxBytes }),
       ...(values["base-path"] === undefined ? {} : { basePath: values["base-path"] }),
       ...(values["allow-host"] === undefined ? {} : { allowedHosts: values["allow-host"] }),
+      artifactCacheDirectory: resolve(values["artifact-cache"] ?? join(resolveStateRoot(), "publish", "artifacts")),
       log: line => console.error(line),
     });
     const status = await publisher.start();

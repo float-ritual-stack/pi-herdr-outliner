@@ -107,7 +107,14 @@ source evidence or distinguish authored glyphs from controls.
   `files.read` and follows the content event feed as an observer. It never
   writes. `src/publish-attachments.ts` owns which attached files may be served
   (allowed roots, symlinks, `..`, hidden paths, file type and size); widen what
-  is published there, not in the HTTP handler.
+  is published there, not in the HTTP handler. `src/publish-artifacts.ts` owns
+  how a claude.ai artifact runs: the pinned package set, the import guard and
+  the `Bun.build` step for React (never running the artifact), the compiled
+  bundle cache, and the React and mermaid pages; `src/publish-artifact-ui.jsx`
+  is its shadcn/ui. Embeds on a published page are projected by the service's
+  `transclusions.read` (its limits and cycle rules), never re-derived; the
+  `[publish::never]` lock (`blockPublishIntent`) is checked for every page,
+  embed and link.
 - `pi-extension/index.ts` is a host adapter, not a second implementation of the service.
 - `src/known-outlines.ts` owns whether a folder has an outline (`detectOutline`)
   and the read-only list of outlines on this machine (`listKnownOutlines`,

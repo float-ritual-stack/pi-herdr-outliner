@@ -345,19 +345,32 @@ test("an attachment swapped for an escaping link after indexing is refused at re
 
 // Review hardening (PR #252): leaks through titles and embeds, attached HTML, remote services, load.
 
-test("titles and embeds never show an unpublished block's id or text", async () => {
+test("titles and links never show an unpublished block's id or text; embeds show the embedded note", async () => {
   const { store, get } = await setup();
   const hidden = store.create("Neighbour's gate code 4471\nunder the flowerpot");
   const census = store.create("Pollinator census [publish::census]");
   store.create(`Walk notes ((${hidden.id})) and !((${hidden.id})) and !((${census.id})) [publish::walk]`);
 
   const markdown = await (await get("/p/walk")).text();
-  expect(markdown).toBe("# Walk notes unpublished note and unpublished note and [Pollinator census](/p/census)\n");
+  expect(markdown).toBe([
+    "# Walk notes unpublished note and",
+    "",
+    "> Neighbour's gate code 4471",
+    "> under the flowerpot",
+    "",
+    "and",
+    "",
+    "> Pollinator census",
+    "",
+  ].join("\n"));
   const html = await (await get("/p/walk?view=html")).text();
   expect(html).toContain("<title>Walk notes unpublished note and unpublished note and Pollinator census</title>");
-  // An embed is a link, not markdown's image syntax.
+  expect(html).toContain("<blockquote>");
+  // An embed is never markdown's image syntax.
   expect(html).not.toContain("<img");
-  for (const body of [markdown, html, await (await get("/index.json")).text(), await (await get("/index.txt")).text(), await (await get("/")).text()]) {
+  for (const body of [markdown, html]) expect(body).not.toContain(hidden.id);
+  // The index lists titles only: an embedded note's text never reaches it.
+  for (const body of [await (await get("/index.json")).text(), await (await get("/index.txt")).text(), await (await get("/")).text()]) {
     expect(body).not.toContain(hidden.id);
     expect(body).not.toContain("gate code");
     expect(body).not.toContain("flowerpot");
@@ -512,4 +525,127 @@ test("--allow-host adds a name besides loopback and the tailnet", async () => {
   expect((await at("garden.example")).status).toBe(200);
   expect((await at("GARDEN.example:8443")).status).toBe(200);
   expect((await at("elsewhere.example")).status).toBe(421);
+});
+
+// Embeds and the [publish::never] lock.
+
+test("an embed shows the embedded note's text, published or not, and a fragment embed shows its slice", async () => {
+  const { store, get } = await setup();
+  const almanac = store.create("Moth almanac\n## Spring ^spring\nFirst hawk-moths at the lilac.\n## Autumn ^autumn\nIvy flowers draw the sallows.");
+  const walk = store.create(`Night walk [publish::night-walk]\n!((${almanac.id}^autumn))`);
+  store.create(`Lamp log !((${almanac.id}))`, walk.id);
+  const markdown = await (await get("/p/night-walk")).text();
+  expect(markdown).toContain("> ## Autumn\n> Ivy flowers draw the sallows.");
+  expect(markdown).not.toContain("^autumn");
+  // The whole note, quoted under the child's list item.
+  expect(markdown).toContain("- Lamp log\n\n  > Moth almanac\n  > ## Spring\n  > First hawk-moths at the lilac.");
+  const html = await (await get("/p/night-walk?view=html")).text();
+  expect(html).toContain("Ivy flowers draw the sallows.");
+  expect(html).toContain("<blockquote>");
+});
+
+test("a [publish::never] note is never published, embedded or linked: its place says locked note", async () => {
+  const { store, get } = await setup();
+  const vault = store.create("Gate codes [publish::never]\nside gate 4471");
+  const walk = store.create(`Garden tour [publish::tour]\n!((${vault.id})) and ((${vault.id}|the codes))`);
+  const shed = store.create("Shed inventory [publish::never]", walk.id);
+  store.create("Spare key under the brick", shed.id);
+  store.create("Lavender by the path", walk.id);
+
+  const markdown = await (await get("/p/tour")).text();
+  expect(markdown).toBe([
+    "# Garden tour",
+    "",
+    "> *locked note*",
+    "",
+    "and the codes",
+    "",
+    "- *locked note*",
+    "- Lavender by the path",
+    "",
+  ].join("\n"));
+  for (const path of [`/p/${vault.id}`, `/p/${shed.id}`]) expect((await get(path)).status).toBe(404);
+  // Even with another publish token, never wins.
+  store.create("Bike lock combination [publish::true] [publish::never]");
+  const index = await (await get("/index.txt")).text();
+  expect(index).not.toContain("Bike lock");
+  expect(index).toContain("[publish::never]");
+  for (const secret of ["4471", "Spare key", "Gate codes", "Shed inventory"]) expect(markdown).not.toContain(secret);
+});
+
+test("a [publish::never] ancestor locks everything under it, however deep", async () => {
+  const { store, get } = await setup();
+  const diary = store.create("Private diary [publish::never]");
+  const month = store.create("September", diary.id);
+  const entry = store.create("Moth trap results [publish::trap]\n41 moths, 9 species", month.id);
+  const tour = store.create(`Open garden day [publish::open-day]\n!((${entry.id})) and ((${entry.id}))`);
+  expect((await get("/p/trap")).status).toBe(404);
+  expect((await get(`/p/${entry.id}`)).status).toBe(404);
+  const index = await (await get("/index.json")).json() as PublishedIndex;
+  expect(index.entries.map((published) => published.slug)).toEqual(["open-day"]);
+  const markdown = await (await get("/p/open-day")).text();
+  expect(markdown).toContain("> *locked note*");
+  expect(markdown).not.toContain("41 moths");
+  expect(markdown).not.toContain("/p/trap");
+  // Lifting the lock publishes it again.
+  store.update(diary.id, "Private diary", diary.revision);
+  // Unlocking waits for the change feed to clear the cached index.
+  let status = 0;
+  for (let tries = 0; tries < 40 && status !== 200; tries++) {
+    status = (await get("/p/trap")).status;
+    if (status !== 200) await Bun.sleep(50);
+  }
+  expect(status).toBe(200);
+  expect(await (await get(`/p/${tour.id}`)).text()).toContain("[Moth trap results](/p/trap)");
+  // Locking again holds from the very next request, for the page and for links to it.
+  store.update(diary.id, "Private diary [publish::never]", diary.revision + 1);
+  expect((await get("/p/trap")).status).toBe(404);
+  const relocked = await (await get(`/p/${tour.id}`)).text();
+  expect(relocked).not.toContain("/p/trap");
+  expect(relocked).not.toContain("41 moths");
+});
+
+test("an embed loop stops, and an embed of a trashed note shows no text or title", async () => {
+  const { store, get } = await setup();
+  const first = store.create("Moth list");
+  const second = store.create(`Sphinx moths\n!((${first.id}))`);
+  store.update(first.id, `Moth list [publish::moths]\n!((${second.id}))`, first.revision);
+  const trashed = store.create("Old wasp nest location");
+  store.create(`Moth list appendix [publish::appendix]\n!((${trashed.id}))`);
+  store.delete(trashed.id);
+
+  const markdown = await (await get("/p/moths")).text();
+  expect(markdown).toContain("> Sphinx moths");
+  expect(markdown).toContain("> > *CYCLE · this embed is already open above it*");
+  expect(markdown.split("Sphinx moths")).toHaveLength(2);
+
+  const appendix = await (await get("/p/appendix")).text();
+  expect(appendix).toContain("> *note in Trash*");
+  expect(appendix).not.toContain("wasp");
+});
+
+test("a rendered markdown attachment links published [[page]] and ((block)) targets and shows embeds", async () => {
+  const { store, get, write } = await setup();
+  const census = store.create("Pollinator census [publish::census] [page::Pollinator census]");
+  const tally = store.create("Bat tally: 14 pipistrelles");
+  write("notes/dusk.md", [
+    "# Dusk survey",
+    "",
+    `See [[Pollinator census]], ((${census.id})) and [[Nowhere]].`,
+    "",
+    `!((${tally.id}))`,
+    "",
+    "```",
+    "[[Pollinator census]] stays as written in code",
+    "```",
+    "",
+  ].join("\n"));
+  store.create("Dusk survey [publish::dusk] [file::notes/dusk.md]");
+
+  // Raw, the file is served as written.
+  expect(await (await get("/p/dusk")).text()).toContain("See [[Pollinator census]]");
+  const html = await (await get("/p/dusk?view=html")).text();
+  expect(html).toContain('See <a href="/p/census">Pollinator census</a>, <a href="/p/census">Pollinator census</a> and Nowhere.');
+  expect(html).toContain("<blockquote>\n<p>Bat tally: 14 pipistrelles</p>\n</blockquote>");
+  expect(html).toContain("[[Pollinator census]] stays as written in code");
 });

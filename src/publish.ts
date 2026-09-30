@@ -1,4 +1,5 @@
 import { hostname } from "node:os";
+import { extname } from "node:path";
 import { Marked } from "marked";
 import type { OutlinerClient, OutlinerWatcher } from "./client";
 import type { FileContents } from "./files";
@@ -9,11 +10,16 @@ import {
   canonicalPublishRoots,
   checkAttachment,
   type AttachmentPolicy,
+  type PublishedFileType,
 } from "./publish-attachments";
+import { ArtifactCompiler, mermaidArtifactPage, reactArtifactPage } from "./publish-artifacts";
 import { blockReferenceOccurrences } from "./references";
-import { embedMatches } from "./transclusions";
+import { MAX_BLOCK_READ_IDS } from "./block-projection";
+import { codeLineSet, stripFragmentAnchors } from "./fragments";
+import { embedMatches, MAX_EMBEDS_PER_DOCUMENT, TRANSCLUSION_WORDING, type TransclusionNode, type TransclusionRead } from "./transclusions";
 import type {
   BlockProperty,
+  BlockReadCollection,
   OutlinerServiceStatus,
   PageAddressResolution,
   ProjectedBlockCollection,
@@ -34,8 +40,10 @@ const DISCONNECTED_MAX_AGE_MS = 1_000;
 const PAGE_RESOLVE_LIMIT = 200;
 /** `pages.resolve` requests in flight at once, so one large page never floods the shared service. */
 const PAGE_RESOLVE_CONCURRENCY = 4;
+/** Levels the `[publish::never]` lock is looked for above a block; a deeper chain counts as locked. */
+const LOCK_WALK_LIMIT = 256;
 
-export type PublishedEntryType = "html" | "markdown" | "text" | "block";
+export type PublishedEntryType = PublishedFileType | "block";
 
 export interface PublishedEntry {
   blockId: string;
@@ -75,13 +83,23 @@ export interface PublisherOptions {
    * that rebinds its own name to 127.0.0.1 cannot read what is published.
    */
   allowedHosts?: readonly string[];
+  /**
+   * Where React artifacts' packages and compiled bundles are cached
+   * (`<state root>/publish/artifacts` from the CLI). Without it a `.jsx`/`.tsx`
+   * attachment shows a page saying compiling is not set up.
+   */
+  artifactCacheDirectory?: string;
   log?: (line: string) => void;
 }
 
-/** `true`/`yes` publish at the page address or block id; `false`/`no`/`off`/`0` or empty do not publish. */
-export function publishIntent(value: string | undefined): "auto" | "off" | { slug: string } {
+/**
+ * `true`/`yes` publish at the page address or block id; `false`/`no`/`off`/`0` or empty do not publish;
+ * `never` locks the block and everything under it (see `blockPublishIntent`).
+ */
+export function publishIntent(value: string | undefined): "auto" | "off" | "never" | { slug: string } {
   const trimmed = value?.trim() ?? "";
   const lowered = trimmed.toLowerCase();
+  if (lowered === "never") return "never";
   if (!trimmed || lowered === "false" || lowered === "no" || lowered === "off" || lowered === "0") return "off";
   if (lowered === "true" || lowered === "yes") return "auto";
   const slug = slugify(trimmed);
@@ -109,18 +127,28 @@ export function slugify(value: string): string | null {
 }
 
 /**
- * A block's publish intent from all its `[publish::…]` tokens: when any says
- * false/no/off/0 the block is not published, whatever the others say.
+ * A block's publish intent from all its `[publish::…]` tokens. `never` wins
+ * over everything: the block and its whole subtree are locked, never published,
+ * embedded or linked. Otherwise, when any says false/no/off/0 the block is not
+ * published, whatever the others say.
  */
 export function blockPublishIntent(properties: readonly BlockProperty[]): ReturnType<typeof publishIntent> | undefined {
   const values = properties.filter((property) => property.key === PUBLISH_PROPERTY).map((property) => publishIntent(property.value));
   if (!values.length) return undefined;
+  if (values.includes("never")) return "never";
   return values.includes("off") ? "off" : values[0];
 }
 
+/** Said on the index: what a published page may show besides the published blocks. */
+export const EMBED_NOTICE = "Embeds (!((note))) show the embedded note's text even when that note is not published: " +
+  "this publisher is for the tailnet. Mark a note [publish::never] to lock it and everything under it.";
+
+/** What a locked note shows in its place on a published page. */
+export const LOCKED_NOTE = "locked note";
+
 function requestedSlug(block: { id: string; properties?: BlockProperty[] }): string | null {
   const intent = blockPublishIntent(block.properties ?? []) ?? "off";
-  if (intent === "off") return null;
+  if (intent === "off" || intent === "never") return null;
   if (intent !== "auto") return intent.slug;
   const page = getProperty(block.properties ?? [], "page");
   const address = page ? tryNormalizePageAddress(page) : null;
@@ -242,6 +270,7 @@ export class Publisher {
   private readonly log: (line: string) => void;
   private readonly allowedHosts: ReadonlySet<string>;
   private policy: AttachmentPolicy | null = null;
+  private readonly compiler: ArtifactCompiler | null;
   private index: { value: PublishedIndex; at: number } | null = null;
   private building: Promise<PublishedIndex> | null = null;
   private watcher: OutlinerWatcher | null = null;
@@ -255,6 +284,9 @@ export class Publisher {
     this.maxBytes = Math.min(options.maxBytes ?? MAX_TEXT_FILE_BYTES, MAX_TEXT_FILE_BYTES);
     this.log = options.log ?? (() => {});
     this.allowedHosts = new Set((options.allowedHosts ?? []).map((host) => host.trim().toLowerCase()).filter(Boolean));
+    this.compiler = options.artifactCacheDirectory
+      ? new ArtifactCompiler({ cacheDirectory: options.artifactCacheDirectory, log: this.log })
+      : null;
   }
 
   /** Loopback, a tailnet name, or a host the operator allowed; the port is ignored. */
@@ -348,7 +380,10 @@ export class Publisher {
       fields: ["title", "properties", "timestamps"],
     });
     const policy = this.requirePolicy();
-    const assigned = assignPaths(collection.blocks);
+    // A block under a `[publish::never]` note is locked with it, whatever it says itself.
+    const wanted = collection.blocks.filter((block) => requestedSlug(block) !== null);
+    const locked = await this.lockedIds(wanted.map((block) => block.id));
+    const assigned = assignPaths(wanted.filter((block) => !locked.has(block.id)));
     const rawTitles = new Map(assigned.map(({ block }) => [block.id, block.title ?? ""]));
     const entries = assigned.map(({ block, slug, collision }): PublishedEntry => {
       const source = getProperty(block.properties ?? [], "file");
@@ -405,14 +440,18 @@ export class Publisher {
       const entry = index.entries.find((candidate) => candidate.slug === slug) ??
         index.entries.find((candidate) => candidate.blockId === slug);
       if (!entry) return notFound();
-      return await this.serveEntry(entry, index, url.searchParams.get("view") === "html");
+      return await this.serveEntry(entry, index, url.searchParams.get("view"));
     } catch (error) {
       this.log(`publish: ${request.method} ${path}: ${error instanceof Error ? error.message : String(error)}`);
       return respond("The outline could not be read\n", "text/plain; charset=utf-8", 502);
     }
   }
 
-  private async serveEntry(entry: PublishedEntry, index: PublishedIndex, asHtml: boolean): Promise<Response> {
+  private async serveEntry(entry: PublishedEntry, index: PublishedIndex, view: string | null): Promise<Response> {
+    const asHtml = view === "html";
+    // The lock is checked again at request time, so `[publish::never]` holds from the next request
+    // even before the change feed has cleared the cached index.
+    if ((await this.lockedIds([entry.blockId])).size) return notFound();
     if (entry.type !== "block" && entry.attachment?.source !== undefined) {
       // Check again at request time: the file or a link in its path may have changed since the index.
       const check = checkAttachment(entry.attachment.source, this.requirePolicy());
@@ -425,8 +464,19 @@ export class Publisher {
       if (check.type === "html") {
         return respond(contents.text, "text/html; charset=utf-8", 200, { "content-security-policy": ATTACHED_HTML_CSP });
       }
+      // An artifact's source, as claude.ai's "code" tab shows it.
+      if (view === "source" && (check.type === "react" || check.type === "svg" || check.type === "mermaid")) {
+        return respond(contents.text, "text/plain; charset=utf-8");
+      }
+      if (check.type === "svg") {
+        return respond(contents.text, "image/svg+xml; charset=utf-8", 200, { "content-security-policy": ATTACHED_HTML_CSP });
+      }
+      if (check.type === "mermaid") {
+        return respond(mermaidArtifactPage(entry.title, contents.text), "text/html; charset=utf-8", 200, { "content-security-policy": ATTACHED_HTML_CSP });
+      }
+      if (check.type === "react") return this.serveReact(entry, contents.text, extname(check.path).toLowerCase() === ".tsx" ? ".tsx" : ".jsx");
       if (check.type === "markdown") {
-        if (asHtml) return renderedHtml(this.page(entry, renderMarkdownHtml(contents.text)));
+        if (asHtml) return renderedHtml(this.page(entry, renderMarkdownHtml(await this.attachedMarkdown(entry, index, contents.text))));
         return respond(contents.text, "text/markdown; charset=utf-8", 200, { "content-disposition": "inline" });
       }
       return respond(contents.text, "text/plain; charset=utf-8");
@@ -436,21 +486,72 @@ export class Publisher {
     return respond(markdown, "text/markdown; charset=utf-8", 200, { "content-disposition": "inline" });
   }
 
+  /**
+   * A React artifact compiled to one page, run in the same sandbox as attached
+   * HTML. A compile error is a readable page (422) naming the artifact's line,
+   * never a stack trace or a path on this machine.
+   */
+  private async serveReact(entry: PublishedEntry, source: string, extension: ".jsx" | ".tsx"): Promise<Response> {
+    if (!this.compiler) {
+      return renderedHtml(this.page(entry, "<h1>Not compiled</h1>\n<p>This publisher has no artifact cache, so React artifacts are not compiled.</p>\n"), 503);
+    }
+    const build = await this.compiler.compile(source, extension);
+    if (build.ok) {
+      return respond(reactArtifactPage(entry.title, build.script), "text/html; charset=utf-8", 200, { "content-security-policy": ATTACHED_HTML_CSP });
+    }
+    const problems = build.problems.map((problem) => `<pre>${escapeHtml(problem)}</pre>`).join("\n");
+    const status = build.transient ? 503 : 422;
+    const body = `<h1>${build.transient ? "Not compiled yet" : "This artifact does not compile"}</h1>\n${problems}\n` +
+      `<p class="dim">Fix the file and reload; <a href="${escapeHtml(`${this.basePath}${entry.path}?view=source`)}">source</a>.</p>\n`;
+    return renderedHtml(this.page(entry, body), status);
+  }
+
   private page(entry: PublishedEntry, body: string): string {
     const href = (path: string) => escapeHtml(`${this.basePath}${path}`);
     return htmlPage(entry.title, `<article>\n${body}</article>\n<footer>updated ${escapeHtml(entry.updatedAt)} · <a href="${href(entry.path)}">raw</a></footer>`,
       `<a href="${href("/index")}">index</a> / ${escapeHtml(entry.slug)}`);
   }
 
-  /** The block and its subtree as markdown; `[[page]]` links resolve through the service's page registry. */
-  private async blockMarkdown(entry: PublishedEntry, index: PublishedIndex): Promise<string> {
-    const subtree = await this.client.request<ProjectedBlockCollection>({
-      action: "blocks.query",
-      query: { subtreeRootId: entry.blockId, limit: PUBLISH_QUERY_LIMIT },
-      fields: ["text", "parent", "properties"],
-    });
-    const addresses = [...new Set(subtree.blocks.flatMap((block) =>
-      pageAddressReferences(block.text ?? "").map((reference) => reference.normalizedAddress)))].slice(0, PAGE_RESOLVE_LIMIT);
+  /**
+   * Which of `ids` are locked: the block or any ancestor carries
+   * `[publish::never]`. Walks up one level per request, all ids together. A
+   * chain it cannot finish counts as locked.
+   */
+  private async lockedIds(ids: readonly string[]): Promise<Set<string>> {
+    const known = new Map<string, { parentId: string | null; never: boolean } | null>();
+    let frontier = [...new Set(ids)];
+    for (let level = 0; frontier.length && level < LOCK_WALK_LIMIT; level++) {
+      for (let start = 0; start < frontier.length; start += MAX_BLOCK_READ_IDS) {
+        const read = await this.client.request<BlockReadCollection>({
+          action: "blocks.read", ids: frontier.slice(start, start + MAX_BLOCK_READ_IDS), fields: ["parent", "properties"],
+        });
+        for (const block of read.blocks) {
+          known.set(block.id, { parentId: block.parentId ?? null, never: blockPublishIntent(block.properties ?? []) === "never" });
+        }
+        // A missing or trashed block is never shown, so it locks nothing and unlocks nothing.
+        for (const unavailable of read.unavailable) known.set(unavailable.id, null);
+      }
+      frontier = [...new Set([...known.values()]
+        .map((entry) => entry?.parentId)
+        .filter((parentId): parentId is string => !!parentId && !known.has(parentId)))];
+    }
+    const decided = new Map<string, boolean>();
+    const isLocked = (id: string, depth = 0): boolean => {
+      const cached = decided.get(id);
+      if (cached !== undefined) return cached;
+      if (!known.has(id) || depth > LOCK_WALK_LIMIT) return true;
+      const entry = known.get(id);
+      const value = !!entry && (entry.never || (entry.parentId !== null && isLocked(entry.parentId, depth + 1)));
+      decided.set(id, value);
+      return value;
+    };
+    return new Set(ids.filter((id) => isLocked(id)));
+  }
+
+  /** `[[page]]` addresses in `texts` resolved through the service's page registry, a few at a time. */
+  private async resolvePages(texts: readonly string[]): Promise<Map<string, string>> {
+    const addresses = [...new Set(texts.flatMap((text) =>
+      pageAddressReferences(text).map((reference) => reference.normalizedAddress)))].slice(0, PAGE_RESOLVE_LIMIT);
     const pages = new Map<string, string>();
     // A few at a time: a large page must not open hundreds of connections to the shared service.
     // A link that cannot be resolved shows its label, as an unpublished one does.
@@ -466,7 +567,66 @@ export class Publisher {
         }
       }
     }));
-    return renderSubtreeMarkdown(subtree, index, this.basePath, pages);
+    return pages;
+  }
+
+  /**
+   * The embeds in `texts` (in the order a page shows them), projected by the
+   * service's `transclusions.read` as one document: its depth, per-document
+   * count, byte budget, cycle and Trash rules apply. Then every embedded note
+   * that is locked is found, so it shows as a locked note.
+   */
+  private async readEmbeds(texts: readonly string[], hostBlockId: string): Promise<EmbedExpansion | undefined> {
+    const targets = texts.flatMap((text) => embedMatches(text)
+      .map((match) => ({ blockId: match[1]!, ...(match[2] ? { fragmentId: match[2] } : {}) })));
+    if (!targets.length) return undefined;
+    const read = await this.client.request<TransclusionRead>({
+      action: "transclusions.read", targets: targets.slice(0, MAX_EMBEDS_PER_DOCUMENT + 1), hostBlockId,
+    });
+    const ids = new Set<string>();
+    const visit = (node: TransclusionNode) => {
+      if (node.status === "ready") ids.add(node.blockId);
+      for (const inner of node.embeds ?? []) visit(inner);
+    };
+    for (const node of read.results) visit(node);
+    return { read, locked: ids.size ? await this.lockedIds([...ids]) : new Set(), cursor: { next: 0 } };
+  }
+
+  /**
+   * The index as this page may link it: a target locked since the index was
+   * built (the change feed has not caught up yet) is not linked.
+   */
+  private async linkable(index: PublishedIndex, texts: readonly string[], pages: ReadonlyMap<string, string>, embeds?: EmbedExpansion): Promise<PublishedIndex> {
+    const published = new Set(index.entries.map((entry) => entry.blockId));
+    const embedded = embeds ? Object.values(embeds.read.blocks).map((block) => block.text) : [];
+    const targets = new Set([
+      ...[...texts, ...embedded].flatMap((text) => [...blockReferenceOccurrences(text)].map((occurrence) => occurrence.blockId)),
+      ...pages.values(),
+    ].filter((id) => published.has(id)));
+    if (!targets.size) return index;
+    const locked = await this.lockedIds([...targets]);
+    return locked.size ? { ...index, entries: index.entries.filter((entry) => !locked.has(entry.blockId)) } : index;
+  }
+
+  /** The block and its subtree as markdown, with its links and embeds. */
+  private async blockMarkdown(entry: PublishedEntry, index: PublishedIndex): Promise<string> {
+    const subtree = await this.client.request<ProjectedBlockCollection>({
+      action: "blocks.query",
+      query: { subtreeRootId: entry.blockId, limit: PUBLISH_QUERY_LIMIT },
+      fields: ["text", "parent", "properties"],
+    });
+    const shown = shownSubtree(subtree).filter((row) => !row.locked).map((row) => row.block.text ?? "");
+    const pages = await this.resolvePages(shown);
+    const embeds = await this.readEmbeds(shown, entry.blockId);
+    return renderSubtreeMarkdown(subtree, await this.linkable(index, shown, pages, embeds), this.basePath, pages, embeds);
+  }
+
+  /** An attached markdown file rendered: its `((block))` and `[[page]]` links and its embeds, as a block's. */
+  private async attachedMarkdown(entry: PublishedEntry, index: PublishedIndex, text: string): Promise<string> {
+    const pages = await this.resolvePages([text]);
+    const embeds = await this.readEmbeds([text], entry.blockId);
+    const linkable = await this.linkable(index, [text], pages, embeds);
+    return publishedText(text, { index: linkable, basePath: this.basePath, pages, ...(embeds ? { embeds } : {}) }, { keepProperties: true });
   }
 }
 
@@ -479,31 +639,110 @@ function normalizeBasePath(value: string | undefined): string {
   return trimmed;
 }
 
+/** Embeds on one published page: the service's projection, which of its notes are locked, and how many are used. */
+export interface EmbedExpansion {
+  read: TransclusionRead;
+  locked: ReadonlySet<string>;
+  cursor: { next: number };
+}
+
+interface TextContext {
+  index: PublishedIndex;
+  basePath: string;
+  pages: ReadonlyMap<string, string>;
+  embeds?: EmbedExpansion;
+}
+
+/** Where a text's embeds come from: the page's top-level projection in order, or an embedded note's own. */
+interface EmbedSource {
+  nodes: readonly TransclusionNode[];
+  cursor: { next: number };
+  /** The whole note a fragment's text was sliced from, and its first line there (code is judged in the note). */
+  note?: string;
+  firstLine?: number;
+}
+
+function lineOf(text: string, offset: number): number {
+  let line = 0;
+  for (let at = text.indexOf("\n"); at >= 0 && at < offset; at = text.indexOf("\n", at + 1)) line++;
+  return line;
+}
+
+/** Markdown emphasis for a fixed placeholder such as "locked note". */
+const placeholder = (text: string) => `*${text}*`;
+
+/** An embedded note (or why it is not shown) as markdown, before it is quoted. */
+function renderEmbed(node: TransclusionNode | undefined, context: TextContext): string {
+  const expansion = context.embeds!;
+  if (!node) return placeholder(TRANSCLUSION_WORDING.limit);
+  if (node.status !== "ready") {
+    // Wording that names nothing from the target: a trashed note's title is not shown.
+    if (node.status === "deleted") return placeholder("note in Trash");
+    if (node.status === "missing") return placeholder("missing note");
+    if (node.status === "failed") return placeholder("embed failed");
+    return placeholder(node.message ?? "not shown");
+  }
+  if (expansion.locked.has(node.blockId)) return placeholder(LOCKED_NOTE);
+  if (node.kind === "view") return placeholder("a view; views are not published");
+  const block = expansion.read.blocks[node.blockId];
+  if (!block) return placeholder("missing note");
+  // Anchors (`^spring`) are hidden as a fragment's text hides them; the lines stay line for line.
+  const text = node.fragment ? node.fragment.text : stripFragmentAnchors(block.text);
+  return publishedText(text, context, {}, {
+    nodes: node.embeds ?? [], cursor: { next: 0 }, note: block.text, firstLine: node.fragment?.startLine ?? 0,
+  }) || placeholder("empty note");
+}
+
+const quote = (markdown: string) => markdown.split("\n").map((line) => line ? `> ${line}` : ">").join("\n");
+const EMBED_SENTINEL = /[ \t]*\u0000(\d+)\u0000[ \t]*/g;
+
 /**
- * Block text for publication: property tokens removed; a `((block))` or
- * `[[page]]` link becomes a link when its target is published, and otherwise
- * only its authored label (never the unpublished block's text).
+ * Text for publication: property tokens removed (unless `keepProperties`, for
+ * an attached markdown file); a `((block))` or `[[page]]` link becomes a link
+ * when its target is published, and otherwise only its authored label (never
+ * the target's text). An embed `!((id))` / `!((id^anchor))` shows the embedded
+ * note's text as a quote, published or not (a locked note shows "locked
+ * note"). Links and embeds written in code stay as written.
  */
-function publishedText(text: string, index: PublishedIndex, basePath: string, pages: ReadonlyMap<string, string>): string {
-  let body = stripPropertyTokens(text).split("\n").map((line) => line.replace(/[ \t]+$/, "")).join("\n");
+function publishedText(text: string, context: TextContext, options: { keepProperties?: boolean } = {}, source?: EmbedSource): string {
+  const { index, basePath, pages, embeds } = context;
+  let body = text;
+  // Embeds first, in order, so each takes the projection read for its place.
+  const rendered: string[] = [];
+  const matches = embeds ? embedMatches(body, source?.note ?? body, source?.firstLine ?? 0) : [];
+  const from = source ?? (embeds ? { nodes: embeds.read.results, cursor: embeds.cursor } : undefined);
+  for (let at = 0; from && at < matches.length; at++) rendered.push(renderEmbed(from.nodes[from.cursor.next++], context));
+  for (let at = matches.length - 1; at >= 0; at--) {
+    const match = matches[at]!;
+    body = body.slice(0, match.index) + `\u0000${at}\u0000` + body.slice(match.index + match[0].length);
+  }
+  if (!options.keepProperties) {
+    body = stripPropertyTokens(body).split("\n").map((line) => line.replace(/[ \t]+$/, "")).join("\n");
+  }
+  // Replacing links never adds or removes a line, so the code lines stay where they are.
+  const code = codeLineSet(body);
+  const inCode = (offset: number) => code.has(lineOf(body, offset));
   const byId = new Map(index.entries.map((entry) => [entry.blockId, entry]));
   const link = (label: string, target: PublishedEntry | undefined) =>
     target ? `[${label}](${basePath}${target.path})` : label;
-  // An embed `!((id))` is published as a link to its target, never as the target's text
-  // (and never as `![…](…)`, which markdown reads as an image).
-  const embedStarts = new Set(embedMatches(body).map((match) => match.index));
+  // Without an embed projection (a caller that has none), an embed reads as a link, never as
+  // `![…](…)`, which markdown takes for an image.
+  const embedStarts = new Set(embeds ? [] : embedMatches(body).map((match) => match.index));
   for (const occurrence of [...blockReferenceOccurrences(body)].reverse()) {
+    if (inCode(occurrence.start)) continue;
     const target = byId.get(occurrence.blockId);
     const replacement = link(occurrence.label?.trim() || target?.title || "unpublished note", target);
     const start = embedStarts.has(occurrence.start - 1) ? occurrence.start - 1 : occurrence.start;
     body = body.slice(0, start) + replacement + body.slice(occurrence.end);
   }
   for (const reference of [...pageAddressReferences(body)].reverse()) {
+    if (inCode(reference.start)) continue;
     const blockId = pages.get(reference.normalizedAddress);
     const replacement = link(reference.label ?? reference.displayAddress, blockId ? byId.get(blockId) : undefined);
     body = body.slice(0, reference.start) + replacement + body.slice(reference.end);
   }
-  return body.replace(/^\n+|\n+$/g, "");
+  body = body.replace(EMBED_SENTINEL, (_, at: string) => `\n\n${quote(rendered[Number(at)] ?? "")}\n\n`);
+  return body.replace(/\n{3,}/g, "\n\n").replace(/^\n+|\n+$/g, "");
 }
 
 /**
@@ -533,41 +772,61 @@ function readerIndex(index: PublishedIndex): PublishedIndex {
 }
 
 /**
- * Publishing covers the block and its subtree. The block's own text comes
- * first (its first line as the heading); descendants follow as a nested list,
- * as they sit in the outline. A descendant marked `[publish::false]` (or
- * no/off/0) is left out with its own subtree; Trash is never included.
+ * The rows of a published subtree in page order: the root, then each
+ * descendant that is shown. A descendant marked `[publish::false]` (or
+ * no/off/0) is left out with its own subtree; one marked `[publish::never]`
+ * is a locked row (its place says "locked note") and its subtree is left out.
+ * A block whose chain to the root is not in the result is left out. Decided
+ * per block, not by result order.
+ */
+export function shownSubtree(subtree: ProjectedBlockCollection): Array<{ block: ProjectedVisibleBlock; locked: boolean }> {
+  const [root, ...descendants] = subtree.blocks;
+  if (!root) return [];
+  const byId = new Map(subtree.blocks.map((block) => [block.id, block]));
+  type Decision = "shown" | "locked" | "hidden";
+  const decided = new Map<string, Decision>([[root.id, "shown"]]);
+  const decide = (block: ProjectedVisibleBlock): Decision => {
+    const known = decided.get(block.id);
+    if (known !== undefined) return known;
+    decided.set(block.id, "hidden"); // a cycle is never shown
+    const parent = block.parentId ? byId.get(block.parentId) : undefined;
+    const intent = blockPublishIntent(block.properties ?? []);
+    const value: Decision = parent === undefined || decide(parent) !== "shown" || intent === "off" ? "hidden"
+      : intent === "never" ? "locked" : "shown";
+    decided.set(block.id, value);
+    return value;
+  };
+  return [{ block: root, locked: false }, ...descendants
+    .map((block) => ({ block, decision: decide(block) }))
+    .filter((row) => row.decision !== "hidden")
+    .map((row) => ({ block: row.block, locked: row.decision === "locked" }))];
+}
+
+/**
+ * Publishing covers the block and its subtree (see `shownSubtree`). The
+ * block's own text comes first (its first line as the heading); descendants
+ * follow as a nested list, as they sit in the outline. Trash is never included.
  */
 export function renderSubtreeMarkdown(
   subtree: ProjectedBlockCollection,
   index: PublishedIndex,
   basePath = "",
   pages: ReadonlyMap<string, string> = new Map(),
+  embeds?: EmbedExpansion,
 ): string {
-  const [root, ...descendants] = subtree.blocks;
-  if (!root) return "";
-  const rootText = publishedText(root.text ?? "", index, basePath, pages);
+  const [rootRow, ...rows] = shownSubtree(subtree);
+  if (!rootRow) return "";
+  const root = rootRow.block;
+  const context: TextContext = { index, basePath, pages, ...(embeds ? { embeds } : {}) };
+  const rootText = publishedText(root.text ?? "", context);
   const [first = "", ...rest] = rootText.split("\n");
-  const lines = [/^#{1,6}\s/.test(first) ? first : `# ${first.trim() || root.id}`, ...rest];
-  // A block is left out when it or any ancestor below the root says `[publish::false]`, or when
-  // its chain to the root is not in the result. Decided per block, not by result order.
-  const byId = new Map(subtree.blocks.map((block) => [block.id, block]));
-  const decided = new Map<string, boolean>([[root.id, true]]);
-  const shown = (block: ProjectedVisibleBlock): boolean => {
-    const known = decided.get(block.id);
-    if (known !== undefined) return known;
-    decided.set(block.id, false); // a cycle is never shown
-    const parent = block.parentId ? byId.get(block.parentId) : undefined;
-    const value = parent !== undefined &&
-      blockPublishIntent(block.properties ?? []) !== "off" &&
-      shown(parent);
-    decided.set(block.id, value);
-    return value;
-  };
+  const lines = /^#{1,6}\s/.test(first) ? [first, ...rest]
+    // A note that opens with an embed keeps it below the heading.
+    : first.startsWith(">") ? [`# ${root.id}`, "", first, ...rest]
+      : [`# ${first.trim() || root.id}`, ...rest];
   const listed: string[] = [];
-  for (const block of descendants) {
-    if (!shown(block)) continue;
-    const text = publishedText(block.text ?? "", index, basePath, pages);
+  for (const { block, locked } of rows) {
+    const text = locked ? placeholder(LOCKED_NOTE) : publishedText(block.text ?? "", context);
     const indent = "  ".repeat(Math.max(0, block.depth - root.depth - 1));
     const [head = "", ...tail] = text.split("\n");
     listed.push(`${indent}- ${head}`);
@@ -599,6 +858,7 @@ export function renderIndexText(index: PublishedIndex, basePath = ""): string {
   const lines = [format(header), ...rows.map(format)];
   if (!rows.length) lines.push("(nothing is published; add [publish::true] to a block)");
   if (index.truncated) lines.push(`(only the first ${PUBLISH_QUERY_LIMIT} published blocks are listed)`);
+  lines.push("", EMBED_NOTICE);
   return `${lines.join("\n")}\n`;
 }
 
@@ -618,7 +878,8 @@ export function renderIndexHtml(index: PublishedIndex, basePath = ""): string {
     ? `<table><thead><tr><th>title</th><th>url</th><th>type</th><th>updated</th></tr></thead><tbody>\n${rows}\n</tbody></table>`
     : `<p class="dim">Nothing is published yet. Add <code>[publish::true]</code> to a block.</p>`;
   const truncated = index.truncated ? `<p class="dim">Only the first ${PUBLISH_QUERY_LIMIT} published blocks are listed.</p>` : "";
-  return htmlPage("Published", `${body}${truncated}\n<footer><a href="${escapeHtml(`${basePath}/index.txt`)}">index.txt</a> · <a href="${escapeHtml(`${basePath}/index.json`)}">index.json</a></footer>`, "published");
+  const notice = `<p class="dim">${escapeHtml(EMBED_NOTICE)}</p>`;
+  return htmlPage("Published", `${body}${truncated}\n${notice}\n<footer><a href="${escapeHtml(`${basePath}/index.txt`)}">index.txt</a> · <a href="${escapeHtml(`${basePath}/index.json`)}">index.json</a></footer>`, "published");
 }
 
 /** Serves a publisher on 127.0.0.1 only; exposure beyond the machine is a proxy's job (tailscale serve). */

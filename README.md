@@ -691,7 +691,7 @@ of the service (`blocks.query`, `pages.resolve`, `files.read` and the content
 event feed) and listens on `127.0.0.1` only; exposing it is Tailscale's job.
 
 ```sh
-bun run cli publish serve --outline pie --port 8790 --base-path /pub [--root ~/writing]… [--max-bytes 1048576] [--allow-host NAME]…
+bun run cli publish serve --outline pie --port 8790 --base-path /pub [--root ~/writing]… [--max-bytes 1048576] [--allow-host NAME]… [--artifact-cache DIR]
 bun run cli publish list --outline pie [--json]
 ```
 
@@ -702,6 +702,7 @@ bun run cli publish list --outline pie [--json]
 | `[publish::true]` or `[publish::yes]` | `/p/<page address>` when the block has `[page::…]`, else `/p/<block id>` |
 | `[publish::<slug>]` | `/p/<slug>`; `/` makes folders, e.g. `[publish::field-notes/moths]` |
 | `[publish::false]`, `no`, `off`, `0` | not published, even when the block has another `[publish::…]` |
+| `[publish::never]` | **locked**: never published, embedded or linked, and neither is anything under it |
 
 Page addresses and slugs are lower-cased, and anything other than letters,
 digits, `.`, `_`, `~` and `-` becomes `-` (`[page::Moth Garden]` →
@@ -712,12 +713,21 @@ gets `/p/<slug>~<first 8 characters of its id>`; the index shows the collision.
 **What a URL returns** depends on the block's `[file::path]`, the same
 attachment Detail shows:
 
-- an attached `.html`/`.htm` file: that HTML;
+- an attached `.html`/`.htm` file: that HTML, run sandboxed (below);
+- an attached `.jsx`/`.tsx` file (a claude.ai React artifact): a page that runs
+  it, compiled on the server ([Artifacts](#artifacts));
+- an attached `.svg` file: the SVG, as `image/svg+xml`, sandboxed;
+- an attached `.mermaid`/`.mmd` file: a page that draws the diagram with
+  mermaid from its CDN, sandboxed;
 - an attached `.md`/`.markdown` file: the markdown, raw, as
-  `text/markdown; charset=utf-8`; add `?view=html` for a plain rendered page;
-- an attached `.txt` file: plain text;
+  `text/markdown; charset=utf-8`; add `?view=html` for a rendered page, where
+  `((block))`, `[[page]]` links and embeds work as they do in a published block;
+- an attached `.txt` file, or code (`.py`, `.js`, `.ts`, `.css`, `.json`, `.csv`,
+  `.sh`, `.yaml`, `.sql` and other common languages): plain text;
 - no attachment (or one that is refused, below): the block rendered from its
   text and its subtree as markdown, with `?view=html` for the rendered page.
+
+`?view=source` returns a React, SVG or mermaid artifact's source as plain text.
 
 Publishing covers **the block and its subtree**. The block's first line is the
 heading and its other lines follow; its descendants follow as a nested list, as
@@ -725,14 +735,32 @@ they sit in the outline. A descendant marked `[publish::false]` is left out with
 everything under it, and Trash is never published. Property tokens are removed.
 A `((block))` or `[[page]]` link becomes a link when its target is published;
 otherwise only its authored label is shown (or "unpublished note"), never the
-target's text or id. An embed `!((block))` is published the same way, as a link,
-not transcluded. Titles in the index and page titles follow the same rule. At
-most 1,000 blocks of a subtree are published, and the page says so when it is
-cut off.
+target's text or id. Titles in the index and page titles follow the same rule.
+Links and embeds written in code stay as written. At most 1,000 blocks of a
+subtree are published, and the page says so when it is cut off.
+
+**Embeds show their content, published or not.** An embed `!((block))` or
+`!((block^anchor))` shows the embedded note's text (or the anchor's slice) as a
+quote, in published blocks and in rendered markdown attachments alike, whether
+or not that note is published. The service's transclusion rules apply
+(`transclusions.read`): the whole page is one document, so at most 16 embeds
+show, nesting stops three deep, the byte budget holds, a loop stops where it
+repeats, and a note in Trash shows "note in Trash" without its title. This is
+for the tailnet, where every reader is trusted: **an embed pulls an unpublished
+note onto a published page.** To keep a note off every page, lock it.
+
+**The lock.** A block marked `[publish::never]` is never published, never
+embedded and never linked from a published page, and neither is anything under
+it, however deep. A published page shows "locked note" in its place (as an
+embed, or as a child in a published subtree). The lock wins over every other
+`[publish::…]`, on the block and on anything under it, and it is checked on
+every request, so it holds before the index is rebuilt.
 
 `/` and `/index` list everything published like a little file system (title,
 URL, type, updated): HTML by default, plain text with `Accept: text/plain` or at
-`/index.txt`, and JSON at `/index.json`. "Updated" is the block's last edit, or
+`/index.txt`, and JSON at `/index.json`; the HTML and text forms end with a note
+that embeds show unpublished notes and that `[publish::never]` locks one.
+"Updated" is the block's last edit, or
 the attached file's modification time when that is later. The index says when an
 attachment is refused and why, but never shows an attachment's path; `publish
 list` shows it to you.
@@ -750,7 +778,8 @@ to them. There is no query endpoint and no directory listing; any other path is
 - it is a regular file, not a device, FIFO, socket or directory;
 - it is at most `--max-bytes` (default and ceiling 2 MiB, the service's own
   `files.read` limit);
-- its type is `.html`, `.htm`, `.md`, `.markdown` or `.txt`.
+- its type is one listed above (HTML, React, SVG, mermaid, markdown, text or
+  code); anything else (images, PDFs, archives) is not served.
 
 These checks run when the index is built and again on every request; the content
 is then read through the service's `files.read` (so a workspace policy that
@@ -759,9 +788,12 @@ between the check and the read is refused with `409`. A refused attachment is
 never read: the block is published as text instead and the index says why.
 Pages the publisher renders carry a `Content-Security-Policy` that allows no
 script, and authored raw HTML in markdown is shown as text. An attached `.html`
-file is served as authored but sandboxed (`Content-Security-Policy: sandbox`
-without `allow-same-origin`): its scripts run with an opaque origin, so they
-cannot read the host's other mounts, and it has no cookies or `localStorage`.
+file, SVG, mermaid page and compiled React page are served sandboxed
+(`Content-Security-Policy: sandbox allow-scripts allow-popups
+allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads`, without
+`allow-same-origin`): their scripts run with an opaque origin, like claude.ai's
+artifact frame, so they cannot read the host's other mounts, and they have no
+cookies or storage ([Artifacts](#artifacts)).
 Every response is `no-store` with `X-Content-Type-Options: nosniff`. A request
 whose `Host` is not loopback, a `*.ts.net` name or an `--allow-host NAME` is
 refused with `421`, so a web page that points its own name at 127.0.0.1 (DNS
@@ -771,10 +803,74 @@ clears the cached index, which is otherwise at most five seconds old.
 
 Anyone who can write to the outline can publish: an agent that adds
 `[publish::true]` publishes that block. The publisher is built for a tailnet,
-where every reader is already trusted. Before it faces the public internet it
-needs its own origin (attached HTML shares the host's origin with the other
-mounts, sandboxed or not), a cache and rate limit in front of the shared
-service, and publishing that someone confirms rather than a tag alone.
+where every reader is already trusted.
+
+#### Artifacts
+
+What claude.ai runs as an artifact runs here when its file is attached to a
+published block: download it from claude.ai, put it under a publish root, and
+give a block `[file::that/file.jsx] [publish::true]`. claude.ai downloads an
+artifact as `.html` (HTML), `.jsx` or `.tsx` (React), `.svg`, `.mermaid`, `.md`
+(documents) or its language's extension (code), and each of those is served
+above.
+
+- **HTML** runs as authored in the sandbox; scripts and styles from CDNs such as
+  cdnjs load as they do on claude.ai.
+- **React** (`.jsx`/`.tsx`: one file whose default export is a component) is
+  bundled on the server with `Bun.build` into one script, inlined in a page that
+  mounts the component under an error boundary and loads Tailwind from its Play
+  CDN (pinned, 3.4.17), so its utility classes work without a config. The
+  artifact may import the packages claude.ai offers, pinned: `react` and
+  `react-dom` 18.3.1, `lucide-react`, `recharts`, `lodash`, `mathjs`,
+  `papaparse`, `d3` (and its `d3-*` modules), `three` (r128), `xlsx`
+  (SheetJS), `chart.js`, `plotly` (as `plotly.js-dist-min`), `tone`, `mammoth`,
+  `@tensorflow/tfjs`; and shadcn/ui from `@/components/ui/<name>` and `cn` from
+  `@/lib/utils`, which the publisher supplies as its own small versions (same
+  names, props and Tailwind look; no Radix). Versions are in
+  `ARTIFACT_PACKAGES` (`src/publish-artifacts.ts`).
+- Packages are fetched the first time an artifact needs them, with `bun add
+  --exact --ignore-scripts` into the artifact cache (`--artifact-cache`, default
+  `<state root>/publish/artifacts`, i.e. `$OUTLINER_STATE_DIR/publish/artifacts`).
+  Compiled bundles are cached there by a hash of the source (`builds/`, the 200
+  newest kept) and in memory, so editing the file compiles it again and an
+  unchanged file is served from the cache. One build or fetch runs at a time.
+- A compile error is a readable page (`422`) with the line and message, never a
+  stack trace or a path on this machine; `?view=source` shows the source. A fetch
+  that fails (offline) says so (`503`) and is tried again on the next request.
+- **Compiling never runs the artifact's code.** `Bun.build` only bundles, with
+  macros off (a `with { type: "macro" }` import is the one way it would run code
+  while bundling; it is refused). A plugin decides every import the artifact
+  makes: a pinned package, a shadcn/ui shim, or nothing; a relative or absolute
+  path, a URL or any other package is refused with a message naming it. The
+  artifact is handed to the bundler in memory, so the build reads no file but it,
+  the shims and the package cache. The source is capped by `--max-bytes` and the
+  bundle at 16 MiB; a build is given 60 seconds.
+- **SVG** is served as `image/svg+xml`; **mermaid** is drawn by mermaid 11 from
+  jsDelivr with `securityLevel: "strict"`, and the diagram's text is escaped
+  into the page, never inserted as markup.
+
+**Storage.** Every artifact page has an opaque origin, as in claude.ai's frame,
+so `localStorage`, `sessionStorage`, IndexedDB and cookies throw a
+`SecurityError` when touched (claude.ai artifacts cannot use them either).
+claude.ai's own artifact storage API (`window.storage`) and `window.claude` do
+not exist here: an artifact that calls them fails at that call. In a React
+artifact the page shows "This artifact failed while running:" and the error in
+place of the component; an HTML artifact shows whatever it does on an uncaught
+error. State kept in React (`useState`) works and lasts until the page reloads.
+
+Not yet: claude.ai's `window.storage` and `window.claude.complete`, file uploads
+into an artifact from the conversation (`window.fs.readFile`), PDF artifacts,
+and packages outside the pinned set (claude.ai refuses those too).
+
+#### Before any public variant
+
+Before the publisher faces the public internet it needs its own origin
+(attached HTML shares the host's origin with the other mounts, sandboxed or
+not), a cache and rate limit in front of the shared service, and publishing
+that someone confirms rather than a tag alone. Embeds need a decision at
+publish time too: when a published note embeds unpublished ones, ask whether to
+publish the embedded notes as well, show them display-only, or hide them.
+Today, on the tailnet, they show.
 
 **Expose it on the tailnet.** `--base-path` must match the mount so links carry
 it (the publisher accepts requests with or without the prefix):

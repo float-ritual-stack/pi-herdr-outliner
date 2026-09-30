@@ -4,6 +4,17 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+- Published blocks run claude.ai artifacts: attach a downloaded `.html`,
+  `.jsx`/`.tsx` (React, compiled on the server with `Bun.build`, never run
+  there; claude.ai's packages fetched pinned into `<state root>/publish/artifacts`;
+  shadcn/ui and Tailwind included), `.svg`, `.mermaid`/`.mmd`, `.md` or code file
+  and it works at its URL, sandboxed with an opaque origin. Embeds on published
+  pages (and in rendered markdown attachments) now show the embedded note's text,
+  published or not, within the service's transclusion limits; `[[page]]` and
+  `((block))` links in rendered markdown attachments link published targets; and
+  `[publish::never]` locks a note and everything under it from every page, embed
+  and link. See README "Artifacts".
+
 - Outline as server: `outliner publish serve` gives every block carrying
   `[publish::…]` a URL on 127.0.0.1 (`/p/<page address|block id|slug>`), serving
   an attached `.html`/`.md` file or the block and its subtree as markdown (with
