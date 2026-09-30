@@ -39,9 +39,10 @@ set, as the door's daily agent is, in the tile or in its Herdr pane), a click or
 $EP0CH_TILE` sends the door an agent's `open` from Claude's own tile over
 `EP0CH_CONTROL`. The door puts it where that tile's opens land (its link: the
 daily layout links the claude tile to its middle detail) and says which reader
-that was; the mod never names a tile. A door without that tile, or one older
-than `open from=`, is asked again without it, and puts it where its own `open`
-puts notes.
+that was. A door older than `open from=`, or without that tile, is asked for
+its `middle` reader instead (`--reader middle`, where the mod opened notes
+before), and a door without that either puts it where its own `open` puts
+notes.
 
 - The door says who opened it (`claude-code`, or `EP0CH_AGENT`), and an agent's
   open never moves the person's focus.

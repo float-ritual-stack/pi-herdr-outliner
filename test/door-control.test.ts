@@ -50,6 +50,22 @@ describe("showing a block in ep0ch-door", () => {
     }
   });
 
+  test("with a reader too, a door older than from= is asked for that reader, then for none", async () => {
+    door = await fakeDoor(request => (request.args.from ? { ok: false, error: "open takes no from; it takes id" } : request.reader ? { ok: true, result: { reader: "5", id: BLOCK } } : { ok: true, result: { reader: "2" } }));
+    expect(await openInDoor(door.path, BLOCK, { actor: "claude-code", from: "claude", reader: "middle" })).toEqual({ reader: "5", id: BLOCK });
+    expect(door.requests.map(request => [request.args.from ?? null, request.reader ?? null])).toEqual([["claude", null], [null, "middle"]]);
+    await door.close(); door = undefined;
+    // A door that knows from= is never asked for the reader.
+    door = await fakeDoor(() => ({ ok: true, result: { reader: "side", id: BLOCK } }));
+    expect(await openInDoor(door.path, BLOCK, { actor: "claude-code", from: "claude", reader: "middle" })).toEqual({ reader: "side", id: BLOCK });
+    expect(door.requests).toHaveLength(1);
+    await door.close(); door = undefined;
+    // An old door with no middle either: where its own open puts notes.
+    door = await fakeDoor(request => (request.args.from ? { ok: false, error: "open takes no from; it takes id" } : request.reader ? { ok: false, error: "no reader middle on the desk; readers: 2" } : { ok: true, result: { reader: "2" } }));
+    expect(await openInDoor(door.path, BLOCK, { actor: "claude-code", from: "claude", reader: "middle" })).toEqual({ reader: "2" });
+    expect(door.requests).toHaveLength(3);
+  });
+
   test("any other refusal from the tile's link is the answer, never asked again", async () => {
     door = await fakeDoor(request => (request.args.from ? { ok: false, error: "reader middle is holding an edit or a comment on another note" } : { ok: true, result: {} }));
     await expect(openInDoor(door.path, BLOCK, { actor: "claude-code", from: "claude" })).rejects.toThrow("holding an edit");

@@ -8,7 +8,7 @@ This file records notable user-facing changes. The project remains active dogfoo
   Claude's own tile (`door-open --from $EP0CH_TILE`): the door puts it where
   that tile's opens land and says which reader, instead of the mod assuming a
   tile called `middle` (ep0ch-door PIE-491). A door without that tile, or older
-  than `open from=`, is asked again without it.
+  than `open from=`, is asked for its `middle` reader as before, then for none.
 
 - The service plans writes into saved views (PIE-490). `views.planWrite` says
   what moving a block into each view would patch (with token ordinals, at the

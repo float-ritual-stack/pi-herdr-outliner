@@ -51,10 +51,11 @@ if(process.argv[2]==='doctor'){
  process.exit(report.ok?0:1);
 }
 /**
- * `door-open <block-id> [--control <socket>] [--actor <id>] [--from <tile> | --reader <tile>]`:
+ * `door-open <block-id> [--control <socket>] [--actor <id>] [--from <tile>] [--reader <tile>]`:
  * shows a block in ep0ch-door as an agent's `open` (see src/door-control.ts).
  * `--from` is the tile the caller runs in (EP0CH_TILE): the door puts it where
- * that tile's opens land.
+ * that tile's opens land. `--reader` is asked when the door can't take
+ * `--from` (older than it, or without that tile).
  * The socket defaults to EP0CH_CONTROL, which a door gives the programs in its
  * tiles. Exit 3 when no door answers there, so a caller can show it elsewhere.
  */

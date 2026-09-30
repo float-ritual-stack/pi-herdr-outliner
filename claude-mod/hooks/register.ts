@@ -335,7 +335,9 @@ async function showInDoor(
   if (resolved.exitCode !== 0) throw Error(failureReasonOf(resolved.stderr) || 'the target did not resolve')
   const { id, title } = JSON.parse(resolved.stdout) as { id: string; title?: string }
   const actor = (await $.env.get('EP0CH_AGENT')) || 'claude-code'
-  const opened = await outliner(['door-open', id, '--control', door.control, '--actor', actor, '--from', door.tile])
+  // `--reader middle` only for a door older than `open from=` (ep0ch-door #61), which lands it where this mod
+  // always did; a door that knows `from=` never reads it. Drop it once every door has `from=`.
+  const opened = await outliner(['door-open', id, '--control', door.control, '--actor', actor, '--from', door.tile, '--reader', 'middle'])
   if (opened.exitCode === 3) return null
   if (opened.exitCode !== 0) throw Error(failureReasonOf(opened.stderr) || 'the door did not open it')
   let reader: unknown

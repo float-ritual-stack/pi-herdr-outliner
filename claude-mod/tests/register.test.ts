@@ -360,7 +360,7 @@ describe('register', () => {
     const doorOpenOf = (runs: readonly Run[]) => runs.find(run => run.argv.includes('door-open'))
 
     test('show opens the note in the door as an agent, from its own tile, and splits nothing in Herdr', async ($, on) => {
-      // The door says where the tile's opens landed (its link); the mod never names a reader.
+      // The door says where the tile's opens landed (its link).
       const session = sessionIn(on, WORKSPACE, run =>
         run.argv.includes('door-open') ? { exitCode: 0, stdout: '{"reader":"centre","id":"x"}\n', stderr: '' } : succeeding(run),
       `${WORKSPACE}/`, DOOR)
@@ -370,10 +370,10 @@ describe('register', () => {
       const shown = await $.tool.call({ tool: 'mcp__pi-outliner__show', reference: '[[Daily notes]]' })
       expect(shown).toMatchObject({ result: "Showing Daily notes in the door's centre reader." })
       const opened = doorOpenOf(session.runs)!
-      expect(opened.argv.slice(-8)).toEqual([
-        'door-open', BLOCK, '--control', DOOR.EP0CH_CONTROL, '--actor', 'claude-code', '--from', 'claude',
+      // --reader middle is only for a door older than from= (door-control asks it only then).
+      expect(opened.argv.slice(-10)).toEqual([
+        'door-open', BLOCK, '--control', DOOR.EP0CH_CONTROL, '--actor', 'claude-code', '--from', 'claude', '--reader', 'middle',
       ])
-      expect(opened.argv).not.toContain('middle')
       expect(opened.init?.cwd).toBe(WORKSPACE)
       expect(splitOf(session.runs)).toBeUndefined()
       expect(session.runs.some(run => run.argv.includes('link'))).toBe(false)
