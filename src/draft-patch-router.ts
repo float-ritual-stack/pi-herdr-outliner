@@ -18,6 +18,8 @@ import {
 import {
   DRAFT_PROPOSAL_TYPE,
   draftPatchPolicy,
+  draftPatchTextPolicy,
+  proposalShowsPatch,
   embedLine,
   insertAfterMark,
   parseProposal,
@@ -53,6 +55,15 @@ export interface DraftPatchRouterDeps {
   isLive(clientId: string): boolean;
   /** Ask the door holding a draft; rejects when it doesn't answer in time (the hold is then let go). */
   ask(hold: DraftHold, request: DraftHolderAsk): Promise<DraftHolderAnswer>;
+}
+
+interface RunOptions {
+  mutation: MutationProvenance;
+  mark?: { text: string; blockId: string };
+  /** "Apply anyway" by the person: placed as well as it can be, with no revision, mark or policy check. */
+  force?: boolean;
+  /** Compare against the text as it is now rather than the revision the patch was read at (an agent's apply). */
+  current?: boolean;
 }
 
 type Outcome = { ok: true; applied: DraftPatchApplied["edits"] } | { ok: false; reason: string };
@@ -118,6 +129,15 @@ export class DraftPatchRouter {
     return this.deps.holds.holderOf(blockId, clientId => this.deps.isLive(clientId));
   }
 
+  /**
+   * Where a note's part goes: the one door holding a live draft of it, the saved note when none does, or
+   * nowhere when more than one door does (the patch then fails into a proposal; nothing guesses).
+   */
+  private routeOf(blockId: string): { hold: DraftHold | null; many: boolean } {
+    const holds = this.deps.holds.holdersOf(blockId, clientId => this.deps.isLive(clientId));
+    return { hold: holds[0] ?? null, many: holds.length > 1 };
+  }
+
   /** A note's text as the draft a door holds has it now, or as saved. */
   async read(blockId: string): Promise<{ blockId: string; route: DraftPatchRoute; text: string; revision: number; holder?: string }> {
     const saved = this.deps.store.requireActive(blockId);
@@ -162,9 +182,28 @@ export class DraftPatchRouter {
     if (block.properties.some(property => property.key === "proposal-status" && property.value === "applied")) {
       throw new Error("This proposal was already applied");
     }
+    if (!proposalShowsPatch(block.text, proposal)) {
+      throw new Error("This proposal's text no longer shows the patch it holds; it isn't applied");
+    }
     const who = normalizeMutation(mutation);
     const edits = normalizeDraftPatchEdits({ edits: proposal.edits });
-    const outcome = await this.run(edits, { mutation: who, force: true });
+    // "Apply anyway" is the person's choice. An agent's is held to the same compare as a patch: prose only,
+    // above the mark and the person's cursor, against the text as it is now (it can't force its own proposal).
+    const forced = who.author !== "agent";
+    let mark: { text: string; blockId: string } | undefined;
+    if (!forced) {
+      for (const edit of edits) {
+        for (const span of edit.patches) {
+          const reason = draftPatchPolicy(span);
+          if (reason) throw new Error(`Couldn't apply it: ${reason}; only the person applies that anyway`);
+        }
+      }
+      const kept = proposal.mark;
+      if (kept && typeof kept.text === "string" && kept.text.trim()) {
+        mark = { text: kept.text, blockId: typeof kept.blockId === "string" && kept.blockId.trim() ? kept.blockId.trim() : edits[0]!.blockId };
+      }
+    }
+    const outcome = await this.run(edits, forced ? { mutation: who, force: true } : { mutation: who, current: true, ...(mark ? { mark } : {}) });
     if (!outcome.ok) throw new Error(`Couldn't apply it: ${outcome.reason}`);
     const current = this.deps.store.require(proposalId);
     try {
@@ -189,14 +228,33 @@ export class DraftPatchRouter {
    * Check every note, patch the drafts, then write the saved notes together.
    * Any failure reverts what was patched and says why.
    */
-  private async run(edits: DraftPatchEdit[], options: { mutation: MutationProvenance; mark?: { text: string; blockId: string }; force?: boolean }): Promise<Outcome> {
+  private async run(edits: DraftPatchEdit[], options: RunOptions): Promise<Outcome> {
     const { store } = this.deps;
-    const plan = edits.map(edit => ({ edit, hold: this.holderOf(edit.blockId) }));
+    const plan = edits.map(edit => ({ edit, ...this.routeOf(edit.blockId) }));
+    const crowded = plan.find(part => part.many);
+    if (crowded) return { ok: false, reason: "more than one door holds a live draft of the note; which one is being typed in isn't clear" };
     // Saved notes first: nothing is written until every part has passed.
     for (const { edit, hold } of plan) {
       if (hold) continue;
       const failure = this.checkSaved(edit, options);
       if (failure) return { ok: false, reason: failure };
+    }
+    // Drafts next, read but not yet touched: the structural policy is checked over the whole note as typed.
+    if (!options.force) {
+      for (const { edit, hold } of plan) {
+        if (!hold) continue;
+        let answer: DraftHolderAnswer;
+        try {
+          answer = await this.deps.ask(hold, { kind: "read" });
+        } catch (error) {
+          return { ok: false, reason: `the door holding its draft didn't answer (${error instanceof Error ? error.message : String(error)})` };
+        }
+        if (!("text" in answer) || typeof answer.text !== "string") return { ok: false, reason: "the door holding its draft didn't say what it holds" };
+        const located = locateSpans(answer.text, edit.patches);
+        if (!located.ok) return { ok: false, reason: located.reason };
+        const failure = draftPatchTextPolicy(answer.text, applyLocated(answer.text, located.spans));
+        if (failure) return { ok: false, reason: failure };
+      }
     }
     const patched: Array<{ hold: DraftHold; patchId: string }> = [];
     const applied: DraftPatchApplied["edits"] = [];
@@ -211,12 +269,14 @@ export class DraftPatchRouter {
       let answer: DraftHolderAnswer;
       try {
         answer = await this.deps.ask(hold, {
-          kind: "patch", patchId, revision: options.force ? hold.revision : edit.revision, patches: edit.patches,
+          kind: "patch", patchId, revision: options.force || options.current ? hold.revision : edit.revision, patches: edit.patches,
           mutation: options.mutation,
           ...(options.mark && options.mark.blockId === edit.blockId && !options.force ? { mark: options.mark.text } : {}),
           ...(options.force ? { force: true } : {}),
         });
       } catch (error) {
+        // A slow door may still apply it after the service stopped waiting: take it back there too.
+        void this.deps.ask(hold, { kind: "revert", patchId }).catch(() => undefined);
         await undo();
         return { ok: false, reason: `the door holding its draft didn't answer (${error instanceof Error ? error.message : String(error)})` };
       }
@@ -248,10 +308,10 @@ export class DraftPatchRouter {
   }
 
   /** Why a saved note's part can't apply now, or null. */
-  private checkSaved(edit: DraftPatchEdit, options: { mark?: { text: string; blockId: string }; force?: boolean }): string | null {
+  private checkSaved(edit: DraftPatchEdit, options: RunOptions): string | null {
     const block = this.deps.store.get(edit.blockId);
     if (!block || block.effectiveDeletedRootId) return "the note is gone or in the Trash";
-    if (!options.force && block.revision !== edit.revision) {
+    if (!options.force && !options.current && block.revision !== edit.revision) {
       return `the note was saved since it was read (revision ${edit.revision}, now ${block.revision})`;
     }
     const located = locateSpans(block.text, edit.patches, options.force);
@@ -261,6 +321,7 @@ export class DraftPatchRouter {
       if (at < 0) return "the mark isn't in the note";
       if (located.spans.some(span => span.end > at)) return "it reaches the mark or below it; a patch changes only text above the mark";
     }
+    if (!options.force) return draftPatchTextPolicy(block.text, applyLocated(block.text, located.spans));
     return null;
   }
 
@@ -295,8 +356,10 @@ export class DraftPatchRouter {
       : store.create(proposalText(proposal, names), hostId, "user");
     const line = embedLine(created.id);
     let embedded: DraftPatchRoute | null = null;
-    const hold = this.holderOf(hostId);
-    if (hold) {
+    const { hold, many } = this.routeOf(hostId);
+    if (many) {
+      // Several doors hold drafts of it: the proposal stays a reply under the note, and no draft or saved text changes.
+    } else if (hold) {
       const answer = await this.deps.ask(hold, { kind: "embed", line, ...(mark ? { mark: mark.text } : {}), mutation }).catch(() => null);
       if (answer && "applied" in answer && answer.applied) embedded = "draft";
       // A draft that didn't take it keeps its note: writing the saved note under it would refuse the person's save.

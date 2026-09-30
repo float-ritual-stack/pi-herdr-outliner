@@ -195,6 +195,8 @@ export class OutlinerServer {
   /** The live drafts doors hold (PIE-501), and the requests to them waiting for an answer. */
   private readonly draftHolds = new DraftHolds();
   private readonly holderAnswers = new Map<string, { clientId: string; resolve: (answer: DraftHolderAnswer) => void; reject: (error: Error) => void; timer: Timer }>();
+  /** Holds whose door missed an answer's deadline and hasn't been heard from since: asked again, they fail at once. */
+  private readonly stalledHolds = new Set<string>();
   private readonly draftPatches: DraftPatchRouter;
   private readonly browsingContextTargets = new Map<string, OutlinerNavigationTarget | null>();
   private readonly attentionStates = new Map<string, AttentionClientState>();
@@ -460,7 +462,16 @@ export class OutlinerServer {
     ) {
       this.browsingContextTargets.delete(removed.contextId);
     }
-    if (removed) this.draftHolds.releaseClient(removed.clientId);
+    if (removed) {
+      this.draftHolds.releaseClient(removed.clientId);
+      // A door that went away answers nothing it was asked: don't wait out the deadline.
+      for (const [requestId, waiting] of this.holderAnswers) {
+        if (waiting.clientId !== removed.clientId) continue;
+        this.holderAnswers.delete(requestId);
+        clearTimeout(waiting.timer);
+        waiting.reject(new Error("the door holding the draft disconnected"));
+      }
+    }
     if (removed) this.emitClientView("clients.unregister", removed.clientId);
   }
 
@@ -2208,8 +2219,10 @@ export class OutlinerServer {
           break;
         case "drafts.heartbeat":
           result = this.draftHolds.heartbeat(request.holdId, request.revision);
+          this.stalledHolds.delete(request.holdId);
           break;
         case "drafts.release":
+          this.stalledHolds.delete(request.holdId);
           result = { released: this.draftHolds.release(request.holdId) };
           break;
         case "drafts.answer":
@@ -2722,12 +2735,17 @@ export class OutlinerServer {
 
   /** Ask the door holding a draft (a `draft` event to that client only), and wait for its `drafts.answer`. */
   private askHolder(hold: DraftHold, ask: DraftHolderAsk): Promise<DraftHolderAnswer> {
+    for (const id of this.stalledHolds) if (!this.draftHolds.has(id)) this.stalledHolds.delete(id);
+    // A revert is always sent: a slow door may yet have applied what it was asked.
+    if (ask.kind !== "revert" && this.stalledHolds.has(hold.holdId)) return Promise.reject(new Error("it isn't answering"));
     const requestId = crypto.randomUUID();
     const answered = Promise.withResolvers<DraftHolderAnswer>();
     const timer = setTimeout(() => {
       this.holderAnswers.delete(requestId);
-      // A door that doesn't answer has lost its hold: patches go to the saved note from now on.
-      this.draftHolds.release(hold.holdId);
+      // A door that is slow keeps its hold, and with it the draft keeps its note: patches fail into proposals
+      // and nothing is written to the saved note under it. Its lease runs out if it stops renewing (a frozen
+      // or dead door), and a disconnect lets go at once.
+      this.stalledHolds.add(hold.holdId);
       answered.reject(new Error("no answer in time"));
     }, DRAFT_HOLDER_TIMEOUT_MS);
     this.holderAnswers.set(requestId, { clientId: hold.clientId, resolve: answered.resolve, reject: answered.reject, timer });
@@ -2743,6 +2761,7 @@ export class OutlinerServer {
     if (!waiting || waiting.clientId !== clientId) throw new Error("No draft request waits for this answer (it timed out, or it was asked of another client)");
     this.holderAnswers.delete(requestId);
     clearTimeout(waiting.timer);
+    for (const hold of this.draftHolds.list()) if (hold.clientId === clientId) this.stalledHolds.delete(hold.holdId);
     if (error !== undefined || answer === undefined) waiting.reject(new Error(error || "the door gave no answer"));
     else waiting.resolve(answer);
     return { accepted: true };

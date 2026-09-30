@@ -142,6 +142,22 @@ export function draftPatchPolicy(span: DraftPatchSpan, inbound: (anchorId: strin
   return null;
 }
 
+/**
+ * The same policy over a whole note: its text before and after every span of the patch keeps the same
+ * structural tokens. The per-span check can't see a span that edits inside a token (`[[Seed list]]` with
+ * `Seed` as its observed text), or one that opens a code span whose closing backtick is further on and so
+ * turns a `[key::value]` after it into code; this does. Null when the note may change.
+ */
+export function draftPatchTextPolicy(before: string, after: string): string | null {
+  const was = structuralTokens(before);
+  const now = structuralTokens(after);
+  const dropped = missingFrom(was, now);
+  if (dropped.length) return `it would change or drop ${dropped.join(", ")} in the note; a prose edit keeps them`;
+  const added = missingFrom(now, was);
+  if (added.length) return `it would add ${added.join(", ")} to the note; a prose edit adds no links, anchors or properties`;
+  return null;
+}
+
 // ── holds: which door has a live draft of which note ────────────────────────
 
 export interface DraftHold {
@@ -203,14 +219,27 @@ export class DraftHolds {
 
   /** The door to route a note's patch to: the most recently renewed live hold, if any. */
   holderOf(blockId: string, live: (clientId: string) => boolean): DraftHold | null {
+    return this.holdersOf(blockId, live)[0] ?? null;
+  }
+
+  /**
+   * Every live hold on a note, most recently renewed first. More than one door can hold a draft of the same
+   * note; a patch then goes to none of them (which one the person is typing in isn't the service's to guess).
+   */
+  holdersOf(blockId: string, live: (clientId: string) => boolean): DraftHold[] {
     this.expire();
-    let best: DraftHold | null = null;
+    const found: DraftHold[] = [];
     for (const hold of this.holds.values()) {
       if (hold.blockId !== blockId) continue;
       if (!live(hold.clientId)) { this.holds.delete(hold.holdId); continue; }
-      if (!best || hold.renewedAt > best.renewedAt) best = hold;
+      found.push({ ...hold });
     }
-    return best ? { ...best } : null;
+    return found.sort((left, right) => right.renewedAt - left.renewedAt);
+  }
+
+  has(holdId: string): boolean {
+    this.expire();
+    return this.holds.has(holdId);
   }
 
   list(): DraftHold[] {
@@ -227,6 +256,12 @@ export class DraftHolds {
 // ── the proposal: a reply block holding a patch that didn't apply ────────────
 
 export const DRAFT_PROPOSAL_TYPE = "draft-proposal";
+
+/**
+ * The most a proposal's hidden `[draft-patch::…]` line may hold (bytes of base64url). A patch too big to keep
+ * as a proposal is refused with an error instead, so the agent still has its text and nothing is written.
+ */
+export const DRAFT_PROPOSAL_MAX_PAYLOAD = 256 * 1024;
 
 export interface DraftProposal {
   version: 1;
@@ -255,21 +290,40 @@ function labelOf(title: string): string {
  * readers like any metadata line).
  */
 export function proposalText(proposal: DraftProposal, names: (blockId: string) => string = id => id): string {
+  const payload = Buffer.from(JSON.stringify(proposal), "utf8").toString("base64url");
+  if (payload.length > DRAFT_PROPOSAL_MAX_PAYLOAD) {
+    throw new Error(`The patch is too large to keep as a proposal (${Math.ceil(payload.length / 1024)} KB of the ${DRAFT_PROPOSAL_MAX_PAYLOAD / 1024} KB a proposal holds); nothing was changed. Patch a smaller passage`);
+  }
   const who = proposal.actor.actorId ? `@${proposal.actor.actorId}` : proposal.actor.author === "agent" ? "an agent" : "someone";
   const targets = [...new Set(proposal.edits.map(edit => edit.blockId))].map(id => `((${id}|${labelOf(names(id))}))`).join(", ");
   const lines = [
     `Proposed edit from ${who}: not applied, ${proposal.reason} [type::${DRAFT_PROPOSAL_TYPE}] [proposal-status::open]`,
-    `[draft-patch::${Buffer.from(JSON.stringify(proposal), "utf8").toString("base64url")}]`,
+    `[draft-patch::${payload}]`,
     `To ${targets}. A applies it anyway, as an ordinary edit.`,
   ];
   for (const edit of proposal.edits) {
     for (const [index, span] of edit.patches.entries()) {
-      const fence = fenceFor(span.observed + span.replacement);
       lines.push("", `In ${labelOf(names(edit.blockId))}${edit.patches.length > 1 ? ` (${index + 1} of ${edit.patches.length})` : ""}, this:`,
-        fence, span.observed, fence, "becomes:", fence, span.replacement, fence);
+        ...shownSpan(span));
     }
   }
   return lines.join("\n");
+}
+
+/** How a proposal shows one span: the passage and what it becomes, each fenced. */
+function shownSpan(span: DraftPatchSpan): string[] {
+  const fence = fenceFor(span.observed + span.replacement);
+  return [fence, span.observed, fence, "becomes:", fence, span.replacement, fence];
+}
+
+/**
+ * Whether a proposal block still shows the patch it holds: every span's passage and replacement, fenced as
+ * `proposalText` wrote them. "Apply anyway" applies only what the person can read in the proposal, never a
+ * hidden payload that says something else.
+ */
+export function proposalShowsPatch(text: string, proposal: DraftProposal): boolean {
+  return proposal.edits.every(edit => Array.isArray(edit.patches) && edit.patches.every(span =>
+    typeof span?.observed === "string" && typeof span.replacement === "string" && text.includes(`\n${shownSpan(span).join("\n")}`)));
 }
 
 /** The patch a proposal block holds, or null when the block isn't one. */

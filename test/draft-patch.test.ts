@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OutlinerClient } from "../src/client";
 import { applyLocated, blockStartAt, locateSpan, locateSpanForced, locateSpans, mapOffset, markStart, spanContext, utf16Range, type DraftPatchSpan } from "../src/draft-patch-compare";
-import { DraftHolds, draftPatchPolicy, parseProposal, structuralTokens, type DraftHolderRequest, type DraftPatchResult } from "../src/draft-patch";
+import { DRAFT_PROPOSAL_MAX_PAYLOAD, DraftHolds, draftPatchPolicy, draftPatchTextPolicy, parseProposal, structuralTokens, type DraftHolderRequest, type DraftPatchResult } from "../src/draft-patch";
 import { tidyAboveMark, tidyLine } from "../src/draft-patch-demo";
 import { OutlinerServer } from "../src/server";
 import { OutlinerStore } from "../src/store";
@@ -34,7 +34,7 @@ const TIDY = { author: "agent" as const, actorId: "tidy" };
  * A stand-in for a door: it subscribes, holds a draft of one note and answers the service's `draft`
  * events against its own buffer, with the same compare the door vendors.
  */
-async function fakeDoor(client: OutlinerClient, clientId: string, blockId: string, text: string, revision: number, options: { leaseMs?: number; answer?: boolean; refuse?: string } = {}) {
+async function fakeDoor(client: OutlinerClient, clientId: string, blockId: string, text: string, revision: number, options: { leaseMs?: number; answer?: boolean; refuse?: string; slowPatchMs?: number } = {}) {
   const door = { text, revision, requests: [] as DraftHolderRequest[], holdId: "" };
   const connected = Promise.withResolvers<void>();
   const patches = new Map<string, { before: string }>();
@@ -63,7 +63,9 @@ async function fakeDoor(client: OutlinerClient, clientId: string, blockId: strin
         door.text = `${door.text}\n${request.line}`;
         answer = { applied: true };
       }
-      await client.request({ action: "drafts.answer", requestId: request.requestId, clientId, answer: answer as never });
+      // A slow door: it applies the patch at once, but its answer comes after the service stopped waiting.
+      if (request.kind === "patch" && options.slowPatchMs) await Bun.sleep(options.slowPatchMs);
+      await client.request({ action: "drafts.answer", requestId: request.requestId, clientId, answer: answer as never }).catch(() => undefined);
     },
   });
   cleanups.push(() => watcher.stop());
@@ -292,19 +294,114 @@ describe("draft.patch over the protocol", () => {
     await expect(client.request({ action: "drafts.heartbeat", holdId: door.holdId })).rejects.toThrow("expired");
   });
 
-  test("a door that stops answering loses its hold, and the patch becomes a proposal, not a saved write", async () => {
+  test("a door that stops answering keeps its hold: the patch becomes a proposal and nothing is written under its draft", async () => {
     const { store, client } = await service();
     const note = store.create("Morning plan\nbeans   here");
-    await fakeDoor(client, "door-4", note.id, note.text, note.revision, { answer: false });
+    const door = await fakeDoor(client, "door-4", note.id, note.text, note.revision, { answer: false, leaseMs: 6_000 });
     const result = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: note.id, revision: note.revision, patches: [spanOf(note.text, "beans   here", "beans here")], mutation: TIDY });
-    expect(result).toMatchObject({ outcome: "proposed", embedded: "saved" });
+    expect(result).toMatchObject({ outcome: "proposed", embedded: null });
     if (result.outcome === "proposed") expect(result.reason).toContain("didn't answer");
-    expect(store.require(note.id).text).toContain("beans   here");
-    // The hold is gone now, so the next patch goes to the saved note.
-    const now = store.require(note.id);
-    const next = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: note.id, revision: now.revision, patches: [spanOf(now.text, "beans   here", "beans here")], mutation: TIDY });
-    expect(next).toMatchObject({ outcome: "applied", edits: [{ route: "saved" }] });
+    // The person's draft may still be there: the saved note gets neither the patch nor the proposal's embed.
+    expect(store.require(note.id).text).toBe(note.text);
+    // Asked again while it's still silent, it fails at once, and still nothing is written.
+    const started = Date.now();
+    const next = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: note.id, revision: note.revision, patches: [spanOf(note.text, "beans   here", "beans here")], mutation: TIDY });
+    expect(next).toMatchObject({ outcome: "proposed", embedded: null });
+    expect(Date.now() - started).toBeLessThan(1_500);
+    expect(store.require(note.id).text).toBe(note.text);
+    // Only once its lease runs out (a frozen or dead door stops renewing) does the saved note take patches.
+    await Bun.sleep(Math.max(0, 6_100 - (Date.now() - started) - 2_500));
+    const later = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: note.id, revision: note.revision, patches: [spanOf(note.text, "beans   here", "beans here")], mutation: TIDY });
+    expect(later).toMatchObject({ outcome: "applied", edits: [{ route: "saved" }] });
+    expect(door.requests.every(request => request.kind === "read")).toBe(true);
+  }, 20_000);
+
+  test("a slow door that applies a patch after the deadline is asked to take it back", async () => {
+    const { store, client } = await service();
+    const note = store.create("Morning plan");
+    const live = "Morning plan\nbeans   here\nstill typing";
+    const door = await fakeDoor(client, "door-slow", note.id, live, note.revision, { slowPatchMs: 3_000 });
+    const result = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: note.id, revision: note.revision, patches: [spanOf(live, "beans   here", "beans here")], mutation: TIDY });
+    expect(result.outcome).toBe("proposed");
+    await Bun.sleep(700);
+    expect(door.requests.map(request => request.kind)).toEqual(expect.arrayContaining(["patch", "revert"]));
+    expect(door.text).toBe(live);
+    expect(store.require(note.id).text).toBe("Morning plan");
   }, 15_000);
+
+  test("two doors holding drafts of one note: the patch goes to neither, and nothing is written", async () => {
+    const { store, client } = await service();
+    const note = store.create("Morning plan\nbeans   here");
+    const one = await fakeDoor(client, "door-a2", note.id, note.text, note.revision);
+    const two = await fakeDoor(client, "door-b2", note.id, note.text, note.revision);
+    const result = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: note.id, revision: note.revision, patches: [spanOf(note.text, "beans   here", "beans here")], mutation: TIDY });
+    expect(result).toMatchObject({ outcome: "proposed", embedded: null });
+    if (result.outcome === "proposed") expect(result.reason).toContain("more than one door");
+    expect(one.text).toBe(note.text);
+    expect(two.text).toBe(note.text);
+    expect([...one.requests, ...two.requests].filter(request => request.kind === "patch" || request.kind === "embed")).toEqual([]);
+    expect(store.require(note.id).text).toBe(note.text);
+  });
+
+  test("the guard sees the whole note: an edit inside a token, or a backtick that swallows one, is refused", async () => {
+    expect(draftPatchTextPolicy("see [[Seed list]] now", "see [[Weed list]] now")).toContain("[[Seed list]]");
+    expect(draftPatchTextPolicy("Plan and [kind::plan]", "Plan` and [kind::plan]")).toContain("[kind::plan]");
+    expect(draftPatchTextPolicy("Two  beds ^beds", "Two beds ^beds")).toBeNull();
+    const { store, client } = await service();
+    const saved = store.create("Beds\nsee [[Seed list]] and the anchor ^beds\nthen `code` [kind::plan]");
+    for (const [observed, replacement] of [["Seed", "Weed"], ["bed", "bad"], ["then", "then`"]] as const) {
+      const now = store.require(saved.id);
+      const result = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: saved.id, revision: now.revision, patches: [spanOf(now.text, observed, replacement)], mutation: TIDY });
+      expect(result.outcome).toBe("proposed");
+    }
+    expect(store.require(saved.id).text.split("\n!((")[0]).toBe(saved.text);
+    // The same in a live draft: the door is never asked to patch.
+    const held = store.create("Held");
+    const live = "Held\nsee [[Seed list]] here";
+    const door = await fakeDoor(client, "door-guard", held.id, live, held.revision);
+    const refused = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: held.id, revision: held.revision, patches: [spanOf(live, "Seed", "Weed")], mutation: TIDY });
+    expect(refused.outcome).toBe("proposed");
+    expect(door.requests.filter(request => request.kind === "patch")).toEqual([]);
+    expect(door.text.startsWith(live)).toBe(true);
+  });
+
+  test("an agent can't force its own proposal; the person can, and only what the proposal shows", async () => {
+    const { store, client } = await service();
+    const note = store.create("Beds\nThe fence  bed. ^fence\n\n@tidy go");
+    const refused = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: note.id, revision: note.revision, patches: [spanOf(note.text, "The fence  bed. ^fence", "The fence bed.")], mark: { text: "@tidy go" }, mutation: TIDY });
+    expect(refused.outcome).toBe("proposed");
+    if (refused.outcome !== "proposed") return;
+    await expect(client.request({ action: "draft.proposal.apply", proposalId: refused.proposalId, mutation: TIDY })).rejects.toThrow("only the person applies that anyway");
+    expect(store.require(note.id).text).toContain("^fence");
+
+    // A proposal whose text was changed so it shows something else than it holds isn't applied.
+    const proposal = store.require(refused.proposalId);
+    const tampered = store.update(proposal.id, proposal.text.replace("becomes:\n```\nThe fence bed.", "becomes:\n```\nThe fence bed. ^fence"), proposal.revision, { author: "agent", actorId: "tidy" });
+    await expect(client.request({ action: "draft.proposal.apply", proposalId: tampered.id, mutation: { author: "user" } })).rejects.toThrow("no longer shows");
+    store.update(proposal.id, proposal.text, tampered.revision, { author: "user" });
+    await client.request({ action: "draft.proposal.apply", proposalId: proposal.id, mutation: { author: "user" } });
+    expect(store.require(note.id).text).toContain("The fence bed.\n");
+  });
+
+  test("an agent's apply is a patch against the text now: prose only, above the mark", async () => {
+    const { store, client } = await service();
+    const note = store.create("Plan\nbeans   here\n\n@tidy go");
+    const stale = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: note.id, revision: note.revision + 3, patches: [spanOf(note.text, "beans   here", "beans here")], mark: { text: "@tidy go" }, mutation: TIDY });
+    expect(stale.outcome).toBe("proposed");
+    if (stale.outcome !== "proposed") return;
+    const applied = await client.request<{ outcome: string }>({ action: "draft.proposal.apply", proposalId: stale.proposalId, mutation: TIDY });
+    expect(applied.outcome).toBe("applied");
+    expect(store.require(note.id).text).toStartWith("Plan\nbeans here\n");
+  });
+
+  test("a proposal's hidden patch has a size cap: a bigger patch is refused whole, and nothing is written", async () => {
+    const { store, client } = await service();
+    const big = "word ".repeat(Math.ceil(DRAFT_PROPOSAL_MAX_PAYLOAD / 5));
+    const note = store.create(`Plan\n${big}`);
+    await expect(client.request({ action: "draft.patch", blockId: note.id, revision: note.revision + 1, patches: [{ observed: big, replacement: big.toUpperCase() }], mutation: TIDY })).rejects.toThrow("too large to keep as a proposal");
+    expect(store.require(note.id).text).toBe(`Plan\n${big}`);
+    expect(store.require(note.id).revision).toBe(note.revision);
+  });
 
   test("several notes apply together or not at all", async () => {
     const { store, client } = await service();

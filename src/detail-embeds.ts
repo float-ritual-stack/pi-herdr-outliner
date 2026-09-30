@@ -423,7 +423,7 @@ async function projectEmbed(
   if (!isVirtualBranchDefinition(target)) {
     const provenance = concatDocuments([
       generatedDocument(`Embedded block: ((${blockId}))\n`, 'embed heading'),
-      presentedSource(observeDocument({kind: 'block', blockId: target.id}, target.text, target.revision)),
+      withoutDraftPatchPayload(presentedSource(observeDocument({kind: 'block', blockId: target.id}, target.text, target.revision))),
     ]);
     return {
       text: provenance.text,
@@ -441,6 +441,16 @@ async function projectEmbed(
       `PROJECTION FAILED · ${boundedError(error)}`,
     );
   }
+}
+
+/**
+ * A draft proposal's hidden patch (`[draft-patch::…]`, PIE-501) is machine data, never shown: an embed of the
+ * proposal keeps the line (so the embed's line mapping holds) but not the payload.
+ */
+function withoutDraftPatchPayload(document: MappedDocument): MappedDocument {
+  const match = /\[draft-patch::[A-Za-z0-9_-]*\]/.exec(document.text);
+  if (!match) return document;
+  return concatDocuments([sliceDocument(document, 0, match.index), sliceDocument(document, match.index + match[0].length)]);
 }
 
 /** Generated text that no parser reads as a property, hashtag, reference or Markdown control. */
