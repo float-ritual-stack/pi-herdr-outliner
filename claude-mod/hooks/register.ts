@@ -18,6 +18,18 @@ import {
   scratchPaneOf,
 } from './references'
 import { WORK_TOOLS } from './work-tools'
+import {
+  type DoorEnv,
+  envSummaryOf,
+  HELP_PROBE,
+  inDoorEnv,
+  knowsWhere,
+  WHERE_BLOCK,
+  WHERE_TIMEOUT_MS,
+  WHERE_WAIT_MS,
+  whereSummaryOf,
+  whereText,
+} from './where'
 
 /**
  * What drawing a reply needs, read once per session: the Outliner workspace the
@@ -37,6 +49,11 @@ const envFor = (workspace: string) => ({ OUTLINER_WORKSPACE_ROOT: workspace })
 let splitScratchPane: string | undefined
 /** Shows run one at a time, so concurrent clicks and tool calls split one pane. */
 let showQueue: Promise<unknown> = Promise.resolve()
+/**
+ * Where this session runs (`ep0ch where`'s summary), started at session.start
+ * for the first prompt's context; null outside a door.
+ */
+let whereLoad: Promise<string | null> | undefined
 
 /**
  * Registers Recent Mentions: each completed main-loop answer in a configured
@@ -61,6 +78,10 @@ export function register(on: On, options: PluginOptions): void {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     $.clock.after(0, () => void loadReferences($, option))
+    // Off the start's dispatch: a slow or missing `ep0ch` never holds the session up.
+    whereLoad = new Promise(resolve => {
+      $.clock.after(0, () => void loadWhere($).then(resolve, () => resolve(null)))
+    })
     await $.tool.register({
       name: 'show',
       description:
@@ -85,6 +106,23 @@ export function register(on: On, options: PluginOptions): void {
       await $.tool.register({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema })
     }
     return result
+  })
+
+  // Where this session runs, as one context block of the first prompt (not a pane): waited for briefly, else
+  // the variables alone. Nothing is added outside a door, and a failure adds nothing.
+  on('prompt.context', async ($, e, next) => {
+    const result = await next(e)
+    try {
+      const env = await doorEnvOf($)
+      if (!inDoorEnv(env)) return result
+      // Before session.start's work is queued (or after a reload): start it once, here.
+      const load = (whereLoad ??= loadWhere($).catch(() => null))
+      const summary = (await Promise.race([load, $.clock.sleep(WHERE_WAIT_MS).then(() => null)])) ?? envSummaryOf(env)
+      const block = { name: WHERE_BLOCK, text: whereText(summary) }
+      return { ...result, blocks: [...result.blocks.filter(b => b.name !== WHERE_BLOCK), block] }
+    } catch {
+      return result
+    }
   })
 
   for (const tool of WORK_TOOLS) {
@@ -170,6 +208,40 @@ export function register(on: On, options: PluginOptions): void {
 }
 
 const PLUGIN_ID = 'float.pi-outliner'
+
+async function doorEnvOf($: EngineInterface): Promise<DoorEnv> {
+  const [EP0CH_NEST, EP0CH_CONTROL, EP0CH_TILE, EP0CH_TILE_ID] = await Promise.all([
+    $.env.get('EP0CH_NEST'),
+    $.env.get('EP0CH_CONTROL'),
+    $.env.get('EP0CH_TILE'),
+    $.env.get('EP0CH_TILE_ID'),
+  ])
+  return { EP0CH_NEST, EP0CH_CONTROL, EP0CH_TILE, EP0CH_TILE_ID }
+}
+
+/**
+ * `ep0ch where --json`'s one-line summary when this session runs in a door
+ * (EP0CH_NEST or EP0CH_CONTROL set); the variables alone when `ep0ch` isn't
+ * on PATH, is too old or fails; null outside a door. `where` only reads.
+ */
+async function loadWhere($: EngineInterface): Promise<string | null> {
+  const env = await doorEnvOf($)
+  if (!inDoorEnv(env)) return null
+  try {
+    // An ep0ch older than `where` would read `where` as a socket path and open a door on the terminal-less
+    // session (attaching, maybe creating, an outline): its help must list `where` first. An ep0ch older than
+    // `help` (before ep0ch-door #31) reads `help` the same way; the probe socket it then picks instead of
+    // the default one doesn't exist, so it stops at "no carrier" before opening anything.
+    const help = await $.process.run(['ep0ch', 'help', HELP_PROBE], { timeoutMs: 5000 })
+    if (help.exitCode !== 0 || !knowsWhere(help.stdout)) return envSummaryOf(env)
+    const ran = await $.process.run(['ep0ch', 'where', '--json'], { timeoutMs: WHERE_TIMEOUT_MS })
+    const summary = ran.exitCode === 0 ? whereSummaryOf(ran.stdout) : null
+    if (summary) return summary
+  } catch {
+    // Not on PATH, or it didn't answer in time: the variables alone.
+  }
+  return envSummaryOf(env)
+}
 
 /**
  * The installed Outliner's root, as Herdr reports it: exactly one enabled

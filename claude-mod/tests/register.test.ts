@@ -3,6 +3,9 @@ import { describe, expect, mock, test, tier } from 'claude-code/testing'
 
 tier('user')
 
+const result = (exitCode: number, stdout: string, stderr: string): ProcessRunResult =>
+  ({ exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false })
+
 const WORKSPACE = '/work/outliner'
 
 const HERDR_LISTING = JSON.stringify({
@@ -88,7 +91,7 @@ const CLIENTS = JSON.stringify([
 const CLIENTS_WITHOUT_SCRATCH = JSON.stringify(JSON.parse(CLIENTS).slice(0, 2))
 
 function succeeding(run: Run): ProcessRunResult {
-  const ok = (stdout: string) => ({ exitCode: 0, stdout, stderr: '' })
+  const ok = (stdout: string) => result(0, stdout, '')
   if (run.argv[0] === 'herdr') {
     if (run.argv[1] === 'pane') return ok(PANES)
     return ok(run.argv[2] === 'pane' ? '{"result":{"plugin_pane":{"pane":{"pane_id":"w:p10"}}}}' : HERDR_LISTING)
@@ -164,11 +167,8 @@ describe('register', () => {
   })
 
   test('a disabled Outliner plugin is skipped quietly', async ($, on) => {
-    const session = sessionIn(on, WORKSPACE, () => ({
-      exitCode: 0,
-      stdout: HERDR_LISTING.replace('"enabled":true', '"enabled":false'),
-      stderr: '',
-    }))
+    const session = sessionIn(on, WORKSPACE, () =>
+      result(0, HERDR_LISTING.replace('"enabled":true', '"enabled":false'), ''))
     await session.begin(() => $.session.start(START))
 
     await $.turn.complete(ANSWER)
@@ -182,7 +182,7 @@ describe('register', () => {
     const session = sessionIn(on, WORKSPACE, run =>
       run.argv[0] === 'herdr'
         ? succeeding(run)
-        : { exitCode: 1, stdout: '', stderr: 'trace\nerror: connect ENOENT outliner.sock' },
+        : result(1, '', 'trace\nerror: connect ENOENT outliner.sock'),
     )
     await session.begin(() => $.session.start(START))
 
@@ -261,7 +261,7 @@ describe('register', () => {
 
   test("with no pane of its own, a click splits one below the Claude pane for this session", async ($, on) => {
     const session = sessionIn(on, WORKSPACE, run =>
-      run.argv.includes('clients') ? { exitCode: 0, stdout: CLIENTS_WITHOUT_SCRATCH, stderr: '' } : succeeding(run))
+      run.argv.includes('clients') ? result(0, CLIENTS_WITHOUT_SCRATCH, '') : succeeding(run))
     await session.begin(() => $.session.start(START))
     const drawn = await $.ui.mount({
       plugin: 'pi-outliner',
@@ -285,7 +285,7 @@ describe('register', () => {
   test("a mid-edit Claude pane is a toast, never a second split", async ($, on) => {
     const session = sessionIn(on, WORKSPACE, run =>
       run.argv.includes('link')
-        ? { exitCode: 1, stdout: '', stderr: 'error: Destination is protected: active edit\nBun v1.3.14 (Linux x64)' }
+        ? result(1, '', 'error: Destination is protected: active edit\nBun v1.3.14 (Linux x64)')
         : succeeding(run))
     await session.begin(() => $.session.start(START))
     const drawn = await $.ui.mount({
@@ -307,12 +307,12 @@ describe('register', () => {
     const session = sessionIn(on, WORKSPACE, run => {
       if (splitOf([run])) split = true
       if (run.argv[1] === 'pane' && run.argv[2] === 'list' && split) {
-        return { exitCode: 0, stdout: PANES.replace('"w:p3"', '"w:p10"'), stderr: '' }
+        return result(0, PANES.replace('"w:p3"', '"w:p10"'), '')
       }
       if (run.argv.includes('clients')) {
         const clients = JSON.parse(CLIENTS_WITHOUT_SCRATCH)
         if (split) clients.push({ clientId: 'new-pane', role: 'detail', contextId: 'session-1', runtime: { paneId: 'w:p10' } })
-        return { exitCode: 0, stdout: JSON.stringify(clients), stderr: '' }
+        return result(0, JSON.stringify(clients), '')
       }
       return succeeding(run)
     })
@@ -362,7 +362,7 @@ describe('register', () => {
     test('show opens the note in the door as an agent, from its own tile, and splits nothing in Herdr', async ($, on) => {
       // The door says where the tile's opens landed (its link).
       const session = sessionIn(on, WORKSPACE, run =>
-        run.argv.includes('door-open') ? { exitCode: 0, stdout: '{"reader":"centre","id":"x"}\n', stderr: '' } : succeeding(run),
+        run.argv.includes('door-open') ? result(0, '{"reader":"centre","id":"x"}\n', '') : succeeding(run),
       `${WORKSPACE}/`, DOOR)
       on('tool.register', ($, e) => ({ value: { tool: `mcp__pi-outliner__${e.name}` } }))
       await session.begin(() => $.session.start(START))
@@ -381,7 +381,7 @@ describe('register', () => {
 
     test('with no door answering (it quit), show falls back to Claude\'s pane in Herdr', async ($, on) => {
       const session = sessionIn(on, WORKSPACE, run =>
-        run.argv.includes('door-open') ? { exitCode: 3, stdout: '', stderr: 'error: no door at /state/x (ECONNREFUSED)\n' } : succeeding(run),
+        run.argv.includes('door-open') ? result(3, '', 'error: no door at /state/x (ECONNREFUSED)\n') : succeeding(run),
       `${WORKSPACE}/`, DOOR)
       on('tool.register', ($, e) => ({ value: { tool: `mcp__pi-outliner__${e.name}` } }))
       await session.begin(() => $.session.start(START))
@@ -395,7 +395,7 @@ describe('register', () => {
     test('a door that refuses is denied with its reason, never shown elsewhere', async ($, on) => {
       const session = sessionIn(on, WORKSPACE, run =>
         run.argv.includes('door-open')
-          ? { exitCode: 1, stdout: '', stderr: "error: the menu screen can't open blocks; open the board or desk first\n" }
+          ? result(1, '', "error: the menu screen can't open blocks; open the board or desk first\n")
           : succeeding(run),
       `${WORKSPACE}/`, DOOR)
       on('tool.register', ($, e) => ({ value: { tool: `mcp__pi-outliner__${e.name}` } }))
@@ -409,7 +409,7 @@ describe('register', () => {
 
     test('a click on a reference opens it in the door too', async ($, on) => {
       const session = sessionIn(on, WORKSPACE, run =>
-        run.argv.includes('door-open') ? { exitCode: 0, stdout: '{}\n', stderr: '' } : succeeding(run),
+        run.argv.includes('door-open') ? result(0, '{}\n', '') : succeeding(run),
       `${WORKSPACE}/`, { ...DOOR, EP0CH_AGENT: 'door-claude' })
       on('tool.register', ($, e) => ({ value: { tool: `mcp__pi-outliner__${e.name}` } }))
       await session.begin(() => $.session.start(START))
@@ -423,7 +423,7 @@ describe('register', () => {
 
   test('a workboard tool runs the installed CLI in the workspace as this Claude session', async ($, on) => {
     const session = sessionIn(on, `${WORKSPACE}/projects/mod`, run =>
-      run.argv.includes('work') ? { exitCode: 0, stdout: '{"workId":"PIE-008","workStage":"review","revision":4}\n', stderr: '' } : succeeding(run),
+      run.argv.includes('work') ? result(0, '{"workId":"PIE-008","workStage":"review","revision":4}\n', '') : succeeding(run),
     )
     on('tool.register', ($, e) => ({ value: { tool: `mcp__pi-outliner__${e.name}` } }))
     await session.begin(() => $.session.start({ ...START, cwd: `${WORKSPACE}/projects/mod` }))
@@ -466,7 +466,7 @@ describe('register', () => {
   test('a refused workboard change is denied with the reason, and unusable input never runs', async ($, on) => {
     const session = sessionIn(on, WORKSPACE, run =>
       run.argv.includes('work')
-        ? { exitCode: 1, stdout: '', stderr: 'error: Unknown work stage "shipping"; use one of queued, doing\n' }
+        ? result(1, '', 'error: Unknown work stage "shipping"; use one of queued, doing\n')
         : succeeding(run),
     )
     on('tool.register', ($, e) => ({ value: { tool: `mcp__pi-outliner__${e.name}` } }))

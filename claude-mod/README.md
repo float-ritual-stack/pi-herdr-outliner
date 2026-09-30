@@ -65,6 +65,24 @@ notes.
   `FORCE_HYPERLINK=1` in the settings `env` block to draw the text alone.
 - A target the Outliner cannot resolve is a toast, never a new page.
 
+### Where this session runs
+
+In a door tile (`EP0CH_NEST` or `EP0CH_CONTROL` set), the mod runs `ep0ch where
+--json` when the session starts. The first prompt then carries its one-line
+summary as a context block (`whereAmI`), not a pane: the layers the session runs
+in, outermost first (`ssh:pts/5 › herdr:w1:p1 › door:<pid>/desk/t1:claude`, ep0ch-door's
+`EP0CH_NEST`), which of them are live, and where the person's keys are. Claude
+then doesn't have to guess from the repo name or a window title.
+
+- `where` only reads. The mod asks `ep0ch help` first. An ep0ch older than `where`
+  would take the word for a socket and open a door, so it is never run. The help
+  call carries a socket path that never exists, so an ep0ch older than `help` (which
+  would take `help` the same way) stops at "no carrier" instead of opening a door.
+- Without a usable `ep0ch` (not on PATH, too old, an error, or no answer within
+  1.5s of the first prompt), the block has the variables alone and says they are unchecked.
+- It never blocks or fails the session: the work runs after the start, and any
+  failure leaves the context as it was. Outside a door, nothing is added.
+
 ## Workboard tools
 
 In the same workspaces Claude also gets `work_create`, `work_stage`, `work_set`,
