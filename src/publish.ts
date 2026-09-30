@@ -632,27 +632,31 @@ export class Publisher {
    * embeds them. Walks up one level per request, as `lockedIds` does.
    */
   private async extensionHiddenIds(blocks: ReadonlyMap<string, string>, hostBlockId: string): Promise<Map<string, string>> {
-    const hidden = new Map<string, string>();
-    for (const [id, extension] of blocks) {
-      let frontier: string | null = id;
-      let opted = false;
-      for (const start of [hostBlockId]) {
-        const host = await this.client.request<BlockReadCollection>({ action: "blocks.read", ids: [start], fields: ["properties"] });
-        opted ||= host.blocks.some((block) => publishesExtension(block.properties ?? [], extension));
-      }
-      for (let level = 0; frontier && !opted && level < LOCK_WALK_LIMIT; level++) {
+    // The page that embeds them, and every block above it, may opt in.
+    const chain = async (start: string) => {
+      const properties: BlockProperty[][] = [];
+      let frontier: string | null = start;
+      for (let level = 0; frontier && level < LOCK_WALK_LIMIT; level++) {
         const read: BlockReadCollection = await this.client.request<BlockReadCollection>({
           action: "blocks.read", ids: [frontier], fields: ["parent", "properties"],
         });
         const block = read.blocks[0];
         if (!block) break;
-        opted = publishesExtension(block.properties ?? [], extension);
+        properties.push(block.properties ?? []);
         frontier = block.parentId ?? null;
       }
+      return properties;
+    };
+    const host = await chain(hostBlockId);
+    const hidden = new Map<string, string>();
+    for (const [id, extension] of blocks) {
+      const opted = host.some((properties) => publishesExtension(properties, extension)) ||
+        (await chain(id)).some((properties) => publishesExtension(properties, extension));
       if (!opted) hidden.set(id, extension);
     }
     return hidden;
   }
+
 
   /**
    * The index as this page may link it: a target locked since the index was

@@ -961,7 +961,8 @@ export class ResourceCatalog {
   private readonly pendingRemoteEntityRefreshes =
     new Map<string, Promise<ResourceDescription>>();
   readonly retention: ResourceRetentionRepository;
-  readonly remoteEntityStaleAfterMs: number;
+  /** When a fetched Jira or Linear copy reads as stale; an installed handler's `staleAfter` sets it. */
+  remoteEntityStaleAfterMs: number;
   /**
    * Called after a remote entity refresh commits, with what the provider
    * returned (including an extension's record). The service writes record

@@ -1706,7 +1706,10 @@ export const OUTLINER_CAPABILITIES = [
   "resources.projection.materialize",
   /** `resources.projection.refresh`: fetch one ticket now, from any client (PIE-445). */
   "resources.projection.refresh",
-  /** Extension records: owned blocks (`extension.owner` on `blocks.owner`), refused writes, `[publish.ext::…]`. */
+  /**
+   * Extension records: a ticket kept as blocks an extension owns (projections carry `record`, authored links
+   * `recordBlockId`), writes to them refused, `[publish.ext::…]` for the publisher.
+   */
   "extensions.records",
   /** `activity.recent` takes `extensions` (`exclude` or `only`); `changes.since` entries keep `actor`. */
   "activity.extensions",

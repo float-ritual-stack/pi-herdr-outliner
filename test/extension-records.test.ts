@@ -295,6 +295,8 @@ test("the publisher leaves ticket blocks off a published page unless the page op
   const page = await create("Depot rollout PC-1 [jira::PC-1] [publish::true] [page::Depot rollout]\nOur plan for the switch.");
   const record = await recordOf(page.id);
   const host = await create(`Weekly summary [publish::true] [page::Weekly summary]\n!((${record.id}))`);
+  // An embed in a child of the page: the page's opt-in covers it.
+  await create(`Quoted ticket\n!((${record.id}))`, page.id);
   const publisher = new Publisher({ client });
   cleanups.push(() => publisher.stop());
   await publisher.start();
@@ -312,7 +314,9 @@ test("the publisher leaves ticket blocks off a published page unless the page op
   const hostNow = store.get(host.id)!;
   await client.request({ action: "update", blockId: host.id, text: hostNow.text.replace("[publish::true]", "[publish::true] [publish.ext::jira]"), expectedRevision: hostNow.revision, mutation: PERSON });
   await Bun.sleep(50);
-  expect(await get("/p/depot-rollout")).toContain("Rollout checklist for the depot switch");
+  const opted = await get("/p/depot-rollout");
+  expect(opted).toContain("Rollout checklist for the depot switch");
+  expect(opted).not.toContain("jira data, not published");
   expect(await get("/p/weekly-summary")).toContain("Steps for the switch.");
 });
 
@@ -352,4 +356,32 @@ test("follow-authored records who registered, and describe/refresh work without 
   });
   expect(described.remoteEntity?.title).toBe("Label printer drops the last line");
   expect(typeof described.capabilities.refresh.status).toBe("string");
+});
+
+test("a fetch that failed (offline) is tried again on the next open, and one failing ticket doesn't hold up the poll", async () => {
+  const { fake, store, server, client, create, recordOf } = await setup();
+  const page = await create("PC-1 Rollout [jira::PC-1]");
+  const record = await recordOf(page.id);
+  const printer = await create("PC-2 Printer [jira::PC-2]");
+  const other = await recordOf(printer.id);
+  fake.status = 503;
+  await client.request({ action: "resources.projection.refresh", blockId: page.id });
+  fake.status = null;
+  fake.issues.get("PC-1")!.status = "Blocked";
+  fake.issues.get("PC-1")!.updated = new Date().toISOString();
+  await client.request({ action: "resources.projection.read", blockId: page.id, materialize: true });
+  const end = Date.now() + 5000;
+  while (!store.get(record.id)!.properties.some((p) => p.value === "Blocked") && Date.now() < end) await Bun.sleep(20);
+  expect(store.get(record.id)!.properties).toContainEqual({ key: "jira.status", value: "Blocked" });
+
+  // PC-1 now fails to read (gone from Jira); PC-2 changed: the poll still applies PC-2.
+  fake.issues.get("PC-1")!.updated = new Date().toISOString();
+  const pc1 = fake.issues.get("PC-1")!;
+  fake.issues.get("PC-2")!.status = "Done";
+  fake.issues.get("PC-2")!.updated = new Date().toISOString();
+  const originalId = pc1.id;
+  pc1.id = "29999";
+  await server.extensionSync.poll();
+  pc1.id = originalId;
+  expect(store.get(other.id)!.properties).toContainEqual({ key: "jira.status", value: "Done" });
 });

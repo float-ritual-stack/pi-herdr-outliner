@@ -57,6 +57,11 @@ export class ExtensionSync {
   private readonly scheduled = new Set<string>();
   private timer: ReturnType<typeof setTimeout> | null = null;
   private lastPoll: number | null = null;
+  /** Pages whose `--comments` the last write satisfied, by `page\0key`. */
+  private readonly commentsWritten = new Set<string>();
+  /** Resources whose provider returned no record (a contract 1 install): nothing to keep as blocks. */
+  private readonly recordless = new Set<string>();
+  private pollEveryMs = DEFAULT_POLL_MS;
   private stopped = true;
   private described: Promise<ExtensionDescription | null> | null = null;
   lastPollResult: { at: string; checked: number; changed: number; error?: string } | null = null;
@@ -98,10 +103,13 @@ export class ExtensionSync {
   private async schedulePoll(): Promise<void> {
     if (this.stopped) return;
     const described = await this.extension();
+    const handler = described?.handlers.find((candidate) => candidate.key === "jira");
     const every = this.options.pollMs ??
-      (Number(process.env.OUTLINER_EXTENSION_POLL_MS) ||
-        minutes(described?.handlers.find((handler) => handler.key === "jira")?.pollEvery) ||
-        DEFAULT_POLL_MS);
+      (Number(process.env.OUTLINER_EXTENSION_POLL_MS) || minutes(handler?.pollEvery) || DEFAULT_POLL_MS);
+    if (every > 0) this.pollEveryMs = every;
+    // The manifest's stale age is the one the catalog applies to its copies.
+    const stale = minutes(handler?.staleAfter);
+    if (stale) this.store.resources.remoteEntityStaleAfterMs = stale;
     if (every <= 0 || this.stopped) return;
     this.timer = setTimeout(() => {
       void this.poll().finally(() => this.schedulePoll());
@@ -182,10 +190,13 @@ export class ExtensionSync {
         const resourceId = await this.resourceFor(key);
         const description = this.store.resources.describe(resourceId, false);
         const freshness = description.remoteStatus?.freshness;
-        const needsComments = (wanted.keys.get(key)?.comments ?? 0) > 0 && record &&
-          this.store.extensionRecords({ parentBlockId: record.blockId, role: "comment" }).length === 0;
-        if (!force && record && freshness !== "stale" && freshness !== "unknown" && !needsComments) {
-          if (description.remoteStatus?.lastError) this.setState(pageBlockId, key, { fetching: false, error: description.remoteStatus.lastError });
+        // Comments asked for since the last write (a new --comments) need the ticket read again, once.
+        const needsComments = (wanted.keys.get(key)?.comments ?? 0) > 0 && !this.commentsWritten.has(`${pageBlockId}\0${key}`);
+        // A fresh copy is enough; a failed or stale one is tried again (a laptop that was offline recovers
+        // on the next open). A provider that returns no record (a contract 1 install) is not asked again
+        // while its copy is fresh: there would be nothing more to write.
+        const settled = freshness === "fresh" || freshness === "refreshing";
+        if (!force && settled && (record ? !needsComments : this.recordless.has(resourceId))) {
           return;
         }
         this.waitFor(resourceId, pageBlockId);
@@ -249,7 +260,9 @@ export class ExtensionSync {
 
   /** A refresh committed: write the records of every page that shows this Resource, now. */
   private observed(resource: Resource, document: RemoteEntityDocument): void {
-    if (resource.provider !== "jira" || !document.record) return;
+    if (resource.provider !== "jira") return;
+    if (!document.record) { this.recordless.add(resource.id); return; }
+    this.recordless.delete(resource.id);
     const record = document.record;
     const pages = new Set([
       ...this.waiting.get(resource.id) ?? [],
@@ -277,6 +290,7 @@ export class ExtensionSync {
           comments: !comments ? null : record.comments ? commentTexts(record, comments) : undefined,
         }));
         this.setState(pageBlockId, key, null);
+        if (comments && record.comments) this.commentsWritten.add(`${pageBlockId}\0${key}`);
       } catch (error) {
         this.setState(pageBlockId, key, { fetching: false, error: error instanceof Error ? error.message : String(error) });
       }
@@ -300,7 +314,11 @@ export class ExtensionSync {
    */
   async poll(): Promise<{ checked: number; changed: number }> {
     const started = this.now;
-    const sinceMinutes = Math.ceil((started - (this.lastPoll ?? started - DEFAULT_POLL_MS)) / 60_000) + 1;
+    // The first poll looks back to the oldest record's last write (the service may have been down),
+    // at most a week; later ones to the last poll that finished.
+    const oldest = Math.min(...this.store.extensionRecords({ extensionId: "jira", role: "record" }).map((row) => Date.parse(row.syncedAt)).filter(Number.isFinite));
+    const from = this.lastPoll ?? Math.max(started - 7 * 24 * 60 * 60_000, Number.isFinite(oldest) ? oldest : started - this.pollEveryMs);
+    const sinceMinutes = Math.ceil((started - from) / 60_000) + 1;
     const bySource = new Map<string, Map<string, string>>();
     for (const row of this.store.extensionRecords({ extensionId: "jira", role: "record" })) {
       if (!row.resourceId) continue;
@@ -322,13 +340,20 @@ export class ExtensionSync {
           : found.flatMap((item) => keys.get(item.locator) ?? []);
         for (const resourceId of new Set(due)) {
           changed += 1;
-          await this.store.resources.refreshRemoteEntity(resourceId, false);
+          // One ticket that fails (the extension refuses it) doesn't hold up the others.
+          try {
+            const refreshed = await this.store.resources.refreshRemoteEntity(resourceId, false);
+            if (refreshed.remoteStatus?.freshness === "failed") failure ??= refreshed.remoteStatus.lastError ?? "a refresh failed";
+          } catch (error) {
+            failure ??= error instanceof Error ? error.message : String(error);
+          }
         }
       } catch (error) {
         failure = error instanceof Error ? error.message : String(error);
       }
     }
-    this.lastPoll = failure ? this.lastPoll : started;
+    // A failed ticket stays failed (the next open retries it); the window moves on for the others.
+    this.lastPoll = started;
     this.lastPollResult = { at: new Date(started).toISOString(), checked, changed, ...(failure ? { error: failure } : {}) };
     return { checked, changed };
   }

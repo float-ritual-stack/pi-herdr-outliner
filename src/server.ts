@@ -1447,7 +1447,8 @@ export class OutlinerServer {
         } else if (one?.resourceId) {
           await this.store.resources.refreshRemoteEntity(one.resourceId, false);
         } else {
-          await this.extensionSync.materialize(normalized.blockId, true);
+          // A line whose ticket isn't registered yet: register and fetch what the block asks for, not a forced refetch of the rest.
+          await this.extensionSync.materialize(normalized.blockId, normalized.line === undefined);
         }
         const result = this.decorateProjections(readResourceProjections(this.store, normalized), false);
         this.broadcast({ id: crypto.randomUUID(), domain: "resource-catalog", action: request.action, sequence: this.store.sequence,

@@ -265,7 +265,10 @@ export class ResourceExtensionRuntime {
     readonly timeoutMs = 15_000,
     folders?: readonly string[],
   ) {
-    this.folders = folders ?? (configPath === undefined || configPath === defaultRegistryPath() ? [userExtensionsDirectory()] : []);
+    // A service pointed at another registry (a scratch or test service) reads the user folder only when
+    // it is pointed at one too, so it never picks up the owner's real extension and its secrets.
+    const isolated = process.env.OUTLINER_RESOURCE_EXTENSIONS !== undefined && process.env.OUTLINER_EXTENSIONS_DIR === undefined;
+    this.folders = folders ?? ((configPath === undefined || configPath === defaultRegistryPath()) && !isolated ? [userExtensionsDirectory()] : []);
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000)
       throw failure("deadline must be 1..60000 milliseconds");
   }
