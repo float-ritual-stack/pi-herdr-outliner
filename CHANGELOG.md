@@ -4,6 +4,14 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+- Claude mod: a session started in an ep0ch-door tile (or the door's Herdr agent
+  pane) is told where it runs. At session start the mod runs `ep0ch where --json`
+  (read-only) and gives its one-line summary to Claude as the `whereAmI` context
+  block of the first prompt: the stack of layers from `EP0CH_NEST`
+  (`ssh:pts/5 › door:<pid>/desk/t1:claude`), what is live, and where the person's
+  keys are. Without an `ep0ch` that knows `where`, it gives the variables alone,
+  marked unchecked. Outside a door it does nothing.
+
 - Outline as server: `outliner publish serve` gives every block carrying
   `[publish::…]` a URL on 127.0.0.1 (`/p/<page address|block id|slug>`), serving
   an attached `.html`/`.md` file or the block and its subtree as markdown (with
