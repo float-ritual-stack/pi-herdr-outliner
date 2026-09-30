@@ -65,7 +65,8 @@ export function register(on: On, options: PluginOptions): void {
       name: 'show',
       description:
         "Show an Outliner note in Claude's own Outliner Detail pane, split below this conversation " +
-        'in Herdr and reused for every call, so the person can read it beside the chat. It never ' +
+        'in Herdr and reused for every call, so the person can read it beside the chat. When this ' +
+        "session runs in an ep0ch-door tile, it opens in that door's middle reader instead. It never " +
         'moves their Trees, Details or focus. Use it when pointing the person at a note matters; ' +
         'references in replies are already clickable.',
       inputSchema: {
@@ -110,8 +111,8 @@ export function register(on: On, options: PluginOptions): void {
     const workspace = references?.workspace
     if (!workspace) return { deny: 'This session is not in a configured Outliner workspace.' }
     try {
-      const title = await showInScratchPane($, workspace, uri)
-      return { result: `Showing ${title || reference} in Claude's Outliner pane.` }
+      const { title, place } = await showInScratchPane($, workspace, uri)
+      return { result: `Showing ${title || reference} ${place === 'door' ? "in the door's middle reader" : "in Claude's Outliner pane"}.` }
     } catch (error) {
       return { deny: `Could not show ${reference}: ${error instanceof Error ? error.message : String(error)}` }
     }
@@ -277,31 +278,78 @@ async function loadReferences($: EngineInterface, option: unknown): Promise<void
   }
 }
 
+/** Where a note was shown: the door this session runs in, or Claude's own Detail pane in Herdr. */
+type Shown = { title: string; place: 'door' | 'pane' }
+
 /**
- * Shows an Outliner link in Claude's own Detail: the pane this session split
- * below the Claude pane, reused while it lives, else split anew. It never
- * navigates the person's Trees or Details, and never takes focus. Resolves to
- * the shown block's title; throws with the reason otherwise.
+ * Shows an Outliner link where the person reads beside Claude. In an ep0ch-door
+ * tile (EP0CH_TILE and EP0CH_CONTROL set): in that door, as an agent's open of
+ * the daily layout's middle detail. Otherwise, or when no door answers: in
+ * Claude's own Detail, the pane this session split below the Claude pane,
+ * reused while it lives, else split anew. It never navigates the person's
+ * Trees or Details, and never takes focus. Resolves to the shown block's title
+ * and where it went; throws with the reason otherwise.
  */
-function showInScratchPane($: EngineInterface, workspace: string, uri: string): Promise<string> {
+function showInScratchPane($: EngineInterface, workspace: string, uri: string): Promise<Shown> {
   const shown = showQueue.then(() => showNow($, workspace, uri))
   showQueue = shown.catch(() => {})
   return shown
 }
 
-async function showNow($: EngineInterface, workspace: string, uri: string): Promise<string> {
+/** The door tile this session runs in, if any: its control socket (or a link to it). */
+async function doorOf($: EngineInterface): Promise<string | null> {
+  const [tile, control] = await Promise.all([$.env.get('EP0CH_TILE'), $.env.get('EP0CH_CONTROL')])
+  return tile && control ? control : null
+}
+
+async function showNow($: EngineInterface, workspace: string, uri: string): Promise<Shown> {
   const root = await outlinerRootOf($)
   if (!root) throw Error('the Outliner plugin is disabled')
+  const outliner = (args: string[]) => $.process.run(
+    ['/bin/sh', `${root}/scripts/run-bun.sh`, `${root}/src/cli.ts`, ...args],
+    { cwd: workspace, env: envFor(workspace), timeoutMs: 30_000 },
+  )
+  const door = await doorOf($)
+  if (door) {
+    const title = await showInDoor($, outliner, door, uri)
+    if (title !== null) return { title, place: 'door' }
+  }
+  return { title: await showInHerdrPane($, outliner, workspace, uri), place: 'pane' }
+}
+
+/**
+ * Shows the block in the door as an agent's `open` (attributed, never moving
+ * the person's focus). Resolves to its title, or null when no door answers on
+ * that socket (the door quit): the caller shows it in Herdr instead.
+ */
+async function showInDoor(
+  $: EngineInterface,
+  outliner: (args: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>,
+  control: string,
+  uri: string,
+): Promise<string | null> {
+  const resolved = await outliner(['resolve', uri])
+  if (resolved.exitCode !== 0) throw Error(failureReasonOf(resolved.stderr) || 'the target did not resolve')
+  const { id, title } = JSON.parse(resolved.stdout) as { id: string; title?: string }
+  const actor = (await $.env.get('EP0CH_AGENT')) || 'claude-code'
+  const opened = await outliner(['door-open', id, '--control', control, '--actor', actor, '--reader', 'middle'])
+  if (opened.exitCode === 3) return null
+  if (opened.exitCode !== 0) throw Error(failureReasonOf(opened.stderr) || 'the door did not open it')
+  return title ?? ''
+}
+
+async function showInHerdrPane(
+  $: EngineInterface,
+  outliner: (args: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>,
+  workspace: string,
+  uri: string,
+): Promise<string> {
   const [sessionId, paneId, herdrWorkspace] = await Promise.all([
     $.session.id(),
     $.env.get('HERDR_PANE_ID'),
     $.env.get('HERDR_WORKSPACE_ID'),
   ])
   if (!paneId || !herdrWorkspace) throw Error('this session is not running inside Herdr')
-  const outliner = (args: string[]) => $.process.run(
-    ['/bin/sh', `${root}/scripts/run-bun.sh`, `${root}/src/cli.ts`, ...args],
-    { cwd: workspace, env: envFor(workspace), timeoutMs: 30_000 },
-  )
   const findScratchPane = async () => {
     const [listedClients, listedPanes] = await Promise.all([
       outliner(['clients']),

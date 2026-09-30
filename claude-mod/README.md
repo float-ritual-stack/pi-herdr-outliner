@@ -31,6 +31,21 @@ it as you like. References in code and existing links are left alone.
 Claude can put a note there too, with the `mcp__pi-outliner__show` tool (a Work
 ID, `[[page]]`, `((uuid))` or `pi-outliner://` URI).
 
+### In an ep0ch-door tile
+
+When Claude runs in an ep0ch-door terminal tile (`EP0CH_TILE` and `EP0CH_CONTROL`
+set, as the door's daily agent is, in the tile or in its Herdr pane), a click or
+`show` opens the note in that door instead: the CLI's `door-open` sends the door
+an agent's `open` of its `middle` reader over `EP0CH_CONTROL`. It goes where the
+door's own `open` puts notes when the door has no `middle` tile.
+
+- The door says who opened it (`claude-code`, or `EP0CH_AGENT`), and an agent's
+  open never moves the person's focus.
+- If no door answers there (the door quit and the agent kept running in Herdr),
+  it splits Claude's pane in Herdr as above.
+- If the door refuses (say it is on its menu), the reason comes back as the
+  tool's denial or a toast.
+
 - The pane is recognized by its browsing context, which is the Claude session
   id, so it survives plugin reloads and resumed sessions. Close it and the next
   click splits a new one.

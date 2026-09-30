@@ -50,6 +50,35 @@ if(process.argv[2]==='doctor'){
  console.log(process.argv.includes('--json')?JSON.stringify(report,null,2):report.lines.join('\n'));
  process.exit(report.ok?0:1);
 }
+/**
+ * `door-open <block-id> [--control <socket>] [--actor <id>] [--reader <tile>]`:
+ * shows a block in ep0ch-door as an agent's `open` (see src/door-control.ts).
+ * The socket defaults to EP0CH_CONTROL, which a door gives the programs in its
+ * tiles. Exit 3 when no door answers there, so a caller can show it elsewhere.
+ */
+if (process.argv[2] === "door-open") {
+  const { values, positionals } = parseArgs({
+    args: process.argv.slice(3),
+    options: { control: { type: "string" }, actor: { type: "string" }, reader: { type: "string" } },
+    allowPositionals: true,
+    strict: true,
+  });
+  const control = values.control ?? process.env.EP0CH_CONTROL;
+  const [blockId, ...extra] = positionals;
+  if (!blockId || extra.length || !control) {
+    console.error("error: door-open requires one block id and a door control socket (--control or EP0CH_CONTROL)");
+    process.exit(2);
+  }
+  const { DoorUnreachable, openInDoor } = await import("./door-control");
+  try {
+    const opened = await openInDoor(control, blockId, { actor: values.actor ?? "agent", ...(values.reader ? { reader: values.reader } : {}) });
+    console.log(JSON.stringify(opened));
+    process.exit(0);
+  } catch (error) {
+    console.error(`error: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(error instanceof DoorUnreachable ? 3 : 1);
+  }
+}
 if (process.argv[2] === "outlines" || process.argv[2] === "outline") {
   process.exit(await runOutlinesCommand(process.argv[2], process.argv.slice(3)));
 }

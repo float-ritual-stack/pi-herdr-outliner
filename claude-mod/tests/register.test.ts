@@ -24,7 +24,7 @@ type Run = { argv: readonly string[]; init?: ProcessRunInit }
 /**
  * A session in `cwd` whose host commands answer from `answer`, recording each.
  */
-function sessionIn(on: On, cwd: string, answer: (run: Run) => ProcessRunResult, workspaces = `${WORKSPACE}/`) {
+function sessionIn(on: On, cwd: string, answer: (run: Run) => ProcessRunResult, workspaces = `${WORKSPACE}/`, env: Record<string, string> = {}) {
   const runs: Run[] = []
   const toasts: string[] = []
   const clock = mock.clock(on)
@@ -33,6 +33,7 @@ function sessionIn(on: On, cwd: string, answer: (run: Run) => ProcessRunResult, 
     HERDR_PANE_ID: 'w:p9',
     HERDR_TAB_ID: 'w:t1',
     HERDR_WORKSPACE_ID: 'w',
+    ...env,
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   // The engine's own drawing of a reply, where the plugin leaves it.
@@ -352,6 +353,70 @@ describe('register', () => {
 
     const empty = await $.tool.call({ tool: 'mcp__pi-outliner__show', reference: ' ' })
     expect(empty.deny).toContain('Give a Work ID')
+  })
+
+  describe('in an ep0ch-door tile', () => {
+    const DOOR = { EP0CH_TILE: 'claude', EP0CH_CONTROL: '/state/ep0ch-door/agent-door-claude.sock' }
+    const doorOpenOf = (runs: readonly Run[]) => runs.find(run => run.argv.includes('door-open'))
+
+    test('show opens the note in the door as an agent, and splits nothing in Herdr', async ($, on) => {
+      const session = sessionIn(on, WORKSPACE, run =>
+        run.argv.includes('door-open') ? { exitCode: 0, stdout: '{"reader":"5","id":"x"}\n', stderr: '' } : succeeding(run),
+      `${WORKSPACE}/`, DOOR)
+      on('tool.register', ($, e) => ({ value: { tool: `mcp__pi-outliner__${e.name}` } }))
+      await session.begin(() => $.session.start(START))
+
+      const shown = await $.tool.call({ tool: 'mcp__pi-outliner__show', reference: '[[Daily notes]]' })
+      expect(shown).toMatchObject({ result: "Showing Daily notes in the door's middle reader." })
+      const opened = doorOpenOf(session.runs)!
+      expect(opened.argv.slice(-8)).toEqual([
+        'door-open', BLOCK, '--control', DOOR.EP0CH_CONTROL, '--actor', 'claude-code', '--reader', 'middle',
+      ])
+      expect(opened.init?.cwd).toBe(WORKSPACE)
+      expect(splitOf(session.runs)).toBeUndefined()
+      expect(session.runs.some(run => run.argv.includes('link'))).toBe(false)
+    })
+
+    test('with no door answering (it quit), show falls back to Claude\'s pane in Herdr', async ($, on) => {
+      const session = sessionIn(on, WORKSPACE, run =>
+        run.argv.includes('door-open') ? { exitCode: 3, stdout: '', stderr: 'error: no door at /state/x (ECONNREFUSED)\n' } : succeeding(run),
+      `${WORKSPACE}/`, DOOR)
+      on('tool.register', ($, e) => ({ value: { tool: `mcp__pi-outliner__${e.name}` } }))
+      await session.begin(() => $.session.start(START))
+
+      const shown = await $.tool.call({ tool: 'mcp__pi-outliner__show', reference: '[[Daily notes]]' })
+      expect(shown).toMatchObject({ result: "Showing Daily notes in Claude's Outliner pane." })
+      expect(doorOpenOf(session.runs)).toBeDefined()
+      expect(session.runs.find(run => run.argv.includes('link'))?.argv).toContain('claude-pane')
+    })
+
+    test('a door that refuses is denied with its reason, never shown elsewhere', async ($, on) => {
+      const session = sessionIn(on, WORKSPACE, run =>
+        run.argv.includes('door-open')
+          ? { exitCode: 1, stdout: '', stderr: "error: the menu screen can't open blocks; open the board or desk first\n" }
+          : succeeding(run),
+      `${WORKSPACE}/`, DOOR)
+      on('tool.register', ($, e) => ({ value: { tool: `mcp__pi-outliner__${e.name}` } }))
+      await session.begin(() => $.session.start(START))
+
+      const shown = await $.tool.call({ tool: 'mcp__pi-outliner__show', reference: '[[Daily notes]]' })
+      expect(shown.deny).toContain("the menu screen can't open blocks")
+      expect(splitOf(session.runs)).toBeUndefined()
+      expect(session.runs.some(run => run.argv.includes('link'))).toBe(false)
+    })
+
+    test('a click on a reference opens it in the door too', async ($, on) => {
+      const session = sessionIn(on, WORKSPACE, run =>
+        run.argv.includes('door-open') ? { exitCode: 0, stdout: '{}\n', stderr: '' } : succeeding(run),
+      `${WORKSPACE}/`, { ...DOOR, EP0CH_AGENT: 'door-claude' })
+      on('tool.register', ($, e) => ({ value: { tool: `mcp__pi-outliner__${e.name}` } }))
+      await session.begin(() => $.session.start(START))
+
+      await $.tool.call({ tool: 'mcp__pi-outliner__show', reference: `((${BLOCK}))` })
+      const opened = doorOpenOf(session.runs)!
+      expect(opened.argv).toContain('door-claude')
+      expect(session.toasts).toEqual([])
+    })
   })
 
   test('a workboard tool runs the installed CLI in the workspace as this Claude session', async ($, on) => {

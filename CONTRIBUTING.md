@@ -83,6 +83,9 @@ source evidence or distinguish authored glyphs from controls.
   for a line: the line, lines above, the block, ancestors). It is the first
   slice of PIE-408; resource projections and later soft links use it rather than
   resolving context themselves.
+- `src/door-control.ts` is a client of ep0ch-door's control socket (the door's
+  `docs/AGENT-INTERFACE.md`). The door owns what its actions do; the Claude mod's
+  `show` only asks it for an agent's `open` when Claude runs in a door tile.
 - `pi-extension/index.ts` is a host adapter, not a second implementation of the service.
 - `src/known-outlines.ts` owns whether a folder has an outline (`detectOutline`)
   and the read-only list of outlines on this machine (`listKnownOutlines`,
