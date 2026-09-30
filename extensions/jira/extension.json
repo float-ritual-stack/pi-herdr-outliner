@@ -1,0 +1,32 @@
+{
+  "contract": 2,
+  "id": "jira",
+  "version": 2,
+  "name": "Jira",
+  "run": ["bun", "jira.ts"],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "authMode": { "enum": ["basic", "bearer"] },
+      "email": { "type": "string", "minLength": 1 },
+      "sprintField": { "type": "string", "pattern": "^[a-z0-9_]{1,64}$" },
+      "comments": { "type": "boolean" }
+    },
+    "required": ["authMode"],
+    "if": { "properties": { "authMode": { "const": "basic" } } },
+    "then": { "required": ["email"] },
+    "additionalProperties": false
+  },
+  "secrets": { "token": "Jira API token" },
+  "handlers": [
+    {
+      "key": "jira",
+      "kind": "resource",
+      "effects": "read",
+      "keyPattern": "^[A-Z][A-Z0-9_]*-[1-9][0-9]*$",
+      "record": true,
+      "staleAfter": "15m",
+      "pollEvery": "12m"
+    }
+  ]
+}

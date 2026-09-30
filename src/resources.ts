@@ -1,3 +1,4 @@
+import type { ExtensionRecordData } from "./extension-records";
 import {firstLineWithoutPropertyTokens} from "./properties";
 import { Type, type Static } from "typebox";
 import { Parse } from "typebox/value";
@@ -714,6 +715,12 @@ export interface RemoteEntityDocument {
   readonly sourceSnapshot: RemoteEntitySourceSnapshotProvenance;
   readonly representation: RemoteEntityRepresentationProvenance;
   readonly commandDescriptors: readonly ResourceProviderCommandDescriptor[];
+  /**
+   * The record an extension returned beside the document: its title, fields,
+   * body and comments, for the blocks that show it (src/extension-records.ts).
+   * Not stored in the snapshot; the record blocks are its durable form.
+   */
+  readonly record?: ExtensionRecordData;
 }
 
 export interface FilesystemResourceDocument {

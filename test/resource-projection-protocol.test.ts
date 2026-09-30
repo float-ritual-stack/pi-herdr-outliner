@@ -76,6 +76,8 @@ async function start() {
   const socket = join(directory, "outliner.sock");
   const server = new OutlinerServer(store, socket);
   await server.start();
+  // These tests read what is stored; the one-step fetch on save has its own tests (extension-records.test.ts).
+  server.extensionSync.stop();
   const client = new OutlinerClient(socket);
   cleanups.push(async () => {
     await server.close();
@@ -154,13 +156,14 @@ test("the service advertises resources.projection and reads stored snapshots wit
       { label: "Labels", value: "rollout, vendor" },
     ],
     updatedAt: "2026-09-19T08:30:00.000Z",
-    fetchedAt: "2026-09-20T10:00:00.000Z",
+    fetchedAt: expect.stringMatching(/^\d{4}-/),
+    freshness: "fresh",
     externalUrl: "https://issues.example.test/browse/ACME-12",
   });
   expect(stale!.summary).toBe("Rollout checklist");
   expect(stale!.reason).toContain("last refresh failed");
-  expect(notFetched!.reason).toContain("press r");
-  expect(unregistered!.reason).toContain("Write jira:: ACME-15 and open that link to register it");
+  expect(notFetched!.reason).toContain("r fetches it now");
+  expect(unregistered!.reason).toContain("saving the jira:: line or opening the note fetches it");
   expect(unregistered!.resourceId).toBeUndefined();
   expect(ambiguous!.candidates).toEqual(["ACME-12", "ACME-13"]);
   expect(noSource!.reason).toContain("No Jira Source");
@@ -233,7 +236,7 @@ test("Detail renders a projection from a live service and falls back silently on
   expect(lines[5]).toBe("");
   expect(lines[6]).toBe("After");
   expect(projected.embedRanges).toEqual([{ startLine: 2, endLine: 4, inserted: { afterSourceLine: 1, lineCount: 4 },
-    resource: { resourceId: id, fetchedAt: "2026-09-20T10:00:00.000Z", fetchedLine: 2 } }]);
+    resource: { resourceId: id, fetchedAt: expect.stringMatching(/^\d{4}-\d\d-\d\dT/), fetchedLine: 2 } }]);
   expect(projected.resourceProjections?.[0]?.resourceId).toBe(id);
 
   // An older service lacks the capability: no read is sent and the note renders as authored.
@@ -282,7 +285,7 @@ test("one unreadable stored copy makes only its own projection unavailable", () 
   const result = readResourceProjections(fakeSource("Vendor call\njira:: ACME-1\njira:: ACME-2", []), { blockId: "note" });
   expect(result.projections.map(({ key, status, reason }) => ({ key, status, reason }))).toEqual([
     { key: "ACME-1", status: "unavailable", reason: "Stored copy unreadable" },
-    { key: "ACME-2", status: "not-registered", reason: expect.stringContaining("not registered yet") },
+    { key: "ACME-2", status: "not-registered", reason: expect.stringContaining("isn't fetched yet") },
   ]);
 });
 
