@@ -467,6 +467,29 @@ let request: RequestInput | null = null;
 let directResult: unknown;
 
 switch (command) {
+  case "patch-demo": {
+    // A proof agent for draft.patch (PIE-501), not the @-watcher: tidy the paragraph above a mark line.
+    const { values } = parseArgs({
+      args: rest,
+      options: { block: { type: "string" }, "tidy-above": { type: "string" }, actor: { type: "string", default: "tidy" }, session: { type: "string" } },
+      strict: true,
+    });
+    if (!values.block || !values["tidy-above"]) throw new Error("patch-demo requires --block <id> and --tidy-above <mark line>");
+    await client.requireCompatibleService(["drafts.read", "draft.patch"]);
+    const { tidyAboveMark } = await import("./draft-patch-demo");
+    const read = await client.request<{ text: string; revision: number; route: string }>({ action: "drafts.read", blockId: values.block }, 10_000);
+    const span = tidyAboveMark(read.text, values["tidy-above"]);
+    if (!span) { directResult = { outcome: "unchanged", route: read.route, why: "nothing above the mark to tidy" }; break; }
+    directResult = {
+      read: read.route,
+      ...(await client.request<object>({
+        action: "draft.patch", blockId: values.block, revision: read.revision, patches: [span],
+        mark: { text: values["tidy-above"] },
+        mutation: { author: "agent", actorId: values.actor!, ...(values.session ? { sessionId: values.session } : {}) },
+      }, 15_000)),
+    };
+    break;
+  }
   case "mentions": {
     const operation=rest[0]??"list";
     if(operation==="ingest") request={action:"mentions.ingest",message:JSON.parse(await Bun.stdin.text())};

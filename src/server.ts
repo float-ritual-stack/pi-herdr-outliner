@@ -1,4 +1,7 @@
 import { queryRequestProblem } from "./block-query";
+import { DRAFT_PATCH_COMPARE_VERSION } from "./draft-patch-compare";
+import { DRAFT_HOLDER_TIMEOUT_MS, DraftHolds, type DraftHold, type DraftHolderAnswer } from "./draft-patch";
+import { DraftPatchRouter, type DraftHolderAsk } from "./draft-patch-router";
 import type { ChangeAttribution } from "./change-feed";
 import { MentionRepository } from "./mentions";
 import { EditRecoveryRepository } from "./edit-recovery";
@@ -144,6 +147,15 @@ function requestChangeKind(action: unknown): OutlinerChangeKind | undefined {
   return undefined;
 }
 
+/** A door's `drafts.answer` line (PIE-501), which is answered at once rather than queued. */
+function isDraftAnswer(line: string): boolean {
+  try {
+    return (JSON.parse(line) as { action?: unknown }).action === "drafts.answer";
+  } catch {
+    return false;
+  }
+}
+
 /** Provenance the request declared for its mutation; self-reported by the client. */
 function declaredActor(request: OutlinerRequest): MutationProvenance | undefined {
   const mutation = "mutation" in request ? request.mutation : undefined;
@@ -180,6 +192,10 @@ export class OutlinerServer {
   private server: Server | null = null;
   private readonly navigationLinks = new Map<string, OutlinerViewAddress>();
   private readonly subscribers = new Map<Socket, OutlinerClientRegistration>();
+  /** The live drafts doors hold (PIE-501), and the requests to them waiting for an answer. */
+  private readonly draftHolds = new DraftHolds();
+  private readonly holderAnswers = new Map<string, { clientId: string; resolve: (answer: DraftHolderAnswer) => void; reject: (error: Error) => void; timer: Timer }>();
+  private readonly draftPatches: DraftPatchRouter;
   private readonly browsingContextTargets = new Map<string, OutlinerNavigationTarget | null>();
   private readonly attentionStates = new Map<string, AttentionClientState>();
   private readonly attentionTimers = new Map<string, Timer>();
@@ -205,6 +221,12 @@ export class OutlinerServer {
     this.editRecovery = new EditRecoveryRepository(store);
     this.inboxRepository = new InboxRepository(store);
     this.noteRepository = new NoteAssistanceRepository(store);
+    this.draftPatches = new DraftPatchRouter({
+      store,
+      holds: this.draftHolds,
+      isLive: clientId => this.hasClient(clientId),
+      ask: (hold, request) => this.askHolder(hold, request),
+    });
     // Baseline before accepting edits or awaiting provider configuration.
     this.noteRepository.initialize();
   }
@@ -273,6 +295,8 @@ export class OutlinerServer {
 
   async close(): Promise<void> {
     for (const job of this.editMergeJobs.values()) job.abort();
+    for (const waiting of this.holderAnswers.values()) { clearTimeout(waiting.timer); waiting.reject(new Error("the service is stopping")); }
+    this.holderAnswers.clear();
     await this.inbox?.stop();
     const server = this.server;
     if (!server && !this.hosted) return;
@@ -436,6 +460,7 @@ export class OutlinerServer {
     ) {
       this.browsingContextTargets.delete(removed.contextId);
     }
+    if (removed) this.draftHolds.releaseClient(removed.clientId);
     if (removed) this.emitClientView("clients.unregister", removed.clientId);
   }
 
@@ -1365,6 +1390,18 @@ export class OutlinerServer {
         return { id: request.id, ok: false, error: error instanceof Error ? error.message : String(error), sequence: this.store.sequence };
       }
     }
+    if (request.action === "draft.patch" || request.action === "draft.proposal.apply" || request.action === "drafts.read") {
+      try {
+        const result = request.action === "draft.patch"
+          ? await this.draftPatches.patch(request)
+          : request.action === "draft.proposal.apply"
+            ? await this.draftPatches.applyProposal(request.proposalId, request.mutation)
+            : await this.draftPatches.read(request.blockId);
+        return { id: request.id, ok: true, result, sequence: this.store.sequence };
+      } catch (error) {
+        return { id: request.id, ok: false, error: error instanceof Error ? error.message : String(error), sequence: this.store.sequence };
+      }
+    }
     if (
       request.action !== "resources.open" &&
       request.action !== "resources.refresh" &&
@@ -1501,7 +1538,7 @@ export class OutlinerServer {
           break;
         }
         case "ping":
-          result = { status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION, minClientProtocol: OUTLINER_MIN_CLIENT_PROTOCOL, capabilities: [...OUTLINER_CAPABILITIES, ...(this.host ? OUTLINER_HOST_CAPABILITIES : [])], location:{hostname:this.hostname,workspaceRoot:this.store.workspaceRoot,database:this.store.database.filename,stateDirectory:this.host ? this.stateDirectory : dirname(this.store.database.filename)}, propertyGrammar: { version: PROPERTY_GRAMMAR_VERSION }, ...(this.outline ? { outline: { ...this.outline } } : {}), ...(this.host ? { host: this.host() } : {}) };
+          result = { status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION, minClientProtocol: OUTLINER_MIN_CLIENT_PROTOCOL, capabilities: [...OUTLINER_CAPABILITIES, ...(this.host ? OUTLINER_HOST_CAPABILITIES : [])], location:{hostname:this.hostname,workspaceRoot:this.store.workspaceRoot,database:this.store.database.filename,stateDirectory:this.host ? this.stateDirectory : dirname(this.store.database.filename)}, propertyGrammar: { version: PROPERTY_GRAMMAR_VERSION }, draftPatchCompare: { version: DRAFT_PATCH_COMPARE_VERSION }, ...(this.outline ? { outline: { ...this.outline } } : {}), ...(this.host ? { host: this.host() } : {}) };
           break;
         case "outlines.list":
         case "outlines.create":
@@ -2087,6 +2124,10 @@ export class OutlinerServer {
           break;
         case "edit-recovery.assist":
           throw Error("Merge proposals require asynchronous dispatch");
+        case "draft.patch":
+        case "draft.proposal.apply":
+        case "drafts.read":
+          throw Error(`${action} requires asynchronous dispatch`);
         case "edit-recovery.start":
           result = this.editRecovery.start(request.input);
           break;
@@ -2160,6 +2201,19 @@ export class OutlinerServer {
           break;
         case "fragments.ensure":
           result = this.store.ensureFragment(request.blockId, request.lineIndex, request.expectedRevision, request.mutation);
+          break;
+        case "drafts.hold":
+          if (!this.hasClient(request.clientId)) throw new Error("A draft is held by a connected client: subscribe with that clientId first");
+          result = this.draftHolds.hold(request.blockId, request.clientId, request.revision, request.leaseMs);
+          break;
+        case "drafts.heartbeat":
+          result = this.draftHolds.heartbeat(request.holdId, request.revision);
+          break;
+        case "drafts.release":
+          result = { released: this.draftHolds.release(request.holdId) };
+          break;
+        case "drafts.answer":
+          result = this.answerHolder(request.requestId, request.clientId, request.answer, request.error);
           break;
         case "update":
           result = this.store.update(
@@ -2666,6 +2720,34 @@ export class OutlinerServer {
     return events;
   }
 
+  /** Ask the door holding a draft (a `draft` event to that client only), and wait for its `drafts.answer`. */
+  private askHolder(hold: DraftHold, ask: DraftHolderAsk): Promise<DraftHolderAnswer> {
+    const requestId = crypto.randomUUID();
+    const answered = Promise.withResolvers<DraftHolderAnswer>();
+    const timer = setTimeout(() => {
+      this.holderAnswers.delete(requestId);
+      // A door that doesn't answer has lost its hold: patches go to the saved note from now on.
+      this.draftHolds.release(hold.holdId);
+      answered.reject(new Error("no answer in time"));
+    }, DRAFT_HOLDER_TIMEOUT_MS);
+    this.holderAnswers.set(requestId, { clientId: hold.clientId, resolve: answered.resolve, reject: answered.reject, timer });
+    this.broadcast({
+      id: crypto.randomUUID(), domain: "draft", action: `draft.${ask.kind}`, sequence: this.store.sequence, blockId: hold.blockId,
+      draft: { ...ask, requestId, holdId: hold.holdId, blockId: hold.blockId, targetClientId: hold.clientId },
+    });
+    return answered.promise;
+  }
+
+  private answerHolder(requestId: string, clientId: string, answer: DraftHolderAnswer | undefined, error: string | undefined): { accepted: true } {
+    const waiting = this.holderAnswers.get(requestId);
+    if (!waiting || waiting.clientId !== clientId) throw new Error("No draft request waits for this answer (it timed out, or it was asked of another client)");
+    this.holderAnswers.delete(requestId);
+    clearTimeout(waiting.timer);
+    if (error !== undefined || answer === undefined) waiting.reject(new Error(error || "the door gave no answer"));
+    else waiting.resolve(answer);
+    return { accepted: true };
+  }
+
   private broadcast(event: OutlinerEvent): void {
     this.pruneDestroyedSubscribers();
     const envelope: OutlinerEventEnvelope = { event };
@@ -2679,6 +2761,9 @@ export class OutlinerServer {
         continue;
       }
       if (event.domain === "attention" && event.attention?.targetClientId !== client.clientId) {
+        continue;
+      }
+      if (event.domain === "draft" && event.draft?.targetClientId !== client.clientId) {
         continue;
       }
       if (event.domain === "browsing-context") {
@@ -2777,7 +2862,12 @@ export class OutlinerServer {
       while (newline >= 0) {
         const line = buffer.slice(0, newline);
         buffer = buffer.slice(newline + 1);
-        if (line.trim()) {
+        if (!line.trim()) {
+          // skip
+        } else if (line.includes('"drafts.answer"') && isDraftAnswer(line)) {
+          // A door's answer is never queued behind the request on its connection that waits for it.
+          void this.respond(socket, line);
+        } else {
           requestQueue = requestQueue.then(() => this.respond(socket, line));
         }
         newline = buffer.indexOf("\n");

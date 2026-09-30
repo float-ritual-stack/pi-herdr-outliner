@@ -142,6 +142,22 @@ source evidence or distinguish authored glyphs from controls.
   endpoint and outline (env, binding, folder guess); `src/outline-host-client.ts`
   is the client side of the host's own requests (`outlines.list|attach`). Every
   pane opener forwards `OUTLINER_OUTLINE`; a new one must too.
+- `src/draft-patch.ts` owns `draft.patch` (PIE-501), compare-and-swap on a span
+  of a note's text by an agent while the person may be typing: the structural
+  policy (a prose edit keeps every `^anchor`, `[[page]]`, `((ref))` and
+  `[key::value]` of its span, by the service's own parsers), the leases doors
+  hold on their live drafts (`DraftHolds`: `drafts.hold|heartbeat|release`),
+  and the proposal block a failed patch becomes (`proposalText`, embedded
+  under the mark; `draft.proposal.apply` applies it anyway).
+  `src/draft-patch-router.ts` routes: a held note's patch goes to the holding
+  door as a `draft` event (answered with `drafts.answer`, never queued behind
+  the request waiting for it), any other is written under a revision check;
+  several notes apply together or not at all. `src/draft-patch-compare.ts` is
+  the compare itself (where the observed text is, what a position becomes). It
+  imports nothing, because ep0ch-door runs it against its live draft from a
+  byte-for-byte copy: bump `DRAFT_PATCH_COMPARE_VERSION` with any change (`ping`
+  reports it). `outliner patch-demo` (`src/draft-patch-demo.ts`) is a proof
+  agent for demos and tests, not the @-watcher.
 - `src/work-tools.ts` owns agent workboard operations (create, stage/set, PR delivery
   and delivery keys, completion with proof across all of an item's deliveries,
   delivery stage, note sections, item bodies) over the existing RPCs. The CLI

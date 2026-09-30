@@ -3,6 +3,7 @@ import type { FragmentCandidateQuery } from "./fragment-search";
 import type { AuthoredResourceReference } from "./resource-references";
 import type { PromptRevision } from "./ai-prompts";
 import type { ViewCreatePlan, ViewMovePlan } from "./view-writes";
+import type { DraftHolderAnswer, DraftHolderRequest, DraftPatchInput } from "./draft-patch";
 import type {
   ComputedExecutionReceipt,
   CreateComputedInvocationInput,
@@ -1690,6 +1691,16 @@ export const OUTLINER_CAPABILITIES = [
   "query.matches",
   /** `ping` reports `propertyGrammar`: the version of src/property-grammar.ts, which clients may copy (PIE-490). */
   "ping.propertyGrammar",
+  /** `drafts.hold`, `drafts.heartbeat`, `drafts.release`, `drafts.answer`: a door's lease on the live draft it holds (PIE-501). */
+  "drafts.hold",
+  /** `drafts.read`: a note's text as its live draft has it, or as saved. */
+  "drafts.read",
+  /** `draft.patch`: compare-and-swap on spans of text, routed to a live draft or the saved note; a failure lands as an embedded proposal. */
+  "draft.patch",
+  /** `draft.proposal.apply`: apply a proposal's patch anyway, as an ordinary edit. */
+  "draft.proposal.apply",
+  /** `ping` reports `draftPatchCompare`: the version of src/draft-patch-compare.ts, which the door copies. */
+  "ping.draftPatchCompare",
 ] as const;
 
 /**
@@ -1735,6 +1746,8 @@ export interface OutlinerServiceStatus {
   host?: OutlinerHostStatus;
   /** The property token grammar clients may copy (capability `ping.propertyGrammar`, src/property-grammar.ts). */
   propertyGrammar?: { version: number };
+  /** The draft.patch compare clients may copy (capability `ping.draftPatchCompare`, src/draft-patch-compare.ts). */
+  draftPatchCompare?: { version: number };
 }
 
 /** The outline host behind a socket: one per user and machine, serving outlines by name. */
@@ -2194,6 +2207,18 @@ export type OutlinerRequestAction =
   | { id: string; action: "fragments.candidates"; query: FragmentCandidateQuery }
   /** Give a heading its anchor (`## Beds ^beds`), if the note is still at `expectedRevision`. */
   | { id: string; action: "fragments.ensure"; blockId: string; lineIndex: number; expectedRevision: number; mutation: MutationProvenance }
+  /** A door holds a live draft of a note, on a lease it renews (capability `drafts.hold`, PIE-501). */
+  | { id: string; action: "drafts.hold"; blockId: string; clientId: string; revision: number; leaseMs?: number }
+  | { id: string; action: "drafts.heartbeat"; holdId: string; revision?: number }
+  | { id: string; action: "drafts.release"; holdId: string }
+  /** The holding door's answer to a `draft` event; never queued behind the request waiting for it. */
+  | { id: string; action: "drafts.answer"; requestId: string; clientId: string; answer?: DraftHolderAnswer; error?: string }
+  /** A note's text as its live draft has it now, or as saved when no door holds one (capability `drafts.read`). */
+  | { id: string; action: "drafts.read"; blockId: string }
+  /** Compare-and-swap on spans of notes' text (capability `draft.patch`). */
+  | ({ id: string; action: "draft.patch" } & DraftPatchInput)
+  /** "Apply anyway": a proposal block's patch as an ordinary edit (capability `draft.proposal.apply`). */
+  | { id: string; action: "draft.proposal.apply"; proposalId: string; mutation: MutationProvenance }
   /** `mutation` needs capability `mutations.provenance`; without it the change is unattributed. */
   | { id: string; action: "move"; blockId: string; parentId: string | null; position?: number; mutation?: MutationProvenance }
   | { id: string; action: "delete"; blockId: string; mutation?: MutationProvenance }
@@ -2392,7 +2417,9 @@ export type OutlinerEventDomain =
   | "view"
   | "ui"
   | "attention"
-  | "browsing-context";
+  | "browsing-context"
+  /** A request to the door holding a live draft (`draft`), sent only to that client. */
+  | "draft";
 
 export interface OutlinerEvent {
   id: string;
@@ -2407,6 +2434,8 @@ export interface OutlinerEvent {
   command?: OutlinerUiCommand;
   attention?: AttentionClientState;
   attentionInstruction?: AttentionInstruction;
+  /** On a `draft` event: what the service asks the door holding the draft (PIE-501). */
+  draft?: DraftHolderRequest;
   /**
    * The committed change this event reports, identical to its `changes.since`
    * entry: one event per change (`view` for branch-local ranks). Absent on a
