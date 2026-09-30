@@ -4,6 +4,78 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+### Merged without an entry, Sep 22–30 (added in the PIE-502 catch-up)
+
+These shipped with README or PR notes but no changelog line. Newest first.
+
+- macOS parity: a leftover file at a socket path (`ENOTSOCK` on macOS) reads as
+  a stopped outline rather than a busy one, and the artifact cache is resolved
+  to its real path before a build, so pinned packages load under `/tmp` and
+  `/var` links (#257).
+- Claude mod: the `whereAmI` context names the ep0ch skill and its `peek`,
+  `actions` and `act` commands, so a door agent knows how to drive the door
+  (#256). The first door-tile `show` routing is #249; #251's entry below
+  describes the current behavior.
+- Detail links survive an embedded note whose title has parentheses: resolved
+  text is no longer re-parsed, and `((uuid|Label (with parens)))` keeps its
+  whole label (#247).
+- Recent Mentions from a folder bound to a hosted outline is accepted, and the
+  mod expands `~` in `PI_OUTLINER_MENTIONS_WORKSPACES` entries (#246).
+- Opening from Herdr never creates an outline by itself: in a folder with no
+  outline, **Choose outline** lists the known outlines (running or stopped) and
+  offers **New outline here**; Esc creates nothing. `service-only` refuses in
+  such a folder (PIE-458, #241).
+- The client and service survive Bun 1.4's repeated socket errors (`EPIPE`);
+  the suite passes on Bun 1.3.14 and 1.4.2 (PIE-454, #240).
+- CLI `create` and `update` take `--author user|agent|system`, `--actor` and
+  `--session`, and the new `activity` command reads `activity.recent`
+  (`--limit`, `--since`, `--after`, `--author`) (#238).
+- A Preview that already shows a note narrows to one checklist step when that
+  note reloads with a step anchor (PIE-446, #235).
+- A `jira::` line shows the ticket's stored details beneath it in Detail
+  (accepted forms include floatty's `- jira:: --comments`), and a ticket page
+  shows its ticket at the top. Reads never contact Jira. Capability
+  `resources.projection` (PIE-445 slice 1, #234).
+- Backlinks carry service facets (kind, stage, placement, comment
+  resolution; capability `references.backlinks.facets`). Detail and Backlink
+  Peek group them by kind with stage counts, hide the note itself, its
+  descendants and resolved comments by default, and filter with `k`, `t`, `h`,
+  `n` and `/` (PIE-442, #233).
+- Checklist requests report missing `query`, `target.start` and
+  `expectedRevision` as caller errors, and generated step anchors are short
+  (`^t-daca0f`); existing `^task-<uuid>` anchors still work (PIE-443, #232).
+- `properties.preview { text }` returns the block properties and every token a
+  save would parse, from the save-time parser; CLI `properties-preview`
+  (PIE-401, #222).
+- `blocks.read { ids, fields? }` reads up to 1000 blocks in one request with
+  field projection, and `blocks.query` accepts `fields`; CLI `read <id>…
+  --fields` and `list … --fields` (PIE-400, #221).
+- Virtual branches take `[expand-when::…]` to reveal collapsed paths to
+  matching blocks, such as open high-priority comments, inside the view's budget
+  (PIE-379, #197), and `[child-depth::0..8]` and `[expanded::false]` to bound
+  descendants and start roots collapsed; **Reset view expansion** restores the
+  view's policy (PIE-378, #196).
+- Claude mod: Work IDs, `[[page]]` and `((uuid))` in Claude replies are links.
+  A click opens the target in a Detail that Claude owns, split below its pane
+  and reused, never taking focus; the `show` tool opens a reference there on
+  purpose. The CLI gains read-only `resolve <pi-outliner-uri>` and `link …
+  --detail-client <id> [--no-focus]` (PIE-359, #192, #193, #195).
+- `install.sh --capture-key` binds a global Quick Capture shortcut (default
+  `prefix+shift+c`; the comment-on-selection default moves to
+  `prefix+shift+a`) (PIE-206, #146).
+
+### Recorded with their PRs
+
+- Fresh workspaces get seed 6 of the Documentation hub (PIE-502). The agent
+  guide describes the boolean saved-view grammar, `[child-depth::…]`,
+  `[expanded::…]`, `[expand-when::…]` and `views.planWrite`, page rename by
+  editing `[page::…]`, literal regions, nested transclusion through the service,
+  write attribution and `activity`, and that `outliner_publish` is not web
+  publishing. The tour adds working selections, Preview comments, folding,
+  grouped Backlinks, **New Tree**, and a section on outline names, publishing,
+  the Claude Code mod and ep0ch-door; its example view uses an `OR` query.
+  Existing workspaces are never reseeded.
+
 - Published blocks run claude.ai artifacts: attach a downloaded `.html`,
   `.jsx`/`.tsx` (React, compiled on the server with `Bun.build`, never run
   there; claude.ai's packages fetched pinned into `<state root>/publish/artifacts`;

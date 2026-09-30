@@ -98,6 +98,21 @@ source evidence or distinguish authored glyphs from controls.
   for a line: the line, lines above, the block, ancestors). It is the first
   slice of PIE-408; resource projections and later soft links use it rather than
   resolving context themselves.
+- `src/extension-records.ts` owns what an extension record is (wave A of the
+  extension design, PIE-445): a remote record kept as ordinary blocks, its
+  fields as namespaced block properties (`[jira.status::In Review]`), its
+  comments as child blocks, and the refusal a person's or agent's write gets.
+  The store owns the `extension_records` and `extension_askers` tables (one
+  record block per key, under `extensionRecordHome`; dropped to Trash, never
+  deleted, under `ext.<id>.drop-record`/`drop-comment`) and the guard in
+  `writeBlockText` (only the owning extension writes an owned block,
+  attributed `author: agent`, `actorId: ext:<id>`, and an unchanged text is not
+  written). `src/extension-sync.ts` decides when: on save and open
+  (`resources.projection.read` with `materialize`), on `resources.projection.refresh`,
+  on any refresh (`ResourceCatalog.onRemoteEntityObserved`) and by the poll.
+  `src/extension-install.ts` is `outliner ext add|ls`; `ResourceExtensionRuntime`
+  loads contract 2 folders (`extension.json` + `config.json`) from the user
+  extensions folder before the legacy registry.
 - `src/door-control.ts` is a client of ep0ch-door's control socket (the door's
   `docs/AGENT-INTERFACE.md`). The door owns what its actions do; the Claude mod's
   `show` only asks it for an agent's `open` when Claude runs in a door tile.

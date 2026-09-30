@@ -74,7 +74,10 @@ export type WriteView =
   | { ok: false; id: string; name: string; reason: string };
 
 /** The block a move plans against: its text (for token ordinals), properties and times. */
-export type WriteSubject = Pick<Block, "id" | "text" | "revision" | "properties" | "createdAt" | "updatedAt">;
+export type WriteSubject = Pick<Block, "id" | "text" | "revision" | "properties" | "createdAt" | "updatedAt"> & {
+  /** Its active direct children's properties, for a view's `child:` clauses (a patch to the block doesn't change them). */
+  childProperties?: () => readonly (readonly BlockProperty[])[];
+};
 
 const viewName = (definition: Pick<Block, "text">) => firstLineWithoutPropertyTokens(definition.text)?.trim() || "the view";
 
@@ -92,7 +95,8 @@ export function writeView(id: string, definition: Pick<Block, "id" | "text" | "p
   const expr: QueryExpression = where ?? { kind: "and", operands: filters.map(f => ({ kind: "property" as const, ...f })) };
   const plain: PropertyFilter[] = [], rest: QueryExpression[] = [];
   for (const term of expr.kind === "and" ? expr.operands : [expr]) {
-    if (term.kind === "property") plain.push(term.value === undefined ? { key: term.key } : { key: term.key, value: term.value });
+    // A `child:` clause is about the block's children: a patch to the block can't make it hold.
+    if (term.kind === "property" && !term.relation) plain.push(term.value === undefined ? { key: term.key } : { key: term.key, value: term.value });
     else rest.push(term);
   }
   // Where a new block goes (create-parent) is the caller's choice; what it is born with is the view's.
@@ -106,7 +110,7 @@ export function writeView(id: string, definition: Pick<Block, "id" | "text" | "p
 /** The expression in the query's own words: `(project=a OR project=b)`, `NOT stage=done`. */
 export function showQueryExpression(e: QueryExpression, nested = false): string {
   switch (e.kind) {
-    case "property": return e.value === undefined ? e.key : `${e.key}=${serializePropertyFilterValue(e.value)}`;
+    case "property": return `${e.relation ? `${e.relation}:` : ""}${e.value === undefined ? e.key : `${e.key}=${serializePropertyFilterValue(e.value)}`}`;
     case "time": return `${e.field} ${e.op} ${e.value}`;
     case "not": return `NOT ${showQueryExpression(e.operand, true)}`;
     case "and": { const s = e.operands.map(o => showQueryExpression(o, true)).join(" "); return nested ? `(${s})` : s; }
@@ -116,14 +120,14 @@ export function showQueryExpression(e: QueryExpression, nested = false): string 
 
 function keysOf(e: QueryExpression): string[] {
   switch (e.kind) {
-    case "property": return [e.key];
+    case "property": return e.relation ? [] : [e.key];
     case "time": return [];
     case "not": return keysOf(e.operand);
     default: return [...new Set(e.operands.flatMap(keysOf))];
   }
 }
 
-interface Subject { properties: readonly BlockProperty[]; createdAt: string; updatedAt: string }
+interface Subject { properties: readonly BlockProperty[]; createdAt: string; updatedAt: string; childProperties?: () => readonly (readonly BlockProperty[])[] }
 const holds = (e: QueryExpression, s: Subject, now: number) => compileQueryExpression(e, now)(s, s.properties);
 const unmet = (rest: readonly QueryExpression[], s: Subject, now: number) => rest.filter(term => !holds(term, s, now));
 const sameValue = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
@@ -173,7 +177,8 @@ export function planMoveIntoView(view: WriteView, block: WriteSubject, now = Dat
   }
   // The rest of the query must hold on the block as the patch leaves it, and a patch makes it updated now.
   const after = applyChanges(properties, changes);
-  const missing = unmet(view.rest, { properties: after, createdAt: block.createdAt, updatedAt: new Date(now).toISOString() }, now);
+  const missing = unmet(view.rest, { properties: after, createdAt: block.createdAt, updatedAt: new Date(now).toISOString(),
+    ...(block.childProperties ? { childProperties: block.childProperties } : {}) }, now);
   if (missing.length) {
     const term = missing[0]!, what = has(after, term);
     return { kind: "refused", reason: `${view.name} needs ${showQueryExpression(term, true)}${what ? ` and the note has ${what}` : ""}; a move sets only the plain clauses beside it` };

@@ -1,4 +1,46 @@
-# Installed Resource processes (contract 1)
+# Installed Resource processes (contracts 1 and 2)
+
+## Contract 2: an extension is a folder (wave A)
+
+Wave A of the extension design moves Jira onto the folder shape that wave B
+generalizes. An extension is a folder in the service host's user extensions
+folder, `$XDG_CONFIG_HOME/pi-herdr-outliner/extensions/<id>/`
+(`OUTLINER_EXTENSIONS_DIR` overrides it), with:
+
+- `extension.json`: `{contract: 2, id, version, name, run, configSchema?, secrets?, handlers}`.
+  `run` is an argument vector run in the folder; `bun` means the service's own Bun.
+  Each handler is `{key, kind: "resource", effects: "read"|"spend"|"write", keyPattern?, record?, staleAfter?, pollEvery?}`.
+  Fields wave B reads (`renderers`, `actions`, `tiles`) are allowed and ignored.
+- `config.json`: `{config, secrets, sources, enabled?}`. Secrets are references
+  (`env`, `keychainService`, or `file` with mode 0600), resolved at call time on
+  the service host. `sources` are created on first use.
+- the code, `README.md` and a `config.example.json`.
+
+`outliner ext add <id>` copies a built-in from the repo's `extensions/` and
+writes `config.json` (from an existing `resource-extensions.json` entry when
+there is one). The folder is looked up before the legacy registry below, on
+every call, so code and config changes need no restart.
+
+The wire is contract 1's, with `contract: 2` in the request and one more
+operation:
+
+- `read` may return `record: {title, fields: [{key, value}], body, comments?}`.
+  The service keeps it as blocks the extension owns (`src/extension-records.ts`):
+  fields become `[<id>.<key>::value]` block properties, comments child blocks,
+  one record block per key however many blocks ask for it. The extension
+  returns error codes, never HTTP statuses: `unauthorized` (401), `forbidden`
+  (403) and `rate-limited` (429) pause the service's automatic fetches.
+- `changed` takes `{source, locators, sinceMinutes}` and returns
+  `{items: [{entityId, locator}]}`: which registered keys changed recently, in
+  one provider search. The service's poll uses it.
+
+Wave B adds: the folder watcher with candidate and active registries, outline
+folders (`<outline root>/extensions/`), handler tables derived from manifests
+(today `RESOURCE_DIRECTIVE_PROVIDERS` still names Jira), the generic
+remote-entity provider family, `ext doctor|migrate|rm`, `command` secrets, and
+renderers, actions and tiles served by `extensions.list`.
+
+## Contract 1
 
 An installed extension handles a provider request. The Outliner service owns Source boundaries, Resource UUIDs, immutable source identity, observations, representations, retained history and annotations. Extensions return data; they do not receive a database handle or perform canonical mutations.
 

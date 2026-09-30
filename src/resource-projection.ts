@@ -43,8 +43,11 @@ export type ResourceProjectionStatus =
   | "unavailable";
 
 export interface ResourceProjectionAnchor {
-  /** `directive`: a provider line; `page`: the block's own property; `line`: a requested line. */
-  readonly kind: "directive" | "page" | "line";
+  /**
+   * `directive`: a provider line; `page`: the block's own property; `line`: a
+   * requested line; `record`: the block is the extension's record of it.
+   */
+  readonly kind: "directive" | "page" | "line" | "record";
   /** The line the projection follows, as an index into the block's text. */
   readonly line: number;
   readonly start: number;
@@ -83,6 +86,19 @@ export interface ResourceProjection {
   readonly updatedAt?: string;
   readonly fetchedAt?: string;
   readonly externalUrl?: string;
+  /** The stored copy's age class: `stale` after the provider's stale age (15 minutes for Jira). */
+  readonly freshness?: "fresh" | "stale" | "unknown" | "refreshing" | "failed";
+  /** Capability `resources.projection.materialize`: a fetch for it is running now. */
+  readonly fetching?: boolean;
+  /** Why the service's last fetch for it failed, in words for the reader. */
+  readonly fetchError?: string;
+  /** The block that holds the ticket (an extension record), its comments and when it was last written or confirmed. */
+  readonly record?: {
+    readonly blockId: string;
+    readonly pageBlockId: string;
+    readonly syncedAt: string;
+    readonly commentBlockIds: readonly string[];
+  };
 }
 
 export interface ResourceProjectionRequest {
@@ -99,6 +115,8 @@ export interface ResourceProjectionReadResult {
 
 export interface ResourceProjectionDataSource {
   blockContext(blockId: string): { selected: Block | null; ancestors: readonly Block[] };
+  /** When the block is an extension's record (or one of its comments), what it shows. */
+  extensionOwner?(blockId: string): { role: "record" | "comment"; itemKey: string; parentBlockId: string; extensionId: string } | null;
   readonly resources: {
     listSources(): ResourceSource[];
     resolveAuthoredReference(reference: { kind: "jira"; key: string }): AuthoredResourceReferenceLookup;
@@ -208,15 +226,11 @@ function storedProjection(
   const lookup = source.resources.resolveAuthoredReference({ kind: base.provider, key });
   if (lookup.kind === "unavailable") return { ...keyed, status: "unavailable", reason: lookup.reason };
   if (lookup.kind === "unregistered") {
-    // Registration today is an explicit follow of an authored `jira::` reference.
-    const written = resolvedFrom?.step === "explicit" || resolvedFrom?.step === "block-property" ||
-      resolvedFrom?.step === "ancestor-property";
+    // Saving the line (or opening the note) registers and fetches it in the background.
     return {
       ...keyed,
       status: "not-registered",
-      reason: written
-        ? `${key} is not registered yet. Open it where it is written as ${base.propertyKey}:: (its link, Props then o, or Tree's authored links) to register it; r in the opened Resource fetches it.`
-        : `${key} is not registered yet. Write ${base.propertyKey}:: ${key} and open that link to register it; r in the opened Resource fetches it.`,
+      reason: `${key} isn't fetched yet; saving the ${base.propertyKey}:: line or opening the note fetches it, and r fetches it now.`,
     };
   }
   const description = source.resources.describe(lookup.resourceId, false);
@@ -225,13 +239,15 @@ function storedProjection(
     return { ...registered, status: "unavailable", reason: "Workspace policy denies reading this Source" };
   }
   const document = description.remoteEntity;
+  const freshness = description.remoteStatus?.freshness;
   if (!document) {
     return {
       ...registered,
+      ...(freshness ? { freshness } : {}),
       status: "not-fetched",
       reason: description.remoteStatus?.lastError
-        ? `Nothing fetched yet; the last refresh failed: ${bounded(description.remoteStatus.lastError)}`
-        : `Nothing fetched yet. Open ${key} (the link above) and press r to fetch it.`,
+        ? `Nothing fetched yet; the last fetch failed: ${bounded(description.remoteStatus.lastError)}`
+        : `Nothing fetched yet; r fetches it now.`,
     };
   }
   const validator = document.sourceSnapshot.revision.revision;
@@ -249,8 +265,9 @@ function storedProjection(
     summary: bounded(document.title),
     fields: projectionFields(provider, document.metadata),
     ...(updatedAt ? { updatedAt } : {}),
-    fetchedAt: document.sourceSnapshot.fetchedAt,
+    fetchedAt: description.remoteStatus?.checkedAt ?? document.sourceSnapshot.fetchedAt,
     externalUrl: document.externalUrl,
+    ...(freshness ? { freshness } : {}),
   };
 }
 
@@ -269,6 +286,14 @@ export function readResourceProjections(
   }
 
   const sources = source.resources.listSources();
+  // An extension's record block (or a comment in it) shows the ticket it holds.
+  const owner = source.extensionOwner?.(block.id);
+  const record = owner?.role === "comment" ? source.extensionOwner?.(owner.parentBlockId) : owner;
+  const recordProvider = record ? resourceDirectiveProvider(record.extensionId) : undefined;
+  if (record && recordProvider) {
+    const base = baseFor(recordProvider, { kind: "record", line: 0, ...lineRange(block.text, 0) }, { unknown: [] });
+    return result([keyedProjection(source, recordProvider, base, record.itemKey, { step: "explicit", blockId: block.id, line: 0 })]);
+  }
   const self: ContextBlock = { id: block.id, text: block.text };
   const ancestors: ContextBlock[] = [...context.ancestors].reverse()
     .map((ancestor) => ({ id: ancestor.id, text: ancestor.text }));

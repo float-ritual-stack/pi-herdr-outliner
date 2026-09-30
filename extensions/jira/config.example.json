@@ -1,0 +1,5 @@
+{
+  "config": { "authMode": "basic", "email": "you@example.com" },
+  "secrets": { "token": { "keychainService": "jira-api-token" } },
+  "sources": [{ "origin": "https://your-site.atlassian.net", "project": "PC" }]
+}

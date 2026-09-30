@@ -56,6 +56,16 @@ export interface RemoteEntityProviderClient {
     source: RemoteEntitySource,
     locator: string,
   ): Promise<RemoteEntityLocatorResolution>;
+  /**
+   * Which of these locators changed at the provider in the last `sinceMinutes`
+   * (one search, not one read each). Providers without it are refreshed when
+   * stale instead of polled.
+   */
+  changedSince?(
+    source: RemoteEntitySource,
+    locators: readonly string[],
+    sinceMinutes: number,
+  ): Promise<readonly RemoteEntityLocatorResolution[]>;
 }
 
 export const REMOTE_ENTITY_MARKDOWN_ADAPTER: ResourceRepresentationAdapter = {

@@ -29,7 +29,9 @@ import {
   normalizeAttentionMark,
 } from "./attention";
 import { readAuthoredLinks } from "./authored-links";
-import { normalizeResourceProjectionRequest, readResourceProjections } from "./resource-projection";
+import { normalizeResourceProjectionRequest, readResourceProjections, type ResourceProjectionReadResult } from "./resource-projection";
+import { ExtensionSync } from "./extension-sync";
+import { isExtensionActor } from "./extension-records";
 import { normalizeAnnotationReferenceContext } from "./annotations";
 import type { HerdrRuntimeRegistry } from "./herdr-registry";
 import { isFragmentId, resolveFragment } from "./fragments";
@@ -157,6 +159,17 @@ function isDraftAnswer(line: string): boolean {
 }
 
 /** Provenance the request declared for its mutation; self-reported by the client. */
+function normalizeFollowProvenance(mutation: MutationProvenance): MutationProvenance {
+  if (!mutation || !["user", "agent", "system"].includes(mutation.author)) throw new Error("follow-authored mutation must identify user, agent, or system");
+  if (mutation.author === "agent" && !mutation.actorId?.trim()) throw new Error("An agent's follow-authored mutation requires actorId");
+  return {
+    author: mutation.author,
+    ...(mutation.actorId?.trim() ? { actorId: mutation.actorId.trim() } : {}),
+    ...(mutation.sessionId?.trim() ? { sessionId: mutation.sessionId.trim() } : {}),
+    ...(mutation.taskId?.trim() ? { taskId: mutation.taskId.trim() } : {}),
+  };
+}
+
 function declaredActor(request: OutlinerRequest): MutationProvenance | undefined {
   const mutation = "mutation" in request ? request.mutation : undefined;
   if (mutation && typeof mutation === "object") {
@@ -209,13 +222,15 @@ export class OutlinerServer {
   private host: (() => OutlinerHostStatus) | undefined;
   /** This outline's side files (assistant sessions); by default the socket's folder. */
   readonly stateDirectory: string;
+  /** Extension records: one-step fetch on save and open, refresh, poll (src/extension-sync.ts). */
+  readonly extensionSync: ExtensionSync;
 
   constructor(
     readonly store: OutlinerStore,
     readonly socketPath: string,
     readonly herdrRegistry?: HerdrRuntimeRegistry,
     private readonly promptDirectory?: string,
-    options: { stateDirectory?: string } = {},
+    options: { stateDirectory?: string; extensionPollMs?: number } = {},
   ) {
     this.stateDirectory = options.stateDirectory ?? dirname(socketPath);
     this.workflows = new WorkflowManager(store);
@@ -231,6 +246,13 @@ export class OutlinerServer {
     });
     // Baseline before accepting edits or awaiting provider configuration.
     this.noteRepository.initialize();
+    this.extensionSync = new ExtensionSync(store, {
+      ...(options.extensionPollMs !== undefined ? { pollMs: options.extensionPollMs } : {}),
+      resourceChanged: (resourceId) => this.broadcast({
+        id: crypto.randomUUID(), domain: "resource-catalog", action: "resources.extension-sync",
+        sequence: this.store.sequence, resourceId,
+      }),
+    });
   }
 
   /** The named outline this service runs, reported by `ping`. */
@@ -264,6 +286,7 @@ export class OutlinerServer {
     if (this.running) throw new Error("Outliner service is already started");
     this.store.changes.onBackgroundChanges = changes => this.publishChanges(undefined, changes);
     this.hosted = true;
+    this.extensionSync.start();
   }
 
   /** Takes over a connection the host accepted; `buffered` is what the host already read from it. */
@@ -293,12 +316,14 @@ export class OutlinerServer {
       this.server = null;
       throw error;
     }
+    this.extensionSync.start();
   }
 
   async close(): Promise<void> {
     for (const job of this.editMergeJobs.values()) job.abort();
     for (const waiting of this.holderAnswers.values()) { clearTimeout(waiting.timer); waiting.reject(new Error("the service is stopping")); }
     this.holderAnswers.clear();
+    this.extensionSync.stop();
     await this.inbox?.stop();
     const server = this.server;
     if (!server && !this.hosted) return;
@@ -723,14 +748,47 @@ export class OutlinerServer {
     return client;
   }
 
+  /**
+   * What the sync knows beside the stored state: a fetch in flight, why the
+   * last one failed, and the record block that shows the ticket.
+   */
+  private decorateProjections(read: ResourceProjectionReadResult, materializing: boolean): ResourceProjectionReadResult {
+    return {
+      ...read,
+      projections: read.projections.map((projection) => {
+        if (!projection.key) return projection;
+        const owner = projection.anchor.kind === "record" ? this.store.extensionOwner(read.blockId) : null;
+        // A key has one record block, wherever it sits: every block that asks for the key shows that one.
+        const row = projection.anchor.kind === "record"
+          ? owner?.role === "comment" ? this.store.extensionOwner(owner.parentBlockId) : owner
+          : this.store.extensionRecords({ extensionId: projection.provider, role: "record", itemKey: projection.key })[0];
+        const state = this.extensionSync.stateFor(projection.key);
+        const comments = row ? this.store.extensionRecords({ parentBlockId: row.blockId, role: "comment" }).map((comment) => comment.blockId) : [];
+        const fetching = state?.fetching ?? (materializing && (!row || projection.freshness === "stale" || projection.freshness === "unknown"));
+        return {
+          ...projection,
+          ...(fetching ? { fetching: true } : {}),
+          ...(state?.error ? { fetchError: state.error } : {}),
+          ...(row ? { record: { blockId: row.blockId, pageBlockId: row.parentBlockId, syncedAt: row.syncedAt, commentBlockIds: comments } } : {}),
+        };
+      }),
+    };
+  }
+
   private presentResource(
     description: ResourceDescription,
-    destination: OutlinerClientRegistration,
+    destination: Pick<OutlinerClientRegistration, "resourcePresentation"> | undefined,
   ): ResourceDescription {
-    const presentation = negotiateResourcePresentation(
+    const negotiated = negotiateResourcePresentation(
       description,
-      destination.resourcePresentation ?? TUI_RESOURCE_PRESENTATION_CONTEXT,
+      destination?.resourcePresentation ?? TUI_RESOURCE_PRESENTATION_CONTEXT,
     );
+    // A refresh the catalog can't run for this Resource (a plain file is read as it is) stays unavailable
+    // whatever the destination could execute, so a client can trust `capabilities.refresh` without a table.
+    const own = description.capabilities.refresh;
+    const presentation = own.status === "unavailable" && own.factors["destination-host"].state === "blocked"
+      ? { ...negotiated, capabilities: { ...negotiated.capabilities, refresh: own } }
+      : negotiated;
     const availableCommands =
       presentation.capabilities.command.status === "available" &&
         description.requestedRevision === null
@@ -1416,15 +1474,44 @@ export class OutlinerServer {
     if (
       request.action !== "resources.open" &&
       request.action !== "resources.refresh" &&
+      request.action !== "resources.projection.refresh" &&
       request.action !== "resources.command.execute" &&
       request.action !== "resources.follow-authored" &&
       request.action !== "computed.execute"
     ) {
       return this.handle(request, subscribedClient);
     }
+    if (request.action === "resources.projection.refresh") {
+      try {
+        const normalized = normalizeResourceProjectionRequest(request);
+        const owner = this.store.extensionOwner(normalized.blockId);
+        const record = owner?.role === "comment" ? this.store.extensionOwner(owner.parentBlockId) : owner;
+        // One line's ticket (a click on its age), the ticket block's own, or every ticket the block shows.
+        const one = normalized.line !== undefined && !record
+          ? readResourceProjections(this.store, normalized).projections.find((projection) => projection.resourceId)
+          : undefined;
+        if (record?.resourceId) {
+          await this.store.resources.refreshRemoteEntity(record.resourceId, false);
+        } else if (one?.resourceId) {
+          await this.store.resources.refreshRemoteEntity(one.resourceId, false);
+        } else {
+          // A line whose ticket isn't registered yet: register and fetch what the block asks for, not a forced refetch of the rest.
+          await this.extensionSync.materialize(normalized.blockId, normalized.line === undefined);
+        }
+        const result = this.decorateProjections(readResourceProjections(this.store, normalized), false);
+        const refreshedId = record?.resourceId ?? one?.resourceId;
+        this.broadcast({ id: crypto.randomUUID(), domain: "resource-catalog", action: request.action, sequence: this.store.sequence,
+          ...(refreshedId ? { resourceId: refreshedId } : {}) });
+        return { id: request.id, ok: true, result, sequence: this.store.sequence };
+      } catch (error) {
+        return { id: request.id, ok: false, error: error instanceof Error ? error.message : String(error), sequence: this.store.sequence };
+      }
+    }
     if (request.action === "resources.follow-authored") {
       try {
-        const result = await this.store.resources.followAuthoredReference(request.reference);
+        const provenance = request.mutation ? normalizeFollowProvenance(request.mutation) : undefined;
+        const receipt = await this.store.resources.followAuthoredReference(request.reference);
+        const result = provenance ? { ...receipt, provenance } : receipt;
         return { id: request.id, ok: true, result, sequence: this.store.sequence };
       } catch (error) {
         return {
@@ -1436,8 +1523,13 @@ export class OutlinerServer {
       }
     }
     try {
-      const destination = this.clientById(request.destinationClientId);
-      if (!clientSupportsRole(destination, "detail")) {
+      // Reading and refreshing a Resource needs no Detail (capability `resources.observer-reads`):
+      // without a destination the terminal presentation is used.
+      const destination = request.destinationClientId === undefined
+        ? undefined
+        : this.clientById(request.destinationClientId);
+      if ((request.action === "resources.command.execute" || request.action === "computed.execute") &&
+        (!destination || !clientSupportsRole(destination, "detail"))) {
         throw new Error("Resource documents require a Detail destination");
       }
       let result: unknown;
@@ -1583,9 +1675,16 @@ export class OutlinerServer {
         case "blocks.authored-links":
           result = readAuthoredLinks(this.store, request.ownerBlockId);
           break;
-        case "resources.projection.read":
-          result = readResourceProjections(this.store, normalizeResourceProjectionRequest(request));
+        case "resources.projection.read": {
+          const normalized = normalizeResourceProjectionRequest(request);
+          if (request.materialize === true) {
+            const owner = this.store.extensionOwner(normalized.blockId);
+            const record = owner?.role === "comment" ? this.store.extensionOwner(owner.parentBlockId) : owner;
+            void this.extensionSync.materialize(record?.parentBlockId ?? normalized.blockId).catch(() => {});
+          }
+          result = this.decorateProjections(readResourceProjections(this.store, normalized), request.materialize === true);
           break;
+        }
         case "children":
           result = this.store.children(request.parentId);
           break;
@@ -1735,7 +1834,7 @@ export class OutlinerServer {
           );
           break;
         case "resources.describe": {
-          const destination = this.clientById(request.destinationClientId);
+          const destination = request.destinationClientId === undefined ? undefined : this.clientById(request.destinationClientId);
           const target = this.normalizeNavigationTarget(request.target);
           if (target.kind !== "resource") {
             throw new Error("Resource description target must be a resource");
@@ -1753,6 +1852,7 @@ export class OutlinerServer {
         case "computed.execute":
         case "resources.open":
         case "resources.refresh":
+        case "resources.projection.refresh":
         case "resources.follow-authored":
         case "resources.command.execute":
           throw new Error(`${request.action} requires asynchronous dispatch`);
@@ -2326,6 +2426,7 @@ export class OutlinerServer {
             limit: request.limit,
             author: request.author,
             kinds: request.kinds,
+            ...(request.extensions !== undefined ? { extensions: request.extensions } : {}),
           });
           break;
         case "properties.catalog":
@@ -2728,6 +2829,9 @@ export class OutlinerServer {
     for (const event of events) this.broadcast(event);
     for (const event of events) {
       if (event.domain === "content" && event.blockId) this.refreshAttentionForBlock(event.blockId);
+      // A saved provider line fetches its ticket in the background; the extension's own writes don't loop.
+      if (event.domain === "content" && event.blockId && (event.change?.kind === "create" || event.change?.kind === "edit") &&
+        !isExtensionActor(event.change.actor?.actorId)) this.extensionSync.blockChanged(event.blockId);
     }
     if (events.some(event => event.domain === "content")) this.inbox?.wake();
     return events;

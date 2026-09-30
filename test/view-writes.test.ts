@@ -32,6 +32,16 @@ describe("planning a move", () => {
     expect(p).toMatchObject({ kind: "patch", changes: [{ key: "stage", to: "review", from: "queued" }, { key: "owner", to: "sam", from: null }] });
     expect(p.kind === "patch" && p.operations).toEqual([{ op: "replace", ordinal: 0, value: "review" }, { op: "append", key: "owner", value: "sam" }]);
   });
+  test("child: clauses read the note's children as they are; a move patches only the note", () => {
+    const closed = { childProperties: () => [parseProperties("Ticket [jira.status::Closed]")] };
+    const drift = view("Drift", "status=done child:jira.status=Closed");
+    expect(planMoveIntoView(drift, note("Depot [status::doing]", closed))).toMatchObject({ kind: "patch", changes: [{ key: "status", to: "done" }] });
+    expect(planMoveIntoView(drift, note("Depot [status::doing]")).kind).toBe("refused");
+    const notClosed = view("Open", "status=done NOT child:jira.status=Closed");
+    expect(planMoveIntoView(notClosed, note("Depot [status::doing]", closed)).kind).toBe("refused");
+    expect(planMoveIntoView(notClosed, note("Depot [status::doing]"))).toMatchObject({ kind: "patch" });
+    expect(planMoveIntoView(drift, note("Depot [status::done]", closed))).toEqual({ kind: "already" });
+  });
   test("values compare case-insensitively; a note already there is already there", () => {
     expect(planMoveIntoView(view("Done", "stage=done"), note("Mend [stage::Done]"))).toEqual({ kind: "already" });
   });

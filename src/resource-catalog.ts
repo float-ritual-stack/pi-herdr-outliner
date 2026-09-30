@@ -382,10 +382,13 @@ export interface ResourceCatalogOptions {
   readonly maximumPdfBytes?: number;
   readonly remoteEntityClient?: RemoteEntityProviderClient;
   readonly computedProducerRegistry?: ComputedProducerRegistry;
+  /** When a fetched Jira or Linear copy reads as stale (default 15 minutes). */
+  readonly remoteEntityStaleAfterMs?: number;
 }
 
 const DEFAULT_MAXIMUM_WEB_BYTES = 2 * 1024 * 1024;
 const DEFAULT_WEB_STALE_AFTER_MS = 24 * 60 * 60 * 1_000;
+const DEFAULT_REMOTE_ENTITY_STALE_AFTER_MS = 15 * 60 * 1_000;
 const DEFAULT_MAXIMUM_PDF_BYTES = 16 * 1024 * 1024;
 const PDF_NATIVE_ADAPTER = { id: "builtin.pdf-native", version: 1 } as const;
 const COMPUTED_MARKDOWN_ADAPTER = { id: "builtin.computed-markdown", version: 1 } as const;
@@ -958,6 +961,18 @@ export class ResourceCatalog {
   private readonly pendingRemoteEntityRefreshes =
     new Map<string, Promise<ResourceDescription>>();
   readonly retention: ResourceRetentionRepository;
+  /** When a fetched Jira or Linear copy reads as stale; an installed handler's `staleAfter` sets it. */
+  remoteEntityStaleAfterMs: number;
+  /**
+   * Called after a remote entity refresh commits, with what the provider
+   * returned (including an extension's record). The service writes record
+   * blocks from it (src/extension-sync.ts); a refresh from any caller counts.
+   */
+  onRemoteEntityObserved?: (resource: Resource, document: RemoteEntityDocument) => void;
+  /** The provider client, for what it can say about itself (an installed extension's manifest). */
+  get remoteEntityProviderClient(): RemoteEntityProviderClient {
+    return this.remoteEntityClient;
+  }
 
   constructor(
     private readonly database: Database,
@@ -981,6 +996,7 @@ export class ResourceCatalog {
     this.maximumWebBytes = options.maximumWebBytes ?? DEFAULT_MAXIMUM_WEB_BYTES;
     this.maximumPdfBytes = options.maximumPdfBytes ?? DEFAULT_MAXIMUM_PDF_BYTES;
     this.webStaleAfterMs = options.webStaleAfterMs ?? DEFAULT_WEB_STALE_AFTER_MS;
+    this.remoteEntityStaleAfterMs = options.remoteEntityStaleAfterMs ?? DEFAULT_REMOTE_ENTITY_STALE_AFTER_MS;
     this.workspaceRoot = resolve(options.workspaceRoot ?? ".");
     if (!Number.isFinite(this.webStaleAfterMs) || this.webStaleAfterMs < 0) {
       throw new ResourceCatalogError(
@@ -1982,8 +1998,13 @@ export class ResourceCatalog {
     if (!state || state.address_version !== resource.addressVersion) {
       return { freshness: "unknown", checkedAt: null, lastError: null };
     }
+    let freshness = state.freshness;
+    if (freshness === "fresh" && state.checked_at !== null &&
+      Date.parse(this.now()) - Date.parse(state.checked_at) >= this.remoteEntityStaleAfterMs) {
+      freshness = "stale";
+    }
     return {
-      freshness: state.freshness,
+      freshness,
       checkedAt: state.checked_at,
       lastError: state.last_error,
     };
@@ -2128,7 +2149,8 @@ export class ResourceCatalog {
         resource.provider === "web"
           ? ["read", "refresh", "open-external"]
           : resource.provider === "filesystem"
-            ? ["read"]
+            // A PDF's text is derived again on refresh; any other file is read as it is.
+            ? resource.mediaType === "application/pdf" ? ["read", "refresh"] : ["read"]
             : resource.provider === "jira" || resource.provider === "linear"
               ? ["read", "refresh", "open-external", "command"]
               : resource.provider === "computed"
@@ -3050,11 +3072,26 @@ export class ResourceCatalog {
         refreshed.address.entityId,
         revisionJson,
       ) as RemoteEntitySourceSnapshotRow | null;
-      if (!snapshot || snapshot.payload_json !== payloadJson) {
+      if (!snapshot) {
         throw new ResourceCatalogError(
           "source-unavailable",
           "Remote entity provider reused a revision for different content",
         );
+      }
+      if (snapshot.payload_json !== payloadJson) {
+        // A new adapter version may read the same remote revision differently
+        // (more fields). The stored snapshot stays; only the same adapter
+        // returning different content for one revision is a provider fault.
+        const sameAdapter = this.database.query(`
+          SELECT 1 FROM remote_entity_representations
+          WHERE source_snapshot_id = ? AND adapter_id = ? AND version = ? LIMIT 1
+        `).get(snapshot.id, observed.representation.adapter.id, observed.representation.adapter.version);
+        if (sameAdapter) {
+          throw new ResourceCatalogError(
+            "source-unavailable",
+            "Remote entity provider reused a revision for different content",
+          );
+        }
       }
       const representationId = crypto.randomUUID();
       this.database.query(`
@@ -3102,7 +3139,8 @@ export class ResourceCatalog {
         refreshed.addressVersion,
         snapshot.id,
         representation.id,
-        observed.sourceSnapshot.fetchedAt,
+        // When the service checked, which staleness counts from (the snapshot keeps the provider's time).
+        this.now(),
         refreshed.id,
         initial.generation,
       );
@@ -3115,7 +3153,25 @@ export class ResourceCatalog {
       this.bumpSequence();
       return refreshed.id;
     })();
+    this.onRemoteEntityObserved?.(this.require(refreshedId), observed);
     return this.describe(refreshedId, destinationHostRegistered);
+  }
+
+  /**
+   * Which of a Source's registered keys changed at the provider recently: one
+   * provider search. `null` when the provider cannot search, so the caller
+   * refreshes stale copies instead.
+   */
+  async remoteEntityChanges(
+    sourceId: string,
+    locators: readonly string[],
+    sinceMinutes: number,
+  ): Promise<readonly { entityId: string; locator: string }[] | null> {
+    const source = this.requireSource(sourceId);
+    if (source.provider !== "jira" && source.provider !== "linear") return null;
+    if (source.policy.deniedCapabilities.includes("read") || source.policy.deniedCapabilities.includes("refresh")) return [];
+    if (!this.remoteEntityClient.changedSince || locators.length === 0) return null;
+    return this.remoteEntityClient.changedSince(source, locators, sinceMinutes);
   }
 
   private pdfRefreshFailure(
