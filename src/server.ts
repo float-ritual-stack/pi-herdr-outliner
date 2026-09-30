@@ -1438,8 +1438,14 @@ export class OutlinerServer {
         const normalized = normalizeResourceProjectionRequest(request);
         const owner = this.store.extensionOwner(normalized.blockId);
         const record = owner?.role === "comment" ? this.store.extensionOwner(owner.parentBlockId) : owner;
+        // One line's ticket (a click on its age), the ticket block's own, or every ticket the block shows.
+        const one = normalized.line !== undefined && !record
+          ? readResourceProjections(this.store, normalized).projections.find((projection) => projection.resourceId)
+          : undefined;
         if (record?.resourceId) {
           await this.store.resources.refreshRemoteEntity(record.resourceId, false);
+        } else if (one?.resourceId) {
+          await this.store.resources.refreshRemoteEntity(one.resourceId, false);
         } else {
           await this.extensionSync.materialize(normalized.blockId, true);
         }
