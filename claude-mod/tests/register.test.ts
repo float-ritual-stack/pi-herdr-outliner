@@ -24,7 +24,7 @@ type Run = { argv: readonly string[]; init?: ProcessRunInit }
 /**
  * A session in `cwd` whose host commands answer from `answer`, recording each.
  */
-function sessionIn(on: On, cwd: string, answer: (run: Run) => ProcessRunResult, workspaces = `${WORKSPACE}/`) {
+function sessionIn(on: On, cwd: string, answer: (run: Run) => ProcessRunResult, workspaces = `${WORKSPACE}/`, env: Record<string, string> = {}) {
   const runs: Run[] = []
   const toasts: string[] = []
   const clock = mock.clock(on)
@@ -33,6 +33,7 @@ function sessionIn(on: On, cwd: string, answer: (run: Run) => ProcessRunResult, 
     HERDR_PANE_ID: 'w:p9',
     HERDR_TAB_ID: 'w:t1',
     HERDR_WORKSPACE_ID: 'w',
+    ...env,
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   // The engine's own drawing of a reply, where the plugin leaves it.
@@ -352,6 +353,44 @@ describe('register', () => {
 
     const empty = await $.tool.call({ tool: 'mcp__pi-outliner__show', reference: ' ' })
     expect(empty.deny).toContain('Give a Work ID')
+  })
+
+  test("in a door tile, show opens Claude's detail tile below it, then reuses it", async ($, on) => {
+    let hasDetail = false
+    const session = sessionIn(on, WORKSPACE, run => {
+      if (run.argv[0] !== 'ep0ch') return succeeding(run)
+      if (run.argv[2] === 'tile.open') hasDetail = true
+      return hasDetail || run.argv[2] !== 'tile.info'
+        ? { exitCode: 0, stdout: '{}', stderr: '' }
+        : { exitCode: 1, stdout: '', stderr: 'no tile claude-detail; tiles: 1 claude, 2 outline, or focused\n' }
+    }, `${WORKSPACE}/`, { EP0CH_TILE: 'claude' })
+    await session.begin(() => $.session.start(START))
+
+    const first = await $.tool.call({ tool: 'mcp__pi-outliner__show', reference: '[[Daily notes]]' })
+    expect(first).toMatchObject({ result: "Showing Daily notes in Claude's Outliner pane." })
+    const door = () => session.runs.filter(run => run.argv[0] === 'ep0ch').map(run => run.argv.slice(2))
+    expect(door()).toEqual([
+      ['tile.info', 'reader=claude-detail', '--as', 'claude-code/session-'],
+      ['tile.open', 'kind=detail', 'name=claude-detail', `note=${BLOCK}`, 'to=claude', 'where=down', '--as', 'claude-code/session-'],
+    ])
+    expect(splitOf(session.runs)).toBeUndefined()
+
+    session.runs.length = 0
+    await $.tool.call({ tool: 'mcp__pi-outliner__show', reference: 'PIE-8' })
+    expect(door()).toEqual([
+      ['tile.info', 'reader=claude-detail', '--as', 'claude-code/session-'],
+      ['open', `id=${BLOCK}`, 'reader=claude-detail', '--as', 'claude-code/session-'],
+    ])
+  })
+
+  test('in a door tile, a refusal from the door is the reason given', async ($, on) => {
+    const session = sessionIn(on, WORKSPACE, run => run.argv[0] === 'ep0ch'
+      ? { exitCode: 1, stdout: '', stderr: 'no door running at /tmp/door.sock (ENOENT)\n' }
+      : succeeding(run), `${WORKSPACE}/`, { EP0CH_TILE: 'claude' })
+    await session.begin(() => $.session.start(START))
+    const shown = await $.tool.call({ tool: 'mcp__pi-outliner__show', reference: '[[Daily notes]]' })
+    expect(shown.deny).toBe('Could not show [[Daily notes]]: no door running at /tmp/door.sock (ENOENT)')
+    expect(session.runs.filter(run => run.argv[2] === 'tile.open')).toEqual([])
   })
 
   test('a workboard tool runs the installed CLI in the workspace as this Claude session', async ($, on) => {

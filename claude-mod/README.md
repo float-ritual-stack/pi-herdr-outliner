@@ -31,6 +31,11 @@ it as you like. References in code and existing links are left alone.
 Claude can put a note there too, with the `mcp__pi-outliner__show` tool (a Work
 ID, `[[page]]`, `((uuid))` or `pi-outliner://` URI).
 
+In an ep0ch door tile (`EP0CH_TILE` is set), the door owns the layout, not
+Herdr: clicks and `show` go to a detail tile named `<tile>-detail`, opened below
+Claude's tile the first time and reused after, through the door's `ep0ch act`
+(`tile.open`, `open`) as `claude-code/<session>`. Neither takes your focus.
+
 - The pane is recognized by its browsing context, which is the Claude session
   id, so it survives plugin reloads and resumed sessions. Close it and the next
   click splits a new one.

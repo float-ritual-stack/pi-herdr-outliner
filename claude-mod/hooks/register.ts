@@ -292,11 +292,13 @@ function showInScratchPane($: EngineInterface, workspace: string, uri: string): 
 async function showNow($: EngineInterface, workspace: string, uri: string): Promise<string> {
   const root = await outlinerRootOf($)
   if (!root) throw Error('the Outliner plugin is disabled')
-  const [sessionId, paneId, herdrWorkspace] = await Promise.all([
+  const [sessionId, paneId, herdrWorkspace, doorTile] = await Promise.all([
     $.session.id(),
     $.env.get('HERDR_PANE_ID'),
     $.env.get('HERDR_WORKSPACE_ID'),
+    $.env.get('EP0CH_TILE'),
   ])
+  if (doorTile) return showInDoor($, workspace, root, doorTile, sessionId, uri)
   if (!paneId || !herdrWorkspace) throw Error('this session is not running inside Herdr')
   const outliner = (args: string[]) => $.process.run(
     ['/bin/sh', `${root}/scripts/run-bun.sh`, `${root}/src/cli.ts`, ...args],
@@ -347,6 +349,36 @@ async function showNow($: EngineInterface, workspace: string, uri: string): Prom
   } catch {
     splitScratchPane = undefined
   }
+  return title ?? ''
+}
+
+/**
+ * Claude's Detail when the session runs in an ep0ch door tile (`EP0CH_TILE`):
+ * the door owns the layout there, not Herdr. The note goes to a detail tile
+ * named after Claude's own (`<tile>-detail`), opened below it the first time and
+ * reused after. Both are the door's agent actions, attributed to this session:
+ * they never take the person's focus or show a tab over theirs.
+ */
+async function showInDoor($: EngineInterface, workspace: string, root: string, tile: string, sessionId: string, uri: string): Promise<string> {
+  const resolved = await $.process.run(
+    ['/bin/sh', `${root}/scripts/run-bun.sh`, `${root}/src/cli.ts`, 'resolve', uri],
+    { cwd: workspace, env: envFor(workspace), timeoutMs: 30_000 },
+  )
+  if (resolved.exitCode !== 0) throw Error(failureReasonOf(resolved.stderr) || 'the target did not resolve')
+  const { id, title } = JSON.parse(resolved.stdout) as { id: string; title?: string }
+  const detail = `${tile}-detail`
+  const as = ['--as', `claude-code/${sessionId.slice(0, 8)}`]
+  const door = (args: string[]) => $.process.run(['ep0ch', 'act', ...args, ...as], { timeoutMs: 15_000 })
+  const found = await door(['tile.info', `reader=${detail}`])
+  if (found.exitCode !== 0) {
+    const reason = failureReasonOf(found.stderr)
+    if (!reason.startsWith(`no tile ${detail};`)) throw Error(reason || 'the door did not answer')
+    const opened = await door(['tile.open', 'kind=detail', `name=${detail}`, `note=${id}`, `to=${tile}`, 'where=down'])
+    if (opened.exitCode !== 0) throw Error(failureReasonOf(opened.stderr) || 'the door could not open a detail tile')
+    return title ?? ''
+  }
+  const shown = await door(['open', `id=${id}`, `reader=${detail}`])
+  if (shown.exitCode !== 0) throw Error(failureReasonOf(shown.stderr) || 'the door could not show it')
   return title ?? ''
 }
 
