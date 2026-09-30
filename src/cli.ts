@@ -90,7 +90,7 @@ if (process.argv[2] === "outlines" || process.argv[2] === "outline") {
   process.exit(await runOutlinesCommand(process.argv[2], process.argv.slice(3)));
 }
 /**
- * `publish serve [--port N] [--root DIR]… [--max-bytes N] [--base-path /pub] [--outline NAME]`:
+ * `publish serve [--port N] [--root DIR]… [--max-bytes N] [--base-path /pub] [--allow-host NAME]… [--outline NAME]`:
  * serves blocks carrying `[publish::…]` read-only on 127.0.0.1 (src/publish.ts).
  * `publish list [--json]` prints the same index once.
  */
@@ -101,13 +101,14 @@ if (process.argv[2] === "publish") {
 async function runPublishCommand(operation: string | undefined, args: string[]): Promise<number> {
   try {
     if (operation !== "serve" && operation !== "list") {
-      throw new Error("publish expects: serve [--port N] [--root DIR]… [--max-bytes N] [--base-path /pub] [--outline NAME] | list [--json]");
+      throw new Error("publish expects: serve [--port N] [--root DIR]… [--max-bytes N] [--base-path /pub] [--allow-host NAME]… [--outline NAME] | list [--json]");
     }
     const { values } = parseArgs({
       args, strict: true,
       options: {
         port: { type: "string" }, root: { type: "string", multiple: true }, "max-bytes": { type: "string" },
-        "base-path": { type: "string" }, outline: { type: "string" }, json: { type: "boolean" },
+        "base-path": { type: "string" }, "allow-host": { type: "string", multiple: true }, outline: { type: "string" },
+        json: { type: "boolean" },
       },
     });
     if (values.outline) process.env.OUTLINER_OUTLINE = values.outline;
@@ -121,6 +122,7 @@ async function runPublishCommand(operation: string | undefined, args: string[]):
       roots: (values.root ?? []).map(root => resolve(root)),
       ...(maxBytes === undefined ? {} : { maxBytes }),
       ...(values["base-path"] === undefined ? {} : { basePath: values["base-path"] }),
+      ...(values["allow-host"] === undefined ? {} : { allowedHosts: values["allow-host"] }),
       log: line => console.error(line),
     });
     const status = await publisher.start();

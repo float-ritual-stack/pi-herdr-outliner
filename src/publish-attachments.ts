@@ -1,4 +1,5 @@
 import { lstatSync, realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { extname, isAbsolute, relative, sep } from "node:path";
 import { MAX_TEXT_FILE_BYTES, resolveReferencedPath } from "./files";
 
@@ -26,7 +27,8 @@ export type AttachmentRefusal =
   | "not-a-file"
   | "too-large"
   | "unsupported-type"
-  | "no-roots";
+  | "no-roots"
+  | "remote-service";
 
 export type AttachmentCheck =
   | {
@@ -47,13 +49,21 @@ export interface AttachmentPolicy {
   readonly workspaceRoot: string;
   readonly maxBytes: number;
   readonly homeDirectory?: string;
+  /** The service reads files on another machine, so no local check can vouch for them. */
+  readonly remoteService?: boolean;
 }
 
 /**
  * Resolves each configured root to its real path. A root that does not exist is
- * dropped (and reported); `/` is refused outright, since it would allow every file.
+ * dropped (and reported); `/` and the home folder are refused outright, since
+ * they would allow nearly every file (the folder rule never binds them either).
  */
-export function canonicalPublishRoots(roots: readonly string[]): { roots: string[]; problems: string[] } {
+export function canonicalPublishRoots(
+  roots: readonly string[],
+  homeDirectory = homedir(),
+): { roots: string[]; problems: string[] } {
+  let home: string | null = null;
+  try { home = realpathSync(homeDirectory); } catch { /* no home folder to refuse */ }
   const canonical: string[] = [];
   const problems: string[] = [];
   for (const root of roots) {
@@ -67,6 +77,10 @@ export function canonicalPublishRoots(roots: readonly string[]): { roots: string
     }
     if (real === sep) {
       problems.push(`publish root ${root} is the filesystem root; refused`);
+      continue;
+    }
+    if (real === home) {
+      problems.push(`publish root ${root} is the home folder; refused (pass a narrower --root)`);
       continue;
     }
     if (!canonical.includes(real)) canonical.push(real);
@@ -94,6 +108,7 @@ function inside(root: string, path: string): string | null {
  * size cap; and a servable type. It reads no content.
  */
 export function checkAttachment(sourcePath: string, policy: AttachmentPolicy): AttachmentCheck {
+  if (policy.remoteService) return refuse("remote-service", "The service runs on another machine");
   if (!policy.roots.length) return refuse("no-roots", "No publish roots are configured");
   if (sourcePath.includes("\0")) return refuse("parent-segment", "Attachment path contains a NUL byte");
   if (sourcePath.split(/[\\/]/).includes("..")) {
@@ -102,8 +117,9 @@ export function checkAttachment(sourcePath: string, policy: AttachmentPolicy): A
   let resolved: string;
   try {
     resolved = resolveReferencedPath(sourcePath, policy.workspaceRoot, policy.homeDirectory);
-  } catch (error) {
-    return refuse("outside-roots", error instanceof Error ? error.message : String(error));
+  } catch {
+    // The resolver's message quotes the path; the reason is shown to readers, so it doesn't.
+    return refuse("outside-roots", "Attachment path is not supported");
   }
   let real: string;
   try {

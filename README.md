@@ -691,7 +691,7 @@ of the service (`blocks.query`, `pages.resolve`, `files.read` and the content
 event feed) and listens on `127.0.0.1` only; exposing it is Tailscale's job.
 
 ```sh
-bun run cli publish serve --outline pie --port 8790 --base-path /pub [--root ~/writing]… [--max-bytes 1048576]
+bun run cli publish serve --outline pie --port 8790 --base-path /pub [--root ~/writing]… [--max-bytes 1048576] [--allow-host NAME]…
 bun run cli publish list --outline pie [--json]
 ```
 
@@ -701,7 +701,7 @@ bun run cli publish list --outline pie [--json]
 | --- | --- |
 | `[publish::true]` or `[publish::yes]` | `/p/<page address>` when the block has `[page::…]`, else `/p/<block id>` |
 | `[publish::<slug>]` | `/p/<slug>`; `/` makes folders, e.g. `[publish::field-notes/moths]` |
-| `[publish::false]`, `no`, `off`, `0` | not published |
+| `[publish::false]`, `no`, `off`, `0` | not published, even when the block has another `[publish::…]` |
 
 Page addresses and slugs are lower-cased, and anything other than letters,
 digits, `.`, `_`, `~` and `-` becomes `-` (`[page::Moth Garden]` →
@@ -725,13 +725,17 @@ they sit in the outline. A descendant marked `[publish::false]` is left out with
 everything under it, and Trash is never published. Property tokens are removed.
 A `((block))` or `[[page]]` link becomes a link when its target is published;
 otherwise only its authored label is shown (or "unpublished note"), never the
-target's text. At most 1,000 blocks of a subtree are published, and the page
-says so when it is cut off.
+target's text or id. An embed `!((block))` is published the same way, as a link,
+not transcluded. Titles in the index and page titles follow the same rule. At
+most 1,000 blocks of a subtree are published, and the page says so when it is
+cut off.
 
 `/` and `/index` list everything published like a little file system (title,
 URL, type, updated): HTML by default, plain text with `Accept: text/plain` or at
 `/index.txt`, and JSON at `/index.json`. "Updated" is the block's last edit, or
-the attached file's modification time when that is later.
+the attached file's modification time when that is later. The index says when an
+attachment is refused and why, but never shows an attachment's path; `publish
+list` shows it to you.
 
 **Safety.** The publisher serves only published blocks and only files attached
 to them. There is no query endpoint and no directory listing; any other path is
@@ -739,8 +743,9 @@ to them. There is no query endpoint and no directory listing; any other path is
 
 - its authored path has no `..` segment;
 - its real path, with every symlink resolved, is inside an allowed root: the
-  outline's workspace root (from the service's `ping`, only when the service runs
-  on the same machine) plus each `--root`. `/` is never a root;
+  outline's workspace root (from the service's `ping`) plus each `--root`. `/`
+  and the home folder are never roots. When the service runs on another machine
+  no attachment is served, since the checks here cannot vouch for its files;
 - no folder or file below that root is hidden (`.git`, `.env`, `.ssh`, …);
 - it is a regular file, not a device, FIFO, socket or directory;
 - it is at most `--max-bytes` (default and ceiling 2 MiB, the service's own
@@ -753,10 +758,23 @@ denies reading a filesystem Source still applies), and a file that changed
 between the check and the read is refused with `409`. A refused attachment is
 never read: the block is published as text instead and the index says why.
 Pages the publisher renders carry a `Content-Security-Policy` that allows no
-script, and authored raw HTML in markdown is shown as text; an attached `.html`
-file is served as authored. Unpublishing (removing the property or setting it
-to `false`) removes the URL on the next request: any content change clears the
-cached index, which is otherwise at most five seconds old.
+script, and authored raw HTML in markdown is shown as text. An attached `.html`
+file is served as authored but sandboxed (`Content-Security-Policy: sandbox`
+without `allow-same-origin`): its scripts run with an opaque origin, so they
+cannot read the host's other mounts, and it has no cookies or `localStorage`.
+Every response is `no-store` with `X-Content-Type-Options: nosniff`. A request
+whose `Host` is not loopback, a `*.ts.net` name or an `--allow-host NAME` is
+refused with `421`, so a web page that points its own name at 127.0.0.1 (DNS
+rebinding) cannot read what is published. Unpublishing (removing the property or
+setting it to `false`) removes the URL on the next request: any content change
+clears the cached index, which is otherwise at most five seconds old.
+
+Anyone who can write to the outline can publish: an agent that adds
+`[publish::true]` publishes that block. The publisher is built for a tailnet,
+where every reader is already trusted. Before it faces the public internet it
+needs its own origin (attached HTML shares the host's origin with the other
+mounts, sandboxed or not), a cache and rate limit in front of the shared
+service, and publishing that someone confirms rather than a tag alone.
 
 **Expose it on the tailnet.** `--base-path` must match the mount so links carry
 it (the publisher accepts requests with or without the prefix):

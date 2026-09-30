@@ -4,11 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OutlinerClient } from "../src/client";
 import { resolvePaths } from "../src/paths";
-import { assignPaths, publishIntent, Publisher, servePublisher, slugify, type PublishedIndex } from "../src/publish";
+import { assignPaths, publishIntent, Publisher, renderSubtreeMarkdown, servePublisher, slugify, type PublishedIndex } from "../src/publish";
 import { canonicalPublishRoots, checkAttachment, type AttachmentPolicy } from "../src/publish-attachments";
 import { OutlinerServer } from "../src/server";
 import { OutlinerStore } from "../src/store";
-import type { Block, ProjectedVisibleBlock } from "../src/types";
+import type { Block, ProjectedBlockCollection, ProjectedVisibleBlock } from "../src/types";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {
@@ -22,7 +22,7 @@ function scratchDirectory(prefix: string): string {
 }
 
 /** A throwaway service over a fictional outline, and a publisher reading it. */
-async function setup(options: { maxBytes?: number; roots?: string[]; basePath?: string } = {}) {
+async function setup(options: { maxBytes?: number; roots?: string[]; basePath?: string; serviceHostname?: string } = {}) {
   const root = scratchDirectory("outliner-publish-");
   const workspace = join(root, "garden");
   mkdirSync(workspace);
@@ -31,7 +31,15 @@ async function setup(options: { maxBytes?: number; roots?: string[]; basePath?: 
   const server = new OutlinerServer(store, paths.socket);
   await server.start();
   const client = new OutlinerClient(paths.socket);
-  const publisher = new Publisher({ client, ...options });
+  const { serviceHostname, ...publisherOptions } = options;
+  // A service on another machine: the same socket, but ping names another host.
+  const publisherClient = serviceHostname === undefined ? client : Object.assign(Object.create(client) as OutlinerClient, {
+    requireCompatibleService: async () => {
+      const status = await client.requireCompatibleService();
+      return { ...status, location: { ...status.location!, hostname: serviceHostname } };
+    },
+  });
+  const publisher = new Publisher({ client: publisherClient, ...publisherOptions });
   cleanups.push(async () => {
     await publisher.stop();
     await server.close();
@@ -333,4 +341,175 @@ test("an attachment swapped for an escaping link after indexing is refused at re
   const response = await get("/p/moth-garden");
   expect(response.status).toBe(403);
   expect(await response.text()).not.toContain("PRIVATE");
+});
+
+// Review hardening (PR #252): leaks through titles and embeds, attached HTML, remote services, load.
+
+test("titles and embeds never show an unpublished block's id or text", async () => {
+  const { store, get } = await setup();
+  const hidden = store.create("Neighbour's gate code 4471\nunder the flowerpot");
+  const census = store.create("Pollinator census [publish::census]");
+  store.create(`Walk notes ((${hidden.id})) and !((${hidden.id})) and !((${census.id})) [publish::walk]`);
+
+  const markdown = await (await get("/p/walk")).text();
+  expect(markdown).toBe("# Walk notes unpublished note and unpublished note and [Pollinator census](/p/census)\n");
+  const html = await (await get("/p/walk?view=html")).text();
+  expect(html).toContain("<title>Walk notes unpublished note and unpublished note and Pollinator census</title>");
+  // An embed is a link, not markdown's image syntax.
+  expect(html).not.toContain("<img");
+  for (const body of [markdown, html, await (await get("/index.json")).text(), await (await get("/index.txt")).text(), await (await get("/")).text()]) {
+    expect(body).not.toContain(hidden.id);
+    expect(body).not.toContain("gate code");
+    expect(body).not.toContain("flowerpot");
+  }
+});
+
+test("a [publish::false] branch is left out whatever order the service lists blocks in", () => {
+  const block = (id: string, parentId: string | null, depth: number, text: string) =>
+    ({ id, parentId, depth, text, properties: text.includes("[publish::no]") ? [{ key: "publish", value: "no" }] : [] }) as unknown as ProjectedVisibleBlock;
+  const root = block("root-0001", null, 0, "Moth garden plan");
+  const draft = block("draft-001", "root-0001", 1, "Budget draft [publish::no]");
+  const invoice = block("invoice-1", "draft-001", 2, "Seed invoice numbers");
+  const orphan = block("orphan-01", "elsewhere", 2, "Stray block from outside");
+  const beds = block("beds-0001", "root-0001", 1, "Beds");
+  const subtree: ProjectedBlockCollection = { blocks: [root, invoice, orphan, draft, beds], completeness: { kind: "complete" }, fields: ["text", "parent", "properties"] };
+  const markdown = renderSubtreeMarkdown(subtree, { entries: [], truncated: false, builtAt: "" });
+  expect(markdown).toBe("# Moth garden plan\n\n- Beds\n");
+});
+
+test("an attached html file runs sandboxed, without the host's origin", async () => {
+  const { store, get, write } = await setup();
+  write("site/lanterns.html", "<!doctype html><script>fetch('/stash/')</script><p>Paper lanterns</p>");
+  store.create("Lantern handout [publish::lanterns] [file::site/lanterns.html]");
+  const response = await get("/p/lanterns");
+  const csp = response.headers.get("content-security-policy") ?? "";
+  expect(csp).toStartWith("sandbox ");
+  expect(csp).toContain("allow-scripts");
+  expect(csp).not.toContain("allow-same-origin");
+  expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+});
+
+test("the index over HTTP never shows where an attached file lives", async () => {
+  const { store, get, write, workspace } = await setup();
+  write("notes/moth-garden.md", "# Moth garden plan\n");
+  store.create("Moth garden plan [publish::true] [page::Moth Garden] [file::notes/moth-garden.md]");
+  store.create("Seed order [publish::seeds] [file::~nobody/private-seed-order.md]");
+  for (const body of [await (await get("/index.json")).text(), await (await get("/index.txt")).text(), await (await get("/")).text()]) {
+    expect(body).not.toContain("notes/moth-garden.md");
+    expect(body).not.toContain("private-seed-order");
+    expect(body).not.toContain(workspace);
+  }
+  const index = await (await get("/index.json")).json() as PublishedIndex;
+  expect(index.entries.find((entry) => entry.slug === "seeds")?.attachment).toEqual({ refused: "Attachment path is not supported" });
+});
+
+test("attachments are not served when the service runs on another machine", async () => {
+  const { store, get, write, workspace } = await setup({ serviceHostname: "moth-box.invalid" });
+  write("notes/moth-garden.md", "ATTACHED-FILE");
+  store.create("Moth garden plan [publish::true] [page::Moth Garden] [file::" + join(workspace, "notes/moth-garden.md") + "]");
+  const body = await (await get("/p/moth-garden")).text();
+  expect(body).toBe("# Moth garden plan\n");
+  const index = await (await get("/index.json")).json() as PublishedIndex;
+  expect(index.entries[0]?.attachment).toEqual({ refused: "The service runs on another machine" });
+});
+
+test("the home folder is never a publish root", () => {
+  const home = scratchDirectory("publish-home-");
+  mkdirSync(join(home, "writing"));
+  const canonical = canonicalPublishRoots([home, join(home, "writing")], home);
+  expect(canonical.roots).toEqual([join(home, "writing")]);
+  expect(canonical.problems.join("\n")).toContain("home folder");
+});
+
+test("a page with many [[page]] links renders without flooding the service", async () => {
+  const { store, get } = await setup();
+  store.create("Moth index [publish::moth-index] [page::Moth index]");
+  const plan = store.create("Moth list [publish::moth-list]");
+  for (let i = 0; i < 600; i++) store.create(`Moth ${i} see [[Moth page ${i}]] and [[Moth index]]`, plan.id);
+  const response = await get("/p/moth-list");
+  expect(response.status).toBe(200);
+  const markdown = await response.text();
+  expect(markdown).toContain("- Moth 0 see Moth page 0 and [Moth index](/p/moth-index)");
+  expect(markdown).toContain("- Moth 599 see Moth page 599 and [Moth index](/p/moth-index)");
+}, 30_000);
+
+test("Trash is never published: a trashed block, a trashed child, a block under a trashed parent", async () => {
+  const { store, get } = await setup();
+  const heron = store.create("Heron log [publish::heron]");
+  const draft = store.create("Draft heron count 17", heron.id);
+  const otter = store.create("Old otter notes [publish::otter]");
+  const beaverParent = store.create("Beaver notes");
+  const dam = store.create("Beaver dam [publish::beaver]", beaverParent.id);
+  expect((await get("/p/otter")).status).toBe(200);
+  store.delete(draft.id);
+  store.delete(otter.id);
+  store.delete(beaverParent.id);
+  // No wait: the change feed drops the cached index.
+  expect(await (await get("/p/heron")).text()).toBe("# Heron log\n");
+  for (const path of ["/p/otter", "/p/beaver", `/p/${dam.id}`, `/p/${otter.id}`]) expect((await get(path)).status).toBe(404);
+  const index = await (await get("/index.txt")).text();
+  expect(index).not.toContain("otter");
+  expect(index).not.toContain("Beaver");
+});
+
+test("any [publish::false] token wins over another [publish::…] on the same block", async () => {
+  const { store, get } = await setup();
+  store.create("Two minds [publish::yes] [publish::false]");
+  const root = store.create("Pond survey [publish::pond]");
+  store.create("Private tally [publish::tally] [publish::no]", root.id);
+  // Syntax shown in code or escaped is not a property, so it publishes nothing.
+  store.create("How to publish: add `[publish::true]` to a block");
+  store.create("Escaped \\[publish::escaped]");
+  const index = await (await get("/index.json")).json() as PublishedIndex;
+  expect(index.entries.map((entry) => entry.slug)).toEqual(["pond"]);
+  expect(await (await get("/p/pond")).text()).toBe("# Pond survey\n");
+});
+
+test("rendered pages carry no script: raw html is text, script links are dropped", async () => {
+  const { store, get } = await setup();
+  const root = store.create("Moth <script>alert(1)</script> [publish::moths]");
+  store.create("[a](javascript:alert(1)) [b](JaVaScRiPt:alert(1)) [c](java&#x73;cript:alert(1)) <img src=x onerror=alert(1)> [d](data:text/html,hi) ![e](javascript:alert(1)) [f](vbscript:x)", root.id);
+  const response = await get("/p/moths?view=html");
+  expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
+  const html = await response.text();
+  expect(html).not.toContain("<script");
+  expect(html).not.toContain("<img src=\"x\"");
+  expect(html).not.toMatch(/(href|src)="[^"]*(script|data:text)/i);
+  expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
+});
+
+test("over real HTTP: HEAD has no body, odd paths never reach anything unpublished, foreign Hosts are refused", async () => {
+  const { store, publisher } = await setup();
+  store.create("Heron log [publish::heron]");
+  store.create("Secret otter den");
+  const server = servePublisher(publisher, 0);
+  cleanups.push(() => { server.stop(true); });
+  const base = `http://127.0.0.1:${server.port}`;
+  const head = await fetch(`${base}/p/heron`, { method: "HEAD" });
+  expect(head.status).toBe(200);
+  expect(await head.text()).toBe("");
+  for (const path of ["/p/%2e%2e/%2e%2e/etc/passwd", "/p/..%2f..%2fetc%2fpasswd", "/p/heron%00", "/p/%2Fheron", "/p/HERON", "/p/..\\..\\etc"]) {
+    const response = await fetch(`${base}${path}`);
+    expect([404, 200]).toContain(response.status);
+    expect(await response.text()).not.toContain("otter");
+  }
+  // A page on the web that rebinds its own name to 127.0.0.1 still sends that name as Host.
+  const rebound = await fetch(`${base}/index.json`, { headers: { host: "attacker.example" } });
+  expect(rebound.status).toBe(421);
+  expect(await rebound.text()).not.toContain("heron");
+  for (const host of [`127.0.0.1:${server.port}`, `localhost:${server.port}`, "moth-box.tail0000.ts.net"]) {
+    expect((await fetch(`${base}/index.json`, { headers: { host } })).status).toBe(200);
+  }
+});
+
+test("--allow-host adds a name besides loopback and the tailnet", async () => {
+  const { store, client } = await setup();
+  store.create("Heron log [publish::heron]");
+  const publisher = new Publisher({ client, allowedHosts: ["garden.example"] });
+  await publisher.start();
+  cleanups.push(() => publisher.stop());
+  const at = (host: string) => publisher.handle(new Request("http://127.0.0.1/index.json", { headers: { host } }));
+  expect((await at("garden.example")).status).toBe(200);
+  expect((await at("GARDEN.example:8443")).status).toBe(200);
+  expect((await at("elsewhere.example")).status).toBe(421);
 });

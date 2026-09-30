@@ -9,8 +9,12 @@ This file records notable user-facing changes. The project remains active dogfoo
   an attached `.html`/`.md` file or the block and its subtree as markdown (with
   `?view=html`), and `/index` lists them all. Read-only; attachments are served
   only from allowed roots, never through `..`, escaping symlinks, hidden paths
-  or non-regular files. Expose it with `tailscale serve --set-path /pub`. See
-  README "Publishing blocks".
+  or non-regular files, never from `/` or the home folder, and not at all when the
+  service runs on another machine. Attached HTML runs sandboxed, with an opaque
+  origin. Embeds, titles and links never show an unpublished block's text or id.
+  Any `[publish::false]` on a block wins, and a request naming a foreign Host is
+  refused.
+  Expose it with `tailscale serve --set-path /pub`. See README "Publishing blocks".
 
 - The service plans writes into saved views (PIE-490). `views.planWrite` says
   what moving a block into each view would patch (with token ordinals, at the

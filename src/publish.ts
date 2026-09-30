@@ -11,6 +11,7 @@ import {
   type AttachmentPolicy,
 } from "./publish-attachments";
 import { blockReferenceOccurrences } from "./references";
+import { embedMatches } from "./transclusions";
 import type {
   BlockProperty,
   OutlinerServiceStatus,
@@ -29,6 +30,10 @@ export const PUBLISH_PROPERTY = "publish";
 export const PUBLISH_QUERY_LIMIT = 1000;
 const INDEX_MAX_AGE_MS = 5_000;
 const DISCONNECTED_MAX_AGE_MS = 1_000;
+/** At most this many distinct `[[page]]` addresses are resolved for one page; the rest show their label. */
+const PAGE_RESOLVE_LIMIT = 200;
+/** `pages.resolve` requests in flight at once, so one large page never floods the shared service. */
+const PAGE_RESOLVE_CONCURRENCY = 4;
 
 export type PublishedEntryType = "html" | "markdown" | "text" | "block";
 
@@ -42,8 +47,11 @@ export interface PublishedEntry {
   collision?: { requested: string; heldBy: string };
   type: PublishedEntryType;
   updatedAt: string;
-  /** Set when the block has `[file::…]`: the path as authored and why it is not served, if not. */
-  attachment?: { source: string; refused?: string };
+  /**
+   * Set when the block has `[file::…]`: the path as authored and why it is not
+   * served, if not. Over HTTP only a refusal is shown, never the path.
+   */
+  attachment?: { source?: string; refused?: string };
 }
 
 export interface PublishedIndex {
@@ -61,6 +69,12 @@ export interface PublisherOptions {
   maxBytes?: number;
   /** Where a proxy mounts the publisher (`/pub`); links carry it and requests may too. */
   basePath?: string;
+  /**
+   * Host names requests may name besides loopback and `*.ts.net` (the tailnet
+   * names `tailscale serve` forwards). Any other Host is refused, so a web page
+   * that rebinds its own name to 127.0.0.1 cannot read what is published.
+   */
+  allowedHosts?: readonly string[];
   log?: (line: string) => void;
 }
 
@@ -94,8 +108,18 @@ export function slugify(value: string): string | null {
   return slug || null;
 }
 
+/**
+ * A block's publish intent from all its `[publish::…]` tokens: when any says
+ * false/no/off/0 the block is not published, whatever the others say.
+ */
+export function blockPublishIntent(properties: readonly BlockProperty[]): ReturnType<typeof publishIntent> | undefined {
+  const values = properties.filter((property) => property.key === PUBLISH_PROPERTY).map((property) => publishIntent(property.value));
+  if (!values.length) return undefined;
+  return values.includes("off") ? "off" : values[0];
+}
+
 function requestedSlug(block: { id: string; properties?: BlockProperty[] }): string | null {
-  const intent = publishIntent(getProperty(block.properties ?? [], PUBLISH_PROPERTY));
+  const intent = blockPublishIntent(block.properties ?? []) ?? "off";
   if (intent === "off") return null;
   if (intent !== "auto") return intent.slug;
   const page = getProperty(block.properties ?? [], "page");
@@ -191,6 +215,13 @@ const COMMON_HEADERS = {
 };
 /** Pages the publisher renders itself run no script and embed nothing but images. */
 const RENDERED_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src * data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+/**
+ * An attached `.html` file runs as authored, but in a sandbox without
+ * `allow-same-origin`: its scripts get an opaque origin, so they cannot read
+ * other pages on the same host (the tailnet name also serves other mounts) or
+ * this publisher's index with the viewer's credentials.
+ */
+const ATTACHED_HTML_CSP = "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads";
 
 function respond(body: string, contentType: string, status = 200, extra: Record<string, string> = {}): Response {
   return new Response(body, { status, headers: { ...COMMON_HEADERS, "content-type": contentType, ...extra } });
@@ -209,6 +240,7 @@ export class Publisher {
   readonly basePath: string;
   private readonly maxBytes: number;
   private readonly log: (line: string) => void;
+  private readonly allowedHosts: ReadonlySet<string>;
   private policy: AttachmentPolicy | null = null;
   private index: { value: PublishedIndex; at: number } | null = null;
   private building: Promise<PublishedIndex> | null = null;
@@ -222,6 +254,20 @@ export class Publisher {
     this.basePath = normalizeBasePath(options.basePath);
     this.maxBytes = Math.min(options.maxBytes ?? MAX_TEXT_FILE_BYTES, MAX_TEXT_FILE_BYTES);
     this.log = options.log ?? (() => {});
+    this.allowedHosts = new Set((options.allowedHosts ?? []).map((host) => host.trim().toLowerCase()).filter(Boolean));
+  }
+
+  /** Loopback, a tailnet name, or a host the operator allowed; the port is ignored. */
+  private hostAllowed(header: string | null): boolean {
+    if (!header) return false;
+    let host: string;
+    try {
+      host = new URL(`http://${header}`).hostname.toLowerCase();
+    } catch {
+      return false;
+    }
+    return host === "127.0.0.1" || host === "localhost" || host === "[::1]" ||
+      host.endsWith(".ts.net") || this.allowedHosts.has(host);
   }
 
   /**
@@ -233,16 +279,18 @@ export class Publisher {
     const status = await this.client.requireCompatibleService();
     const roots = [...(this.options.roots ?? [])];
     const location = status.location;
-    if (!this.options.excludeWorkspaceRoot) {
-      if (location && location.hostname === hostname()) roots.unshift(location.workspaceRoot);
-      else if (location) this.log(`publish: the service runs on ${location.hostname}, not here; its workspace root is not a publish root`);
-    }
+    // Attachments are checked on this machine's filesystem and read by the service from its own:
+    // the check means nothing unless both are the same machine.
+    const local = location !== undefined && location.hostname === hostname();
+    if (local && !this.options.excludeWorkspaceRoot) roots.unshift(location.workspaceRoot);
+    if (!local) this.log(`publish: the service runs on ${location?.hostname ?? "an unknown machine"}, not here; attachments are not served`);
     const canonical = canonicalPublishRoots(roots);
     for (const problem of canonical.problems) this.log(`publish: ${problem}`);
     this.policy = {
       roots: canonical.roots,
-      workspaceRoot: location?.hostname === hostname() ? location.workspaceRoot : process.cwd(),
+      workspaceRoot: local ? location.workspaceRoot : process.cwd(),
       maxBytes: this.maxBytes,
+      ...(local ? {} : { remoteService: true }),
     };
     const connected = Promise.withResolvers<void>();
     this.watcher = this.client.watch({
@@ -300,13 +348,15 @@ export class Publisher {
       fields: ["title", "properties", "timestamps"],
     });
     const policy = this.requirePolicy();
-    const entries = assignPaths(collection.blocks).map(({ block, slug, collision }): PublishedEntry => {
+    const assigned = assignPaths(collection.blocks);
+    const rawTitles = new Map(assigned.map(({ block }) => [block.id, block.title ?? ""]));
+    const entries = assigned.map(({ block, slug, collision }): PublishedEntry => {
       const source = getProperty(block.properties ?? [], "file");
       const check = source === undefined ? undefined : checkAttachment(source, policy);
       const served = check?.ok ? check : undefined;
       return {
         blockId: block.id,
-        title: block.title?.trim() || block.id,
+        title: publishedTitle(block.title ?? "", rawTitles) || block.id,
         path: `/p/${slug}`,
         slug,
         ...(collision ? { collision } : {}),
@@ -326,6 +376,9 @@ export class Publisher {
     if (request.method !== "GET" && request.method !== "HEAD") {
       return respond("Read-only\n", "text/plain; charset=utf-8", 405, { allow: "GET, HEAD" });
     }
+    if (!this.hostAllowed(request.headers.get("host") ?? new URL(request.url).host)) {
+      return respond("Host not allowed\n", "text/plain; charset=utf-8", 421);
+    }
     const url = new URL(request.url);
     let path = url.pathname;
     if (this.basePath && (path === this.basePath || path.startsWith(`${this.basePath}/`))) {
@@ -340,7 +393,7 @@ export class Publisher {
         return renderedHtml(renderIndexHtml(await this.readIndex(), this.basePath));
       }
       if (path === "/index.txt") return respond(renderIndexText(await this.readIndex(), this.basePath), "text/plain; charset=utf-8");
-      if (path === "/index.json") return respond(`${JSON.stringify(await this.readIndex(), null, 2)}\n`, "application/json; charset=utf-8");
+      if (path === "/index.json") return respond(`${JSON.stringify(readerIndex(await this.readIndex()), null, 2)}\n`, "application/json; charset=utf-8");
       if (!path.startsWith("/p/")) return notFound();
       let slug: string;
       try {
@@ -360,16 +413,18 @@ export class Publisher {
   }
 
   private async serveEntry(entry: PublishedEntry, index: PublishedIndex, asHtml: boolean): Promise<Response> {
-    if (entry.type !== "block" && entry.attachment) {
+    if (entry.type !== "block" && entry.attachment?.source !== undefined) {
       // Check again at request time: the file or a link in its path may have changed since the index.
       const check = checkAttachment(entry.attachment.source, this.requirePolicy());
-      if (!check.ok) return respond(`Attachment refused: ${check.reason}\n`, "text/plain; charset=utf-8", 403);
+      if (!check.ok) return respond("Attachment not served\n", "text/plain; charset=utf-8", 403);
       const contents = await this.client.request<FileContents>({ action: "files.read", path: check.path });
       if (contents.absolutePath !== check.path || contents.revision.size !== String(check.size) ||
         contents.revision.mtimeNs !== check.mtimeNs) {
         return respond("Attachment changed while it was read; try again\n", "text/plain; charset=utf-8", 409);
       }
-      if (check.type === "html") return respond(contents.text, "text/html; charset=utf-8");
+      if (check.type === "html") {
+        return respond(contents.text, "text/html; charset=utf-8", 200, { "content-security-policy": ATTACHED_HTML_CSP });
+      }
       if (check.type === "markdown") {
         if (asHtml) return renderedHtml(this.page(entry, renderMarkdownHtml(contents.text)));
         return respond(contents.text, "text/markdown; charset=utf-8", 200, { "content-disposition": "inline" });
@@ -394,12 +449,22 @@ export class Publisher {
       query: { subtreeRootId: entry.blockId, limit: PUBLISH_QUERY_LIMIT },
       fields: ["text", "parent", "properties"],
     });
-    const addresses = new Set(subtree.blocks.flatMap((block) =>
-      pageAddressReferences(block.text ?? "").map((reference) => reference.normalizedAddress)));
+    const addresses = [...new Set(subtree.blocks.flatMap((block) =>
+      pageAddressReferences(block.text ?? "").map((reference) => reference.normalizedAddress)))].slice(0, PAGE_RESOLVE_LIMIT);
     const pages = new Map<string, string>();
-    await Promise.all([...addresses].map(async (address) => {
-      const resolution = await this.client.request<PageAddressResolution>({ action: "pages.resolve", address });
-      if (resolution.status === "resolved" && resolution.block) pages.set(address, resolution.block.id);
+    // A few at a time: a large page must not open hundreds of connections to the shared service.
+    // A link that cannot be resolved shows its label, as an unpublished one does.
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(PAGE_RESOLVE_CONCURRENCY, addresses.length) }, async () => {
+      while (next < addresses.length) {
+        const address = addresses[next++]!;
+        try {
+          const resolution = await this.client.request<PageAddressResolution>({ action: "pages.resolve", address });
+          if (resolution.status === "resolved" && resolution.block) pages.set(address, resolution.block.id);
+        } catch (error) {
+          this.log(`publish: pages.resolve: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
     }));
     return renderSubtreeMarkdown(subtree, index, this.basePath, pages);
   }
@@ -424,10 +489,14 @@ function publishedText(text: string, index: PublishedIndex, basePath: string, pa
   const byId = new Map(index.entries.map((entry) => [entry.blockId, entry]));
   const link = (label: string, target: PublishedEntry | undefined) =>
     target ? `[${label}](${basePath}${target.path})` : label;
+  // An embed `!((id))` is published as a link to its target, never as the target's text
+  // (and never as `![…](…)`, which markdown reads as an image).
+  const embedStarts = new Set(embedMatches(body).map((match) => match.index));
   for (const occurrence of [...blockReferenceOccurrences(body)].reverse()) {
     const target = byId.get(occurrence.blockId);
     const replacement = link(occurrence.label?.trim() || target?.title || "unpublished note", target);
-    body = body.slice(0, occurrence.start) + replacement + body.slice(occurrence.end);
+    const start = embedStarts.has(occurrence.start - 1) ? occurrence.start - 1 : occurrence.start;
+    body = body.slice(0, start) + replacement + body.slice(occurrence.end);
   }
   for (const reference of [...pageAddressReferences(body)].reverse()) {
     const blockId = pages.get(reference.normalizedAddress);
@@ -435,6 +504,32 @@ function publishedText(text: string, index: PublishedIndex, basePath: string, pa
     body = body.slice(0, reference.start) + replacement + body.slice(reference.end);
   }
   return body.replace(/^\n+|\n+$/g, "");
+}
+
+/**
+ * A published block's title as readers see it: a `((ref))` shows its authored
+ * label, else a published target's title, else "unpublished note" — never an
+ * unpublished block's id or text. `[[page]]` links keep their authored text.
+ */
+function publishedTitle(rawTitle: string, publishedTitles: ReadonlyMap<string, string>, depth = 0): string {
+  let title = rawTitle;
+  for (const occurrence of [...blockReferenceOccurrences(title)].reverse()) {
+    const target = publishedTitles.get(occurrence.blockId);
+    const replacement = occurrence.label?.trim() ||
+      (target !== undefined && depth < 1 ? publishedTitle(target, publishedTitles, depth + 1) : target !== undefined ? "note" : "unpublished note");
+    const start = title[occurrence.start - 1] === "!" ? occurrence.start - 1 : occurrence.start;
+    title = title.slice(0, start) + replacement + title.slice(occurrence.end);
+  }
+  return title.replace(/\s{2,}/g, " ").trim();
+}
+
+/** The index as served over HTTP: without the authored attachment paths, which say where files live. */
+function readerIndex(index: PublishedIndex): PublishedIndex {
+  return {
+    ...index,
+    entries: index.entries.map(({ attachment, ...entry }) =>
+      attachment?.refused ? { ...entry, attachment: { refused: attachment.refused } } : entry),
+  };
 }
 
 /**
@@ -454,14 +549,24 @@ export function renderSubtreeMarkdown(
   const rootText = publishedText(root.text ?? "", index, basePath, pages);
   const [first = "", ...rest] = rootText.split("\n");
   const lines = [/^#{1,6}\s/.test(first) ? first : `# ${first.trim() || root.id}`, ...rest];
-  const excluded = new Set<string>();
+  // A block is left out when it or any ancestor below the root says `[publish::false]`, or when
+  // its chain to the root is not in the result. Decided per block, not by result order.
+  const byId = new Map(subtree.blocks.map((block) => [block.id, block]));
+  const decided = new Map<string, boolean>([[root.id, true]]);
+  const shown = (block: ProjectedVisibleBlock): boolean => {
+    const known = decided.get(block.id);
+    if (known !== undefined) return known;
+    decided.set(block.id, false); // a cycle is never shown
+    const parent = block.parentId ? byId.get(block.parentId) : undefined;
+    const value = parent !== undefined &&
+      blockPublishIntent(block.properties ?? []) !== "off" &&
+      shown(parent);
+    decided.set(block.id, value);
+    return value;
+  };
   const listed: string[] = [];
   for (const block of descendants) {
-    if ((block.parentId && excluded.has(block.parentId)) ||
-      publishIntent(getProperty(block.properties ?? [], PUBLISH_PROPERTY) ?? "yes") === "off") {
-      excluded.add(block.id);
-      continue;
-    }
+    if (!shown(block)) continue;
     const text = publishedText(block.text ?? "", index, basePath, pages);
     const indent = "  ".repeat(Math.max(0, block.depth - root.depth - 1));
     const [head = "", ...tail] = text.split("\n");
