@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OutlinerClient } from "../src/client";
@@ -16,7 +16,8 @@ afterEach(async () => {
 });
 
 function scratchDirectory(prefix: string): string {
-  const directory = mkdtempSync(join(tmpdir(), prefix));
+  // Real paths: on macOS the temp folder is under a link (/var → /private/var), and roots are compared real.
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
   cleanups.push(() => rmSync(directory, { recursive: true, force: true }));
   return directory;
 }

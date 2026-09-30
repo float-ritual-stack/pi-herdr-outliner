@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
 /**
@@ -315,9 +315,11 @@ export class ArtifactCompiler {
   }
 
   private async bundle(source: string, extension: ".jsx" | ".tsx", needed: Set<string>): Promise<ArtifactBuild> {
-    const cache = this.cacheDirectory;
+    mkdirSync(join(this.cacheDirectory, "artifact"), { recursive: true });
+    // The bundler names every file by its real path (macOS's /tmp and /var are links to /private/…), so the
+    // cache is named that way too: otherwise no import from a pinned package looks like it comes from the cache.
+    const cache = realpathSync(this.cacheDirectory);
     const workspace = join(cache, "artifact");
-    mkdirSync(workspace, { recursive: true });
     const entry = join(workspace, "entry.jsx");
     const artifact = join(workspace, `artifact${extension}`);
     const shims = join(workspace, "ui.jsx");

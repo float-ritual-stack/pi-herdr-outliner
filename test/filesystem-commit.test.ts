@@ -5,7 +5,7 @@ import { OutlinerStore } from "../src/store";
 import { createHash, randomUUID } from "node:crypto";
 
 test("pending recovery cannot publish a symlink outside a confined Source", () => {
-  const root = fs.mkdtempSync("/tmp/outliner-file-recovery-boundary-");
+  const root = fs.realpathSync(fs.mkdtempSync("/tmp/outliner-file-recovery-boundary-"));
   const sourceRoot = join(root, "source");
   fs.mkdirSync(sourceRoot);
   const path = join(sourceRoot, "note.txt");
@@ -34,9 +34,10 @@ test("pending recovery cannot publish a symlink outside a confined Source", () =
   } finally { store.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+// Each root is a real path: the store writes through real paths, and on macOS /tmp is a link to /private/tmp.
 for (const writerKind of ["in-place", "replacement"] as const) {
 test(`a ${writerKind} writer at the filesystem commit boundary retains its bytes and the submitted draft`, () => {
-  const root = fs.mkdtempSync("/tmp/outliner-file-commit-");
+  const root = fs.realpathSync(fs.mkdtempSync("/tmp/outliner-file-commit-"));
   const path = join(root, "note.txt");
   const store = new OutlinerStore(join(root, "outline.sqlite"));
   const rename = fs.renameSync;
@@ -77,7 +78,7 @@ test(`a ${writerKind} writer at the filesystem commit boundary retains its bytes
 }
 
 test("a replacement created after displacement wins without destroying either earlier version", () => {
-  const root = fs.mkdtempSync("/tmp/outliner-file-create-");
+  const root = fs.realpathSync(fs.mkdtempSync("/tmp/outliner-file-create-"));
   const path = join(root, "note.txt");
   const store = new OutlinerStore(join(root, "outline.sqlite"));
   const link = fs.linkSync;
@@ -112,7 +113,7 @@ test("a replacement created after displacement wins without destroying either ea
 });
 
 test("an external descriptor opened before a successful save remains recoverable afterward", () => {
-  const root = fs.mkdtempSync("/tmp/outliner-file-descriptor-");
+  const root = fs.realpathSync(fs.mkdtempSync("/tmp/outliner-file-descriptor-"));
   const path = join(root, "note.txt");
   const store = new OutlinerStore(join(root, "outline.sqlite"));
   let fd: number | undefined;
@@ -143,7 +144,7 @@ test("an external descriptor opened before a successful save remains recoverable
 
 for (const phase of ["before-displacement", "after-displacement", "after-publication", "after-marker-removal", "recreated-before-recovery"] as const) {
   test(`process interruption ${phase} recovers without discarding either version`, () => {
-    const root = fs.mkdtempSync("/tmp/outliner-file-crash-");
+    const root = fs.realpathSync(fs.mkdtempSync("/tmp/outliner-file-crash-"));
     const path = join(root, "note.txt");
     let store = new OutlinerStore(join(root, "outline.sqlite"));
     try {
@@ -192,7 +193,7 @@ for (const phase of ["before-displacement", "after-displacement", "after-publica
 }
 
 test("unsupported hard links fail before the source is displaced", () => {
-  const root = fs.mkdtempSync("/tmp/outliner-file-unsupported-");
+  const root = fs.realpathSync(fs.mkdtempSync("/tmp/outliner-file-unsupported-"));
   const path = join(root, "note.txt");
   const store = new OutlinerStore(join(root, "outline.sqlite"));
   let trap: ReturnType<typeof spyOn> | undefined;

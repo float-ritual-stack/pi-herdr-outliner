@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
@@ -211,7 +211,8 @@ describe("delivery lifecycle", () => {
     expect((await inspectWorkEnvironment(exec, root)).branch).toBe("main");
 
     await git(root, "branch", identity.workBranch);
-    const occupied = mkdtempSync(join(tmpdir(), "pi-outliner-delivery-occupied-"));
+    // Git names a worktree by its real path (on macOS the temp folder is under /private).
+    const occupied = realpathSync(mkdtempSync(join(tmpdir(), "pi-outliner-delivery-occupied-")));
     directories.push(occupied);
     rmSync(occupied, { recursive: true, force: true });
     await git(root, "worktree", "add", occupied, identity.workBranch);

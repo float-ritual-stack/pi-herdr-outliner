@@ -17,6 +17,7 @@ export function probeSocket(socket: string, timeoutMs = 1_000): Promise<SocketPr
     const timer = setTimeout(() => done("silent"), timeoutMs);
     probe.once("connect", () => done("answers"));
     probe.once("error", (error: NodeJS.ErrnoException) =>
-      done(error.code === "ENOENT" ? "absent" : error.code === "ECONNREFUSED" ? "refused" : "silent"));
+      // A file that isn't a socket can't be listened on: macOS says ENOTSOCK where Linux says ECONNREFUSED.
+      done(error.code === "ENOENT" ? "absent" : error.code === "ECONNREFUSED" || error.code === "ENOTSOCK" ? "refused" : "silent"));
   });
 }

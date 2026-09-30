@@ -16,7 +16,8 @@ afterEach(async () => {
 });
 
 function scratch(): string {
-  const root = mkdtempSync(join(tmpdir(), "outline-host-"));
+  // Real: the CLI names paths from its working directory, which macOS gives as /private/var/….
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "outline-host-")));
   cleanups.push(() => rmSync(root, { recursive: true, force: true }));
   return root;
 }
