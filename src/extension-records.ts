@@ -6,8 +6,9 @@ import { isPropertyKey, propertyTokenPattern } from "./property-grammar";
  *
  * The test for this module is "as if the person had copied the ticket into the
  * outline and mapped its fields to properties themselves". A record is an
- * ordinary child block of the block that asked for it (the ticket page, or a
- * block with a `jira::` line): its title is the subject line, its fields are
+ * ordinary block, one per key, under the key's home (its page, else the
+ * first block that asks for it; `OutlinerStore.extensionRecordHome`); every
+ * other block that asks shows that one. Its title is the subject line, its fields are
  * namespaced block properties (`[jira.status::In Review]`) and its description
  * is the body. `--comments` adds one child block per comment. Views, queries,
  * backlinks, comments, embeds and the publisher treat them like any block.

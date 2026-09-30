@@ -74,7 +74,10 @@ export type WriteView =
   | { ok: false; id: string; name: string; reason: string };
 
 /** The block a move plans against: its text (for token ordinals), properties and times. */
-export type WriteSubject = Pick<Block, "id" | "text" | "revision" | "properties" | "createdAt" | "updatedAt">;
+export type WriteSubject = Pick<Block, "id" | "text" | "revision" | "properties" | "createdAt" | "updatedAt"> & {
+  /** Its active direct children's properties, for a view's `child:` clauses (a patch to the block doesn't change them). */
+  childProperties?: () => readonly (readonly BlockProperty[])[];
+};
 
 const viewName = (definition: Pick<Block, "text">) => firstLineWithoutPropertyTokens(definition.text)?.trim() || "the view";
 
@@ -124,7 +127,7 @@ function keysOf(e: QueryExpression): string[] {
   }
 }
 
-interface Subject { properties: readonly BlockProperty[]; createdAt: string; updatedAt: string }
+interface Subject { properties: readonly BlockProperty[]; createdAt: string; updatedAt: string; childProperties?: () => readonly (readonly BlockProperty[])[] }
 const holds = (e: QueryExpression, s: Subject, now: number) => compileQueryExpression(e, now)(s, s.properties);
 const unmet = (rest: readonly QueryExpression[], s: Subject, now: number) => rest.filter(term => !holds(term, s, now));
 const sameValue = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
@@ -174,7 +177,8 @@ export function planMoveIntoView(view: WriteView, block: WriteSubject, now = Dat
   }
   // The rest of the query must hold on the block as the patch leaves it, and a patch makes it updated now.
   const after = applyChanges(properties, changes);
-  const missing = unmet(view.rest, { properties: after, createdAt: block.createdAt, updatedAt: new Date(now).toISOString() }, now);
+  const missing = unmet(view.rest, { properties: after, createdAt: block.createdAt, updatedAt: new Date(now).toISOString(),
+    ...(block.childProperties ? { childProperties: block.childProperties } : {}) }, now);
   if (missing.length) {
     const term = missing[0]!, what = has(after, term);
     return { kind: "refused", reason: `${view.name} needs ${showQueryExpression(term, true)}${what ? ` and the note has ${what}` : ""}; a move sets only the plain clauses beside it` };

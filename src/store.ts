@@ -1626,20 +1626,28 @@ export class OutlinerStore {
   // A record is an ordinary block an extension owns: only that extension may
   // change its text (the guard in writeBlockText). The table says who owns
   // what; the text itself is canonical like any block's.
+  //
+  // One key has one record block, as if the person had copied the ticket in
+  // once: it sits under the key's home (`extensionRecordHome`), and every
+  // other block that asks for the key shows that block (its projection's
+  // `record`) instead of keeping a copy. `extension_askers` says which blocks
+  // ask for which keys, so the record can move when its home changes and go
+  // to Trash only when nothing asks for it any more.
 
   /** The extension that owns a block, when one does. */
   extensionOwner(blockId: string): ExtensionRecordRow | null {
     return this.database.transaction(() => this.extensionOwnerFromCurrentRead(blockId))();
   }
 
-  /** Owned blocks under a parent, or showing one Resource. */
-  extensionRecords(filter: { parentBlockId?: string; resourceId?: string; extensionId?: string; role?: "record" | "comment" }): ExtensionRecordRow[] {
+  /** Owned blocks under a parent, showing one Resource, or holding one key. */
+  extensionRecords(filter: { parentBlockId?: string; resourceId?: string; extensionId?: string; role?: "record" | "comment"; itemKey?: string }): ExtensionRecordRow[] {
     const clauses: string[] = [];
     const values: string[] = [];
     if (filter.parentBlockId) { clauses.push("parent_block_id = ?"); values.push(filter.parentBlockId); }
     if (filter.resourceId) { clauses.push("resource_id = ?"); values.push(filter.resourceId); }
     if (filter.extensionId) { clauses.push("extension_id = ?"); values.push(filter.extensionId); }
     if (filter.role) { clauses.push("role = ?"); values.push(filter.role); }
+    if (filter.itemKey) { clauses.push("item_key = ?"); values.push(filter.itemKey); }
     const rows = this.database.query(`
       SELECT record.* FROM extension_records record JOIN blocks block ON block.id = record.block_id
       WHERE block.effective_deleted_root_id IS NULL${clauses.length ? ` AND ${clauses.map((clause) => `record.${clause}`).join(" AND ")}` : ""}
@@ -1649,11 +1657,73 @@ export class OutlinerStore {
   }
 
   /**
-   * Writes one record (and, when given, its comments) as the extension. An
-   * unchanged text is not written, so a refresh that finds nothing new records
-   * no change. A record in Trash is replaced by a new one: the provider line
-   * that asked for it is still there. Changed texts re-anchor their comments
-   * and highlights through the annotation repository.
+   * Records which keys a block asks an extension for (its provider lines, its
+   * own `[jira::KEY]`), with the comments each asks to see (0: none). Returns
+   * the keys it asked for before and no longer does.
+   */
+  setExtensionAsks(blockId: string, extensionId: string, asks: ReadonlyMap<string, number>): string[] {
+    return this.database.transaction(() => {
+      const before = (this.database.query("SELECT item_key FROM extension_askers WHERE block_id = ? AND extension_id = ?")
+        .all(blockId, extensionId) as Array<{ item_key: string }>).map((row) => row.item_key);
+      const same = before.length === asks.size && (this.database.query(
+        "SELECT item_key, comments FROM extension_askers WHERE block_id = ? AND extension_id = ?",
+      ).all(blockId, extensionId) as Array<{ item_key: string; comments: number }>).every((row) => asks.get(row.item_key) === row.comments);
+      if (!same) {
+        this.database.query("DELETE FROM extension_askers WHERE block_id = ? AND extension_id = ?").run(blockId, extensionId);
+        const insert = this.database.query("INSERT INTO extension_askers (block_id, extension_id, item_key, comments) VALUES (?, ?, ?, ?)");
+        for (const [key, comments] of asks) insert.run(blockId, extensionId, key, Math.max(0, Math.floor(comments)));
+      }
+      return before.filter((key) => !asks.has(key));
+    })();
+  }
+
+  /** Whether a block has asked an extension for a key (removing its last line still settles the record). */
+  asksExtension(blockId: string): boolean {
+    return !!this.database.query("SELECT 1 FROM extension_askers WHERE block_id = ? LIMIT 1").get(blockId);
+  }
+
+  /** The active blocks that ask for a key, earliest first, with the comments each asks to see. */
+  extensionAskers(extensionId: string, itemKey: string): Array<{ blockId: string; comments: number }> {
+    return (this.database.query(`
+      SELECT asker.block_id AS blockId, asker.comments AS comments
+      FROM extension_askers asker JOIN blocks block ON block.id = asker.block_id
+      WHERE asker.extension_id = ? AND asker.item_key = ? AND block.effective_deleted_root_id IS NULL
+      ORDER BY block.created_at, block.id
+    `).all(extensionId, itemKey) as Array<{ blockId: string; comments: number }>);
+  }
+
+  /**
+   * Where a key's one record block belongs while anything asks for it: under
+   * the block whose page is the key (`[page::PC-12]`), else the earliest
+   * block whose own `[jira::PC-12]` names it, else the earliest block that
+   * asks. Null when nothing asks for it any more.
+   */
+  extensionRecordHome(extensionId: string, itemKey: string): string | null {
+    return this.database.transaction(() => {
+      const askers = this.extensionAskers(extensionId, itemKey);
+      if (!askers.length) return null;
+      const normalized = tryNormalizePageAddress(itemKey)?.normalizedAddress;
+      const address = normalized ? this.pageAddressRowFromCurrentRead(normalized) : null;
+      const page = address ? this.getFromCurrentRead(address.block_id) : null;
+      if (page && !page.effectiveDeletedRootId && !this.extensionOwnerFromCurrentRead(page.id)) return page.id;
+      const own = this.database.query(`
+        SELECT block.id FROM block_properties property JOIN blocks block ON block.id = property.block_id
+        WHERE property.scope = 'block' AND property.syntax = 'bracket' AND property.key = ? AND upper(trim(property.value)) = ?
+          AND block.effective_deleted_root_id IS NULL
+          AND NOT EXISTS (SELECT 1 FROM extension_records owned WHERE owned.block_id = block.id)
+        ORDER BY block.created_at, block.id LIMIT 1
+      `).get(extensionId, itemKey.trim().toUpperCase()) as { id: string } | null;
+      return own?.id ?? askers[0]!.blockId;
+    })();
+  }
+
+  /**
+   * Writes a key's one record (and, when given, its comments) as the
+   * extension, under `parentBlockId` (its home). An unchanged text is not
+   * written, so a refresh that finds nothing new records no change. A record
+   * elsewhere moves there, keeping its identity, comments and highlights; one
+   * the extension dropped to Trash comes back from it. Changed texts re-anchor
+   * their comments and highlights through the annotation repository.
    */
   writeExtensionRecord(input: ExtensionRecordWriteInput): ExtensionRecordWriteReceipt {
     const actor: MutationProvenance = { author: "agent", actorId: extensionActorId(input.extensionId) };
@@ -1664,14 +1734,13 @@ export class OutlinerStore {
       this.extensionWriter = input.extensionId;
       try {
         this.requireActive(input.parentBlockId);
-        recordId = this.writeOwnedBlockFromCurrentRead(input, "record", input.parentBlockId, input.itemKey, input.text, 0, actor, now, changed);
+        recordId = this.placeRecordFromCurrentRead(input, actor, now, changed);
         if (input.comments !== undefined) {
           const wanted = input.comments ?? [];
           const keys = new Set(wanted.map((comment) => comment.itemKey));
           for (const row of this.extensionRecords({ parentBlockId: recordId, extensionId: input.extensionId, role: "comment" })) {
             if (keys.has(row.itemKey)) continue;
-            this.delete(row.blockId, actor);
-            this.database.query("DELETE FROM extension_records WHERE block_id = ?").run(row.blockId);
+            this.dropOwnedFromCurrentRead(row.blockId, input.extensionId, "comment", actor);
             changed.push(row.blockId);
           }
           const ids = wanted.map((comment) => this.writeOwnedBlockFromCurrentRead(input, "comment", recordId, comment.itemKey, comment.text, undefined, actor, now, changed));
@@ -1687,18 +1756,64 @@ export class OutlinerStore {
     return { record: this.require(recordId), changedBlockIds: [...new Set(changed)] };
   }
 
-  /** Moves an extension's records under a parent to Trash, except the keys still asked for. */
-  removeExtensionRecords(parentBlockId: string, extensionId: string, keep: ReadonlySet<string>): string[] {
+  /**
+   * Moves a key's record to `parentBlockId` (its new home) without a fetch.
+   * Returns whether it moved; false when there is no active record, it is
+   * already there, or the home is inside the record.
+   */
+  moveExtensionRecord(extensionId: string, itemKey: string, parentBlockId: string): boolean {
     const actor: MutationProvenance = { author: "agent", actorId: extensionActorId(extensionId) };
-    const removed: string[] = [];
-    this.database.transaction(() => {
-      for (const row of this.extensionRecords({ parentBlockId, extensionId, role: "record" })) {
-        if (keep.has(row.itemKey)) continue;
-        this.delete(row.blockId, actor);
-        removed.push(row.blockId);
-      }
+    return this.changes.run(this.changes.attribution({ action: `ext.${extensionId}.sync`, actor }), () =>
+      this.database.transaction(() => {
+        const row = this.extensionRecords({ extensionId, role: "record", itemKey })[0];
+        if (!row || row.parentBlockId === parentBlockId) return false;
+        if (parentBlockId === row.blockId || this.isDescendant(parentBlockId, row.blockId)) return false;
+        this.requireActive(parentBlockId);
+        this.move(row.blockId, parentBlockId, 0, actor);
+        this.database.query("UPDATE extension_records SET parent_block_id = ? WHERE block_id = ?").run(parentBlockId, row.blockId);
+        return true;
+      })());
+  }
+
+  /**
+   * Moves a key's record to Trash because nothing asks for it any more
+   * (`ext.<id>.drop-record` in the change feed). What sits under it (its
+   * comments, a person's highlights and replies) goes with it and comes back
+   * with a restore; asking for the key again brings the same block back.
+   */
+  dropExtensionRecord(extensionId: string, itemKey: string): string[] {
+    const actor: MutationProvenance = { author: "agent", actorId: extensionActorId(extensionId) };
+    return this.database.transaction(() => this.extensionRecords({ extensionId, role: "record", itemKey }).map((row) => {
+      this.dropOwnedFromCurrentRead(row.blockId, extensionId, "record", actor);
+      return row.blockId;
+    }))();
+  }
+
+  /**
+   * Keeps a record's newest `keep` comment blocks and drops the older ones to
+   * Trash (`ext.<id>.drop-comment`), for when fewer are asked for.
+   */
+  trimExtensionComments(extensionId: string, recordBlockId: string, keep: number): string[] {
+    const actor: MutationProvenance = { author: "agent", actorId: extensionActorId(extensionId) };
+    return this.database.transaction(() => {
+      const comments = this.extensionRecords({ parentBlockId: recordBlockId, extensionId, role: "comment" });
+      const order = new Map(this.children(recordBlockId).map((child, index) => [child.id, index]));
+      comments.sort((a, b) => (order.get(a.blockId) ?? 0) - (order.get(b.blockId) ?? 0));
+      const dropped = comments.slice(0, Math.max(0, comments.length - Math.max(0, keep)));
+      for (const row of dropped) this.dropOwnedFromCurrentRead(row.blockId, extensionId, "comment", actor);
+      return dropped.map((row) => row.blockId);
     })();
-    return removed;
+  }
+
+  /**
+   * An owned block to Trash, as the extension, under its own change action
+   * (`ext.<id>.drop-record` or `drop-comment`) so the change feed and the
+   * activity say why it went. It stays owned in Trash: a restore by the
+   * person or by the extension brings back the same block with everything
+   * under and on it (comments, highlights, replies).
+   */
+  private dropOwnedFromCurrentRead(blockId: string, extensionId: string, role: "record" | "comment", actor: MutationProvenance): void {
+    this.changes.run(this.changes.attribution({ action: `ext.${extensionId}.drop-${role}`, actor }), () => this.delete(blockId, actor));
   }
 
   /**
@@ -1719,7 +1834,7 @@ export class OutlinerStore {
     const rows = [
       ...this.database.query(`
         SELECT upper(trim(property.value)) AS key, block.id FROM block_properties property JOIN blocks block ON block.id = property.block_id
-        WHERE property.scope = 'block' AND property.key IN (${keys.map(() => "?").join(", ")}) AND block.effective_deleted_root_id IS NULL
+        WHERE property.scope = 'block' AND property.syntax = 'bracket' AND property.key IN (${keys.map(() => "?").join(", ")}) AND block.effective_deleted_root_id IS NULL
         ORDER BY block.created_at, block.id
       `).all(...keys) as Array<{ key: string; id: string }>,
       ...this.database.query(`
@@ -1743,7 +1858,7 @@ export class OutlinerStore {
         .map((row) => row.extension_id)])];
     const page = this.database.query(`
       SELECT block.id FROM block_properties property JOIN blocks block ON block.id = property.block_id
-      WHERE property.scope = 'block' AND property.key IN (${keys.map(() => "?").join(", ")})
+      WHERE property.scope = 'block' AND property.syntax = 'bracket' AND property.key IN (${keys.map(() => "?").join(", ")})
         AND upper(trim(property.value)) = ? AND block.effective_deleted_root_id IS NULL
       ORDER BY block.created_at, block.id LIMIT 1
     `).get(...keys, normalized) as { id: string } | null;
@@ -1769,15 +1884,73 @@ export class OutlinerStore {
     now: string,
     changed: string[],
   ): string {
-    const row = this.database.query(`
+    const rows = this.database.query(`
       SELECT block_id FROM extension_records
       WHERE parent_block_id = ? AND extension_id = ? AND role = ? AND item_key = ?
-    `).get(parentBlockId, input.extensionId, role, itemKey) as { block_id: string } | null;
-    let block = row ? this.getFromCurrentRead(row.block_id) : null;
-    if (row && (!block || block.effectiveDeletedRootId)) {
-      this.database.query("DELETE FROM extension_records WHERE block_id = ?").run(row.block_id);
-      block = null;
+    `).all(parentBlockId, input.extensionId, role, itemKey) as Array<{ block_id: string }>;
+    const blocks = rows.flatMap((row) => this.getFromCurrentRead(row.block_id) ?? []);
+    let block: Block | null = blocks.find((candidate) => !candidate.effectiveDeletedRootId) ?? null;
+    // One the extension dropped (a comment that left the newest-N window) comes back with what is on it.
+    block ??= this.reviveOwnedFromCurrentRead(blocks, actor);
+    return this.writeOwnedTextFromCurrentRead(input, role, parentBlockId, itemKey, text, position, actor, now, changed, block);
+  }
+
+  /**
+   * The key's one record, under its home: the active record there (or
+   * elsewhere, moved there; a duplicate from an older version is dropped),
+   * else the one the extension dropped to Trash, restored, else a new block.
+   */
+  private placeRecordFromCurrentRead(input: ExtensionRecordWriteInput, actor: MutationProvenance, now: string, changed: string[]): string {
+    const rows = this.database.query(`
+      SELECT record.block_id FROM extension_records record JOIN blocks block ON block.id = record.block_id
+      WHERE record.extension_id = ? AND record.role = 'record' AND record.item_key = ?
+      ORDER BY block.created_at, block.id
+    `).all(input.extensionId, input.itemKey) as Array<{ block_id: string }>;
+    const blocks = rows.flatMap((row) => this.getFromCurrentRead(row.block_id) ?? []);
+    const active = blocks.filter((candidate) => !candidate.effectiveDeletedRootId);
+    let block: Block | null = active.find((candidate) => candidate.parentId === input.parentBlockId) ?? active[0] ?? null;
+    for (const duplicate of active) {
+      if (duplicate.id === block?.id) continue;
+      this.dropOwnedFromCurrentRead(duplicate.id, input.extensionId, "record", actor);
+      changed.push(duplicate.id);
     }
+    block ??= this.reviveOwnedFromCurrentRead([...blocks].reverse(), actor);
+    if (block && block.parentId !== input.parentBlockId &&
+      input.parentBlockId !== block.id && !this.isDescendant(input.parentBlockId, block.id)) {
+      block = this.move(block.id, input.parentBlockId, 0, actor);
+      this.database.query("UPDATE extension_records SET parent_block_id = ? WHERE block_id = ?").run(input.parentBlockId, block.id);
+      changed.push(block.id);
+    }
+    return this.writeOwnedTextFromCurrentRead(input, "record", block?.parentId ?? input.parentBlockId, input.itemKey, input.text, 0, actor, now, changed, block);
+  }
+
+  /** The first of these owned blocks that is a Trash root and can be restored, restored as the extension. */
+  private reviveOwnedFromCurrentRead(blocks: readonly Block[], actor: MutationProvenance): Block | null {
+    for (const candidate of blocks) {
+      if (!candidate.deletedAt) continue;
+      try {
+        const restored = this.restore(candidate.id, actor);
+        if (!restored.effectiveDeletedRootId) return restored;
+      } catch {
+        // Its old place is in Trash too: a new block takes over.
+      }
+    }
+    return null;
+  }
+
+  private writeOwnedTextFromCurrentRead(
+    input: ExtensionRecordWriteInput,
+    role: "record" | "comment",
+    parentBlockId: string,
+    itemKey: string,
+    text: string,
+    position: number | undefined,
+    actor: MutationProvenance,
+    now: string,
+    changed: string[],
+    found: Block | null,
+  ): string {
+    let block = found;
     if (!block) {
       block = this.createAt(text, parentBlockId, "agent", { actorId: actor.actorId! }, now, position);
       this.database.query(`
@@ -2771,7 +2944,9 @@ export class OutlinerStore {
       if (blockId !== undefined && !block) throw new Error(`Block not found in the active workspace: ${blockId}`);
       const plans = viewIds.map(viewId => {
         const view = writeView(viewId, active(viewId));
-        return { viewId, plan: block ? planMoveIntoView(view, block, now) : planCreateInView(view, text, now) };
+        // A `child:` clause reads the block's children, which a move leaves where they are.
+        const subject = block ? { ...block, childProperties: () => this.childrenFromCurrentRead(block.id).map((child) => child.properties) } : undefined;
+        return { viewId, plan: subject ? planMoveIntoView(view, subject, now) : planCreateInView(view, text, now) };
       });
       return { sequence: this.sequence, ...(block ? { revision: block.revision } : {}), plans };
     })();
@@ -3564,6 +3739,15 @@ export class OutlinerStore {
       );
       CREATE INDEX IF NOT EXISTS extension_records_parent ON extension_records(parent_block_id, extension_id, item_key);
       CREATE INDEX IF NOT EXISTS extension_records_resource ON extension_records(resource_id);
+      CREATE INDEX IF NOT EXISTS extension_records_key ON extension_records(extension_id, item_key);
+      CREATE TABLE IF NOT EXISTS extension_askers (
+        block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+        extension_id TEXT NOT NULL,
+        item_key TEXT NOT NULL,
+        comments INTEGER NOT NULL DEFAULT 0 CHECK (comments >= 0),
+        PRIMARY KEY (block_id, extension_id, item_key)
+      );
+      CREATE INDEX IF NOT EXISTS extension_askers_key ON extension_askers(extension_id, item_key);
       CREATE TABLE IF NOT EXISTS annotation_requests (
         request_id TEXT PRIMARY KEY,
         payload_hash TEXT,

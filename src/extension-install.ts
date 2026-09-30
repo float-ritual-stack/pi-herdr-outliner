@@ -1,4 +1,4 @@
-import { chmod, cp, mkdir, readdir, rename, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -25,10 +25,30 @@ async function legacyEntry(id: string): Promise<{ config: Record<string, unknown
   try {
     const registry = await Bun.file(legacyRegistryPath()).json() as { providers?: Record<string, { config?: Record<string, unknown>; credentials?: Record<string, unknown> }> };
     const entry = registry.providers?.[id];
-    return entry ? { config: entry.config ?? {}, credentials: entry.credentials ?? {} } : null;
+    return entry ? { config: entry.config ?? {}, credentials: credentialReferences(entry.credentials ?? {}) } : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * Only references to a secret (`env`, `keychainService` with its `account`,
+ * `file`) are copied; anything else, such as a literal value someone put in
+ * the old registry, is left out, so `ext add` never writes a secret.
+ */
+function credentialReferences(credentials: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [name, reference] of Object.entries(credentials)) {
+    if (!reference || typeof reference !== "object" || Array.isArray(reference)) continue;
+    const fields = reference as Record<string, unknown>;
+    const keys = Object.keys(fields).sort().join(",");
+    const text = (value: unknown) => typeof value === "string" && value.length > 0 && value.length <= 4096;
+    if (keys === "env" && typeof fields.env === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(fields.env)) out[name] = { env: fields.env };
+    else if ((keys === "keychainService" || keys === "account,keychainService") && text(fields.keychainService) &&
+      (fields.account === undefined || typeof fields.account === "string")) out[name] = { ...fields };
+    else if (keys === "file" && text(fields.file)) out[name] = { file: fields.file };
+  }
+  return out;
 }
 
 export async function addExtension(id: string, options: { from?: string } = {}): Promise<string[]> {
@@ -42,7 +62,10 @@ export async function addExtension(id: string, options: { from?: string } = {}):
   for (const entry of await readdir(source)) {
     if (entry === "config.json") continue;
     const staged = join(target, `.${entry}.new`);
+    // A stale staged copy from an interrupted run, and a folder in the way of the rename, go first.
+    await rm(staged, { recursive: true, force: true });
     await cp(join(source, entry), staged, { recursive: true });
+    await rm(join(target, entry), { recursive: true, force: true });
     await rename(staged, join(target, entry));
   }
   lines.push(`${updating ? "updated" : "installed"} ${id} in ${target}`);

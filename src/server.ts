@@ -722,11 +722,11 @@ export class OutlinerServer {
       projections: read.projections.map((projection) => {
         if (!projection.key) return projection;
         const owner = projection.anchor.kind === "record" ? this.store.extensionOwner(read.blockId) : null;
+        // A key has one record block, wherever it sits: every block that asks for the key shows that one.
         const row = projection.anchor.kind === "record"
           ? owner?.role === "comment" ? this.store.extensionOwner(owner.parentBlockId) : owner
-          : this.store.extensionRecords({ parentBlockId: read.blockId, extensionId: projection.provider, role: "record" })
-            .find((candidate) => candidate.itemKey === projection.key);
-        const state = this.extensionSync.stateFor(row?.parentBlockId ?? read.blockId, projection.key);
+          : this.store.extensionRecords({ extensionId: projection.provider, role: "record", itemKey: projection.key })[0];
+        const state = this.extensionSync.stateFor(projection.key);
         const comments = row ? this.store.extensionRecords({ parentBlockId: row.blockId, role: "comment" }).map((comment) => comment.blockId) : [];
         const fetching = state?.fetching ?? (materializing && (!row || projection.freshness === "stale" || projection.freshness === "unknown"));
         return {
@@ -1451,8 +1451,9 @@ export class OutlinerServer {
           await this.extensionSync.materialize(normalized.blockId, normalized.line === undefined);
         }
         const result = this.decorateProjections(readResourceProjections(this.store, normalized), false);
+        const refreshedId = record?.resourceId ?? one?.resourceId;
         this.broadcast({ id: crypto.randomUUID(), domain: "resource-catalog", action: request.action, sequence: this.store.sequence,
-          ...(record?.resourceId ? { resourceId: record.resourceId } : {}) });
+          ...(refreshedId ? { resourceId: refreshedId } : {}) });
         return { id: request.id, ok: true, result, sequence: this.store.sequence };
       } catch (error) {
         return { id: request.id, ok: false, error: error instanceof Error ? error.message : String(error), sequence: this.store.sequence };

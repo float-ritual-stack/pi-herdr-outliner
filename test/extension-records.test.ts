@@ -3,7 +3,7 @@
 // extension (contract 2 folder) against a loopback fake Jira (test/fake-jira.ts)
 // through a real service. Every ticket, person and site is made up.
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OutlinerClient } from "../src/client";
@@ -47,7 +47,7 @@ function issues(): FakeIssue[] {
   ];
 }
 
-async function setup() {
+async function setup(options: { extraSources?: { origin: string; project: string }[] } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "outliner-ext-records-")));
   const fake = startFakeJira(issues());
   const previous = {
@@ -58,7 +58,12 @@ async function setup() {
   process.env.OUTLINER_EXTENSIONS_DIR = join(root, "extensions");
   process.env.OUTLINER_RESOURCE_EXTENSIONS = join(root, "no-legacy-registry.json");
   process.env[TOKEN_ENV] = FAKE_TOKEN;
-  await installJira(join(root, "extensions"), fake.origin, TOKEN_ENV);
+  const installed = await installJira(join(root, "extensions"), fake.origin, TOKEN_ENV);
+  if (options.extraSources) {
+    const config = JSON.parse(readFileSync(join(installed, "config.json"), "utf8"));
+    config.sources = [...options.extraSources, ...config.sources];
+    writeFileSync(join(installed, "config.json"), JSON.stringify(config));
+  }
   const store = new OutlinerStore(join(root, "outliner.sqlite"), { workspaceRoot: root });
   const socket = join(root, "outliner.sock");
   const server = new OutlinerServer(store, socket, undefined, undefined, { extensionPollMs: 0 });
@@ -76,6 +81,15 @@ async function setup() {
   });
   const create = (text: string, parentId?: string) =>
     client.request<Block>({ action: "create", text, ...(parentId ? { parentId } : {}) });
+  const until = async (what: string, ready: () => boolean, ms = 10_000) => {
+    const end = Date.now() + ms;
+    while (!ready()) {
+      if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
+      await Bun.sleep(20);
+    }
+  };
+  /** The one active record block for a key, wherever it sits. */
+  const recordsFor = (key: string) => store.extensionRecords({ extensionId: "jira", role: "record", itemKey: key });
   const recordOf = async (pageId: string) => {
     const end = Date.now() + 10_000;
     for (;;) {
@@ -89,7 +103,11 @@ async function setup() {
     store.extensionRecords({ parentBlockId: recordId, role: "comment" }).map((row) => store.get(row.blockId)!);
   const visibleChangesSince = (sequence: number) =>
     (store.changes.since(sequence, 1000) as Extract<ChangeFeedPage, { kind: "changes" }>).changes;
-  return { root, fake, store, server, client, create, recordOf, commentsOf, visibleChangesSince };
+  const edit = async (blockId: string, change: (text: string) => string) => {
+    const current = store.get(blockId)!;
+    return client.request<Block>({ action: "update", blockId, text: change(current.text), expectedRevision: current.revision, mutation: PERSON });
+  };
+  return { root, fake, store, server, client, create, edit, until, recordsFor, recordOf, commentsOf, visibleChangesSince };
 }
 
 test("saving a ticket page fetches the ticket in the background, as a real child block the extension owns", async () => {
@@ -385,3 +403,178 @@ test("a fetch that failed (offline) is tried again on the next open, and one fai
   pc1.id = originalId;
   expect(store.get(other.id)!.properties).toContainEqual({ key: "jira.status", value: "Done" });
 });
+
+test("one ticket, one block: every block that asks for a key shows the one record under the ticket page", async () => {
+  const { store, client, create, until, recordsFor, recordOf, commentsOf } = await setup();
+  const page = await create("PC-1 Rollout [jira::PC-1]\nOur plan.");
+  const record = await recordOf(page.id);
+  const standup = await create("Standup\nPC-1 slipped again\njira:: --comments=1");
+  const review = await create("Review notes\njira:: PC-1");
+  await client.request({ action: "resources.projection.read", blockId: standup.id, materialize: true });
+  await client.request({ action: "resources.projection.read", blockId: review.id, materialize: true });
+  // The standup asked for a comment: the one record gets it, and still there is one record.
+  await until("the asked-for comment", () => commentsOf(record.id).length === 1);
+  expect(recordsFor("PC-1").map((row) => row.blockId)).toEqual([record.id]);
+  expect(store.children(standup.id)).toEqual([]);
+  expect(store.children(review.id)).toEqual([]);
+  expect(commentsOf(record.id)[0]!.text).toContain("Waiting on the printer.");
+
+  // Each asker's projection names that block; so do its authored links.
+  for (const asker of [page, standup, review]) {
+    const read = await client.request<ResourceProjectionReadResult>({ action: "resources.projection.read", blockId: asker.id });
+    expect(read.projections.find((projection) => projection.key === "PC-1")?.record?.blockId).toBe(record.id);
+  }
+  const links = await client.request<{ resources: { entries: { recordBlockId?: string }[] } }>({ action: "blocks.authored-links", ownerBlockId: review.id });
+  expect(links.resources.entries[0]?.recordBlockId).toBe(record.id);
+
+  // A query sees the ticket once, and a key its body names is one backlink, not one per asker.
+  const inReview = await create('In review [type::virtual-branch] [query::jira.status="In Review"]');
+  expect((await readSavedView(client, inReview.id)).blocks.map((block) => block.id)).toEqual([record.id]);
+  const printer = await create("PC-2 Printer [jira::PC-2]");
+  const backlinks = await client.request<BacklinkCollection>({ action: "references.backlinks", query: { targetBlockId: printer.id, limit: 50 } });
+  expect(backlinks.sources.filter((source) => source.blockId === record.id)).toHaveLength(1);
+}, 30_000);
+
+test("the record moves to its home and keeps its identity; it goes to Trash only when nothing asks, and comes back the same block", async () => {
+  const { store, client, create, edit, until, recordsFor, recordOf, visibleChangesSince } = await setup();
+  const call = await create("Vendor call\njira:: PC-1\nNotes from the call.");
+  const record = await recordOf(call.id);
+  await createBlockComment(client, {
+    requestId: "home-comment",
+    input: { blockId: record.id, expectedRevision: record.revision, body: "Ask about the van", source: "user", passage: { quote: "Steps for the switch." } },
+  });
+  const threads = (blockId: string) => store.listAnnotationThreads({ subject: { kind: "block", blockId }, includeResolved: true });
+  expect(threads(record.id)).toHaveLength(1);
+  const highlight = (threads(record.id)[0] as unknown as { block: Block }).block.id;
+
+  // A ticket page written later is the ticket's home: the same block moves there.
+  const page = await create("PC-1 Rollout [jira::PC-1]");
+  await until("the record under the page", () => store.get(record.id)!.parentId === page.id);
+  expect(recordsFor("PC-1").map((row) => row.blockId)).toEqual([record.id]);
+  expect(threads(record.id)).toHaveLength(1);
+
+  // A page named for the key comes first of all (after the next refresh of the ticket).
+  const named = await create("Depot switch [page::PC-1]\nThe page for PC-1.");
+  await client.request({ action: "resources.projection.refresh", blockId: page.id });
+  expect(store.get(record.id)!.parentId).toBe(named.id);
+
+  // The call stops asking: the page still does, so nothing moves.
+  await edit(call.id, (text) => text.replace("jira:: PC-1\n", ""));
+  await Bun.sleep(200);
+  expect(store.get(record.id)!.effectiveDeletedRootId).toBeFalsy();
+  // The page stops asking too: nothing asks, so the record goes to Trash, said as the extension's drop.
+  const before = store.sequence;
+  await edit(page.id, (text) => text.replace(" [jira::PC-1]", ""));
+  await until("the record in Trash", () => !!store.get(record.id)!.deletedAt);
+  const dropped = visibleChangesSince(before).filter((change) => change.blockId === record.id);
+  expect(dropped.map((change) => [change.action, change.kind])).toContainEqual(["ext.jira.drop-record", "delete"]);
+  expect(dropped.every((change) => change.actor?.actorId === "ext:jira")).toBe(true);
+  // The person's highlight is kept, in Trash with it (a thread lives under the block it is on).
+  expect(store.get(highlight)).toMatchObject({ effectiveDeletedRootId: record.id });
+
+  // Asking again brings the same block back, highlight and all.
+  await create("Follow-up\njira:: PC-1");
+  await until("the record restored", () => !store.get(record.id)!.effectiveDeletedRootId);
+  expect(recordsFor("PC-1").map((row) => row.blockId)).toEqual([record.id]);
+  expect(threads(record.id)).toHaveLength(1);
+}, 30_000);
+
+test("a comment that leaves the newest-N window goes to Trash with the person's highlight on it, restorable, and said", async () => {
+  const { fake, store, client, create, until, recordOf, commentsOf, visibleChangesSince } = await setup();
+  const page = await create("PC-1 Rollout [jira::PC-1]\njira:: --comments=2");
+  const record = await recordOf(page.id);
+  await until("two comments", () => commentsOf(record.id).length === 2);
+  const oldest = commentsOf(record.id)[0]!;
+  expect(oldest.text).toContain("First pass looks fine.");
+  await createBlockComment(client, {
+    requestId: "comment-on-comment",
+    input: { blockId: oldest.id, expectedRevision: oldest.revision, body: "I disagree, see the depot notes", source: "user", passage: { quote: "First pass" } },
+  });
+  const highlight = (store.listAnnotationThreads({ subject: { kind: "block", blockId: oldest.id }, includeResolved: true })[0] as unknown as { block: Block }).block.id;
+  // The person's own block under the ticket goes wherever the ticket goes.
+  const mine = await client.request<Block>({ action: "create", parentId: record.id, text: "My aside on the ticket", author: "user" });
+
+  const issue = fake.issues.get("PC-1")!;
+  issue.comments = [...issue.comments!, { id: "503", author: "Lee Park", created: "2026-01-04T08:00:00.000Z", body: "Printer fixed." }];
+  issue.updated = new Date().toISOString();
+  const before = store.sequence;
+  await client.request({ action: "resources.projection.refresh", blockId: page.id });
+  expect(commentsOf(record.id).map((comment) => comment.text.split("\n")[0])).toEqual(["Dana Ortiz · 2026-01-03 11:30", "Lee Park · 2026-01-04 08:00"]);
+  const gone = store.get(oldest.id)!;
+  expect(gone.deletedAt).toBeTruthy();
+  expect(visibleChangesSince(before).filter((change) => change.blockId === oldest.id).map((change) => [change.action, change.actor?.actorId]))
+    .toContainEqual(["ext.jira.drop-comment", "ext:jira"]);
+  expect(store.get(mine.id)!.effectiveDeletedRootId).toBeFalsy();
+  // The person's highlight and reply are kept, in Trash with the comment (a thread lives under the block it is on).
+  expect(store.get(highlight)).toMatchObject({ effectiveDeletedRootId: oldest.id });
+
+  // Restored by the person, it is back where it was with the highlight on it.
+  await client.request({ action: "trash.restore", blockId: oldest.id, mutation: PERSON });
+  expect(store.get(oldest.id)!.effectiveDeletedRootId).toBeFalsy();
+  expect(store.listAnnotationThreads({ subject: { kind: "block", blockId: oldest.id }, includeResolved: true })).toHaveLength(1);
+}, 30_000);
+
+test("401, 403 and 429 pause the automatic fetches (saves, opens, the poll); r still fetches; success resumes", async () => {
+  const { fake, store, server, client, create, until, recordOf } = await setup();
+  const page = await create("PC-1 Rollout [jira::PC-1]");
+  await recordOf(page.id);
+  for (const status of [401, 403, 429]) {
+    fake.status = status;
+    const issue = fake.issues.get("PC-1")!;
+    issue.updated = new Date().toISOString();
+    await client.request({ action: "resources.projection.refresh", blockId: page.id });
+    // An automatic attempt that meets the refusal pauses the sync.
+    await server.extensionSync.materialize(page.id);
+    const other = await create(`PC-2 Printer ${status} [jira::PC-2]`);
+    await Bun.sleep(100);
+    // Paused: a new page doesn't reach Jira at all, and says why.
+    const requests = fake.requests.length;
+    await server.extensionSync.materialize(other.id);
+    expect(fake.requests.length).toBe(requests);
+    expect(server.extensionSync.paused()).toBeTruthy();
+    const read = await client.request<ResourceProjectionReadResult>({ action: "resources.projection.read", blockId: other.id });
+    expect(read.projections[0]!.fetchError).toContain("paused, r tries now");
+    expect(await server.extensionSync.poll()).toEqual({ checked: 0, changed: 0 });
+    expect(server.extensionSync.lastPollResult?.error).toContain("paused");
+    // r tries now; once Jira answers, the pause is over.
+    fake.status = null;
+    await client.request({ action: "resources.projection.refresh", blockId: other.id });
+    expect(server.extensionSync.paused()).toBeUndefined();
+    await until("the other ticket's record", () => store.extensionRecords({ extensionId: "jira", role: "record", itemKey: "PC-2" }).length === 1);
+    await client.request({ action: "update", blockId: other.id, text: "gone", expectedRevision: store.get(other.id)!.revision, mutation: PERSON });
+    await until("PC-2 released", () => store.extensionRecords({ extensionId: "jira", role: "record", itemKey: "PC-2" }).length === 0);
+  }
+}, 60_000);
+
+test("a failed search keeps the poll's window, and one bad source in config.json doesn't stop the others", async () => {
+  const { fake, server, create, recordOf } = await setup({ extraSources: [{ origin: "not a url", project: "ZZ" }] });
+  const page = await create("PC-1 Rollout [jira::PC-1]");
+  await recordOf(page.id);
+  const sync = server.extensionSync as unknown as { lastPoll: number | null };
+  await server.extensionSync.poll();
+  const first = sync.lastPoll;
+  expect(first).not.toBeNull();
+  fake.status = 503;
+  await server.extensionSync.poll();
+  expect(server.extensionSync.lastPollResult?.error).toBeTruthy();
+  expect(sync.lastPoll).toBe(first);
+  fake.status = null;
+  await server.extensionSync.poll();
+  expect(sync.lastPoll).toBeGreaterThan(first!);
+});
+
+test("a ticket deleted at Jira doesn't stop the poll: the refused key search is answered by one project search", async () => {
+  const { fake, store, server, create, recordOf } = await setup();
+  const rollout = await create("PC-1 Rollout [jira::PC-1]");
+  const record = await recordOf(rollout.id);
+  await recordOf((await create("PC-2 Printer [jira::PC-2]")).id);
+  fake.issues.delete("PC-2");
+  const issue = fake.issues.get("PC-1")!;
+  issue.status = "Done";
+  issue.updated = new Date().toISOString();
+  expect(await server.extensionSync.poll()).toEqual({ checked: 2, changed: 1 });
+  expect(store.get(record.id)!.properties).toContainEqual({ key: "jira.status", value: "Done" });
+  expect(fake.requests.filter((request) => request.startsWith('JQL project = "PC"'))).toHaveLength(1);
+  // A missing ticket is not a refusal: nothing pauses.
+  expect(server.extensionSync.paused()).toBeUndefined();
+}, 30_000);

@@ -37,3 +37,26 @@ test("ext add copies the Jira extension and keeps the old registry's email and k
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("ext add copies only references to a secret: a literal value in the old registry is left out", async () => {
+  const root = mkdtempSync(join(tmpdir(), "outliner-ext-add-literal-"));
+  const saved = { dir: process.env.OUTLINER_EXTENSIONS_DIR, registry: process.env.OUTLINER_RESOURCE_EXTENSIONS };
+  try {
+    process.env.OUTLINER_EXTENSIONS_DIR = join(root, "extensions");
+    process.env.OUTLINER_RESOURCE_EXTENSIONS = join(root, "resource-extensions.json");
+    writeFileSync(join(root, "resource-extensions.json"), JSON.stringify({ version: 1, providers: { jira: {
+      manifest: "/opt/example/jira/manifest.json", enabled: true,
+      config: { authMode: "basic", email: "someone@example.test" },
+      credentials: { token: { env: "EXAMPLE_JIRA_TOKEN" }, pasted: "made-up-literal-secret", nested: { value: "made-up-literal-secret" } },
+    } } }));
+    await addExtension("jira");
+    const written = readFileSync(join(root, "extensions", "jira", "config.json"), "utf8");
+    expect(written).not.toContain("made-up-literal-secret");
+    expect(JSON.parse(written).secrets).toEqual({ token: { env: "EXAMPLE_JIRA_TOKEN" } });
+  } finally {
+    for (const [key, value] of [["OUTLINER_EXTENSIONS_DIR", saved.dir], ["OUTLINER_RESOURCE_EXTENSIONS", saved.registry]] as const) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+});

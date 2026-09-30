@@ -26,7 +26,10 @@ operation:
 
 - `read` may return `record: {title, fields: [{key, value}], body, comments?}`.
   The service keeps it as blocks the extension owns (`src/extension-records.ts`):
-  fields become `[<id>.<key>::value]` block properties, comments child blocks.
+  fields become `[<id>.<key>::value]` block properties, comments child blocks,
+  one record block per key however many blocks ask for it. The extension
+  returns error codes, never HTTP statuses: `unauthorized` (401), `forbidden`
+  (403) and `rate-limited` (429) pause the service's automatic fetches.
 - `changed` takes `{source, locators, sinceMinutes}` and returns
   `{items: [{entityId, locator}]}`: which registered keys changed recently, in
   one provider search. The service's poll uses it.

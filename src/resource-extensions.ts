@@ -125,6 +125,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   network: "provider request failed",
   timeout: "provider request timed out",
   "invalid-query": "the provider refused the search (400)",
+  "rate-limited": "the provider is limiting requests (429); fetching again later",
 };
 /** The user extensions folder on the service host (wave B also watches the outline's own). */
 export function userExtensionsDirectory(): string {

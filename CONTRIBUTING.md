@@ -102,7 +102,9 @@ source evidence or distinguish authored glyphs from controls.
   extension design, PIE-445): a remote record kept as ordinary blocks, its
   fields as namespaced block properties (`[jira.status::In Review]`), its
   comments as child blocks, and the refusal a person's or agent's write gets.
-  The store owns the `extension_records` table and the guard in
+  The store owns the `extension_records` and `extension_askers` tables (one
+  record block per key, under `extensionRecordHome`; dropped to Trash, never
+  deleted, under `ext.<id>.drop-record`/`drop-comment`) and the guard in
   `writeBlockText` (only the owning extension writes an owned block,
   attributed `author: agent`, `actorId: ext:<id>`, and an unchanged text is not
   written). `src/extension-sync.ts` decides when: on save and open

@@ -278,7 +278,7 @@ async function jiraJson(url: URL, authorization: string, init: { method?: string
   if (!response.ok) {
     await response.body?.cancel();
     throw new ExtensionError(
-      ({ 400: "invalid-query", 401: "unauthorized", 403: "forbidden", 404: "not-found" } as Record<number, string>)[response.status] ?? "network",
+      ({ 400: "invalid-query", 401: "unauthorized", 403: "forbidden", 404: "not-found", 429: "rate-limited" } as Record<number, string>)[response.status] ?? "network",
     );
   }
   const text = await response.text();
@@ -310,15 +310,18 @@ async function latestComments(origin: URL, entityId: string, authorization: stri
 
 /**
  * Which of these keys changed in the last `sinceMinutes`: one JQL search per
- * 50 keys (`key in (…) AND updated >= -Nm`). Jira refuses a whole `key in`
- * search when one key no longer exists, so a refused batch is asked by project
- * instead and the answer kept to the batch.
+ * 50 keys (`key in (…) AND updated >= -Nm`, 100 results a page, so a batch is
+ * one page). Jira refuses a whole `key in` search when one key no longer
+ * exists, so a refused batch is answered from one project search instead
+ * (made once per call, at most 10 pages), kept to the batch's keys.
  */
 async function changedKeys(origin: URL, project: string, locators: readonly string[], sinceMinutes: number, authorization: string) {
   const keys = [...new Set(locators.map((key) => key.trim().toUpperCase()))]
     .filter((key) => /^[A-Z][A-Z0-9_]*-\d+$/.test(key) && key.startsWith(project + "-"));
   const found: { entityId: string; locator: string }[] = [];
-  const search = async (jql: string, wanted: ReadonlySet<string>) => {
+  let byProject: Promise<{ entityId: string; locator: string }[]> | null = null;
+  const search = async (jql: string, wanted: ReadonlySet<string> | null) => {
+    const hits: { entityId: string; locator: string }[] = [];
     let nextPageToken: string | undefined;
     for (let page = 0; page < 10; page += 1) {
       const result = record(await jiraJson(new URL("/rest/api/3/search/jql", origin), authorization, {
@@ -328,20 +331,23 @@ async function changedKeys(origin: URL, project: string, locators: readonly stri
       for (const value of Array.isArray(result.issues) ? result.issues : []) {
         const issue = record(value, "issue");
         const locator = requiredString(issue.key, "key", 255).toUpperCase();
-        if (wanted.has(locator)) found.push({ entityId: requiredString(issue.id, "id", 255), locator });
+        if (!wanted || wanted.has(locator)) hits.push({ entityId: requiredString(issue.id, "id", 255), locator });
       }
       nextPageToken = typeof result.nextPageToken === "string" ? result.nextPageToken : undefined;
       if (!nextPageToken || result.isLast === true) break;
     }
+    return hits;
   };
   for (let index = 0; index < keys.length; index += 50) {
     const batch = keys.slice(index, index + 50);
     const since = `updated >= -${Math.max(1, Math.ceil(sinceMinutes))}m`;
     try {
-      await search(`key in (${batch.join(",")}) AND ${since}`, new Set(batch));
+      found.push(...await search(`key in (${batch.join(",")}) AND ${since}`, new Set(batch)));
     } catch (error) {
       if (!(error instanceof ExtensionError) || error.code !== "invalid-query") throw error;
-      await search(`project = "${project}" AND ${since} ORDER BY updated DESC`, new Set(batch));
+      byProject ??= search(`project = "${project}" AND ${since} ORDER BY updated DESC`, null);
+      const wanted = new Set(batch);
+      found.push(...(await byProject).filter((item) => wanted.has(item.locator)));
     }
   }
   return { items: found };
@@ -440,7 +446,7 @@ async function main() {
     await response.body?.cancel();
     throw new ExtensionError(
       (
-        { 401: "unauthorized", 403: "forbidden", 404: "not-found" } as Record<
+        { 401: "unauthorized", 403: "forbidden", 404: "not-found", 429: "rate-limited" } as Record<
           number,
           string
         >

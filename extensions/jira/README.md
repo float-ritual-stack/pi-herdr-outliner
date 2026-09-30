@@ -20,22 +20,44 @@ My own notes, my own [status::doing].
   ancestor) that names the ticket: the key comes from context, nearest first
   (PIE-445, PIE-408). Two keys at one level fetch nothing and say so.
 - `--comments[=N]` adds the latest N comments (default 5, of the latest 20
-  fetched) as child blocks, oldest first. The bullet form `- jira:: --comments`
-  works too.
+  fetched) as child blocks of the ticket block, oldest first; with several
+  lines asking, the ticket keeps the most any of them asks for. The bullet form
+  `- jira:: --comments` works too.
 
 Saving the line registers and fetches the ticket in the background; the save
 never waits. Opening a note whose copy is older than 15 minutes fetches it
 again. `r` on the ticket (or a click on its age in the door) refreshes it now.
 While the service runs, one JQL search every 12 minutes (`key in (…) AND
 updated >= -Nm`, 50 keys a search) finds the tickets that changed, and only
-those are read again. A poll that finds nothing writes nothing.
+those are read again. A poll that finds nothing writes nothing. A key Jira no
+longer has makes it refuse the `key in` search; that batch is then answered
+from one project search per poll. A search that fails keeps its window, so the
+next poll looks back far enough.
+
+If Jira refuses the credentials (401, 403, or none on this machine) or limits
+requests (429), the automatic fetches (saves, opens, the poll) pause: 15
+minutes for credentials, from one minute doubling to 30 for a rate limit. The
+ticket says `paused, r tries now`; `r` always tries at once, and the first
+answer that works ends the pause.
 
 ## What you get
 
-- **A real block.** The ticket is a child of the block that asked for it: its
-  title, its fields as block properties, its description as the body. Views,
-  queries, backlinks, comments, highlights, embeds and the door's readers treat
-  it like any block.
+- **A real block, once.** A ticket is one block, as if you had copied it in
+  once: its title, its fields as block properties, its description as the
+  body. It sits under the ticket's page (the block whose `[page::PC-1234]` is
+  the key), else under the first block whose own `[jira::PC-1234]` names it,
+  else under the first block that asks for it. Every other `jira::` line for
+  that key shows the same block under the line (Enter opens it) instead of a
+  copy, so a query, a backlink or a drift view sees the ticket once. When its
+  home changes (you write the ticket's page later) the same block moves there,
+  with its highlights and replies. Views, queries, backlinks, comments,
+  highlights, embeds and the door's readers treat it like any block.
+- **Trash, never lost.** When no block asks for the ticket any more, its block
+  goes to Trash; a comment that leaves the newest-N window does too. Anything a
+  person put on or under it (highlights, replies, their own child blocks) goes
+  with it and comes back with a restore, and the change feed says why
+  (`ext.jira.drop-record`, `ext.jira.drop-comment`, by `ext:jira`). Asking for
+  the ticket again (or a larger `--comments=N`) restores the same block.
 - **Namespaced fields: `jira.<field>`.** `jira.key`, `jira.status`,
   `jira.assignee`, `jira.type`, `jira.priority`, `jira.sprint`,
   `jira.reporter`, `jira.label` (one per label) and `jira.updated`; comments

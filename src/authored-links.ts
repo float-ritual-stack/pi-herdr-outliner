@@ -114,7 +114,7 @@ export type AuthoredResourceResolution =
 export interface AuthoredResourceLink extends AuthoredLinkEntryBase {
   readonly kind: "resource";
   readonly resourceId?: string;
-  /** The extension record block under the owner that holds this Resource (a Jira ticket kept as a block). */
+  /** The extension record block that holds this Resource (a Jira ticket kept as a block; one per key, wherever it sits). */
   readonly recordBlockId?: string;
   readonly resolution: AuthoredResourceResolution;
 }
@@ -154,8 +154,8 @@ export interface AuthoredLinksDataSource {
     getSource(sourceId: string): ResourceSource | null;
     resolveAuthoredReference(reference: AuthoredResourceReference): AuthoredResourceReferenceLookup;
   };
-  /** Extension record blocks under a block, by the Resource they hold. */
-  extensionRecords?(filter: { parentBlockId: string; role: "record" }): readonly { blockId: string; resourceId: string | null }[];
+  /** The extension record block that holds a Resource (a key has one, wherever it sits). */
+  extensionRecords?(filter: { resourceId: string; role: "record" }): readonly { blockId: string; resourceId: string | null }[];
 }
 
 type ResourceReferenceCandidate =
@@ -586,7 +586,7 @@ export function readAuthoredLinks(
       diagnostics: [],
     },
     resources: {
-      entries: withRecords(source, ownerId, resources),
+      entries: withRecords(source, resources),
       completeness: completeness(resources.length, candidateLimited, resourceEntryLimited),
       invalidCount: resourceInvalidCount,
       diagnostics: resourceDiagnostics,
@@ -594,11 +594,10 @@ export function readAuthoredLinks(
   };
 }
 
-function withRecords(source: AuthoredLinksDataSource, ownerId: string, resources: readonly AuthoredResourceLink[]): AuthoredResourceLink[] {
-  const records = source.extensionRecords?.({ parentBlockId: ownerId, role: "record" }) ?? [];
-  if (!records.length) return [...resources];
+function withRecords(source: AuthoredLinksDataSource, resources: readonly AuthoredResourceLink[]): AuthoredResourceLink[] {
+  if (!source.extensionRecords) return [...resources];
   return resources.map((entry) => {
-    const found = entry.resourceId ? records.find((row) => row.resourceId === entry.resourceId) : undefined;
+    const found = entry.resourceId ? source.extensionRecords!({ resourceId: entry.resourceId, role: "record" })[0] : undefined;
     return found ? { ...entry, recordBlockId: found.blockId } : entry;
   });
 }

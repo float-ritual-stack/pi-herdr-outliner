@@ -197,13 +197,17 @@ the Resource UUID, and keeps prior retained content visible after failure.
 A written `jira::` line is the consent to contact Jira (PIE-445): saving a
 block with `[jira::PC-1234]`, `jira:: PC-1234` or `jira::` under a line that
 names a ticket registers and fetches it in the background, and opening a note
-whose copy is older than 15 minutes fetches it again. The ticket becomes a real
-child block the Jira extension owns: title, `[jira.status::…]`-style
-properties, the description as its body, and with `--comments` one child block
-per comment. A person's or agent's write to that block is refused ("jira.status
-comes from Jira"); their own notes and `[status::]` live on the parent. While
-the service runs, one JQL search every 12 minutes refreshes the tickets that
-changed. See [extensions/jira/README.md](extensions/jira/README.md).
+whose copy is older than 15 minutes fetches it again. The ticket becomes one
+real block the Jira extension owns, under the ticket's page (else the first
+block that asks for it): title, `[jira.status::…]`-style properties, the
+description as its body, and with `--comments` one child block per comment.
+Every other `jira::` line for that key shows that block rather than a copy. A
+person's or agent's write to that block is refused ("jira.status comes from
+Jira"); their own notes and `[status::]` live on the parent. When nothing asks
+for it any more it goes to Trash with whatever a person put on it, restorable.
+While the service runs, one JQL search every 12 minutes refreshes the tickets
+that changed; a 401, 403 or 429 pauses the automatic fetches, never `r`. See
+[extensions/jira/README.md](extensions/jira/README.md).
 
 Provider commands are a closed, schema-checked protocol union rather than
 generic mutation authority. The current Jira and Linear adapters expose
@@ -1565,8 +1569,12 @@ created < 2026-09-01T12:00Z
   property, not the block itself. It compares a block with what sits under it:
   `status=done child:jira.status NOT child:jira.status=Done` lists ticket pages
   the person calls done that Jira doesn't (the Jira extension's drift views).
-  A write into a view can't satisfy a `child:` clause, so `views.planWrite`
-  refuses it.
+  A `child:` clause may appear anywhere a property clause may (under `NOT`,
+  `OR`, in groups) and counts toward the clause limit; it reads only direct
+  children, never deeper. A move into a view patches the block's own
+  properties, never its children: `views.planWrite` checks `child:` clauses
+  against the children as they are and refuses a move they don't allow, and a
+  new block (which has no children) never satisfies a positive one.
 - **Ranges:** `created` or `updated`, then `<`, `<=`, `>` or `>=`, then a time,
   with or without spaces. A `YYYY-MM-DD` date is a whole UTC day:
   `> 2026-09-20` starts on the 21st and `<= 2026-09-20` includes all of the
