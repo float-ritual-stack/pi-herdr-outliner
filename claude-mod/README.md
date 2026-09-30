@@ -43,8 +43,11 @@ door's own `open` puts notes when the door has no `middle` tile.
   open never moves the person's focus.
 - If no door answers there (the door quit and the agent kept running in Herdr),
   it splits Claude's pane in Herdr as above.
-- If the door refuses (say it is on its menu), the reason comes back as the
-  tool's denial or a toast.
+- If the door refuses (say it is on its menu, or the middle reader holds an
+  edit), the reason comes back as the tool's denial or a toast. Only a door
+  with no `middle` reader is asked again without one.
+- If the door takes the request but doesn't answer within 5s, `show` says so;
+  it isn't shown in Herdr too.
 
 - The pane is recognized by its browsing context, which is the Claude session
   id, so it survives plugin reloads and resumed sessions. Close it and the next

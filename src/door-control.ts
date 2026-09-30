@@ -11,6 +11,12 @@ import { connect } from "node:net";
 /** No door is listening at that path (none started, or it quit). */
 export class DoorUnreachable extends Error {}
 
+/**
+ * The door is there but didn't answer in time. Not DoorUnreachable: it may still
+ * do what it was asked, so the caller must not show the note somewhere else too.
+ */
+export class DoorSilent extends Error {}
+
 /** Sends one request and resolves to the door's `result`; a refusal throws with the door's reason. */
 export function doorRequest(path: string, request: Record<string, unknown>, timeoutMs = 5000): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -24,7 +30,7 @@ export function doorRequest(path: string, request: Record<string, unknown>, time
       fn();
     };
     const socket = connect(path, () => socket.write(JSON.stringify(request) + "\n"));
-    const timer = setTimeout(() => finish(() => reject(new DoorUnreachable(`the door at ${path} did not answer`))), timeoutMs);
+    const timer = setTimeout(() => finish(() => reject(new DoorSilent(`the door at ${path} did not answer in ${timeoutMs / 1000}s`))), timeoutMs);
     socket.on("data", chunk => {
       buffer += chunk.toString();
       const newline = buffer.indexOf("\n");
@@ -45,7 +51,10 @@ export function doorRequest(path: string, request: Record<string, unknown>, time
  * Opens a block in the door as an agent's `open`: attributed to `actor` on
  * the door's screen, and never moving the person's focus (the door's rule for
  * every agent action). It goes to the `reader` tile (the daily layout's middle
- * detail); a door without that tile shows it where its own `open` puts notes.
+ * detail). Only when the door has no such reader (its refusal "no reader
+ * <name> …") is it asked again without one; any other refusal (the reader
+ * holds an edit, the screen can't open notes) is the answer, so the note never
+ * lands in whatever reader the person has focused instead.
  */
 export async function openInDoor(path: string, blockId: string, options: { actor: string; reader?: string }): Promise<{ reader?: string; id?: string }> {
   const request = { cmd: "act", action: "open", args: { id: blockId }, as: options.actor };
@@ -53,7 +62,8 @@ export async function openInDoor(path: string, blockId: string, options: { actor
     try {
       return (await doorRequest(path, { ...request, reader: options.reader })) as { reader?: string; id?: string };
     } catch (error) {
-      if (error instanceof DoorUnreachable) throw error;
+      if (!(error instanceof Error) || error instanceof DoorUnreachable || error instanceof DoorSilent) throw error;
+      if (!error.message.startsWith(`no reader ${options.reader} `)) throw error;
     }
   }
   return (await doorRequest(path, request)) as { reader?: string; id?: string };

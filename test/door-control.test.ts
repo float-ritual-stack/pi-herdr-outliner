@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { createServer, type Server } from "node:net";
+import { existsSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DoorUnreachable, openInDoor } from "../src/door-control";
+import { DoorSilent, DoorUnreachable, doorRequest, openInDoor } from "../src/door-control";
 
 /**
  * A stand-in for ep0ch-door's control socket: answers each JSON line with
@@ -42,9 +42,51 @@ describe("showing a block in ep0ch-door", () => {
   });
 
   test("a door without that tile shows it where its own open puts notes", async () => {
-    door = await fakeDoor(request => (request.reader ? { ok: false, error: "no tile middle" } : { ok: true, result: { reader: "2" } }));
+    // The door's own refusal for a reader it doesn't have (Desk.pickReader).
+    door = await fakeDoor(request => (request.reader ? { ok: false, error: "no reader middle on the desk; readers: 1 (tree), 2 (side), focused, or a block id" } : { ok: true, result: { reader: "2" } }));
     expect(await openInDoor(door.path, BLOCK, { actor: "claude-code", reader: "middle" })).toEqual({ reader: "2" });
     expect(door.requests.map(request => request.reader ?? null)).toEqual(["middle", null]);
+  });
+
+  test("any other refusal of the middle reader is the answer: never asked again without it (that would be the focused reader)", async () => {
+    door = await fakeDoor(request => (request.reader ? { ok: false, error: "reader middle is holding an edit or a comment on another note" } : { ok: true, result: { reader: "1" } }));
+    await expect(openInDoor(door.path, BLOCK, { actor: "claude-code", reader: "middle" })).rejects.toThrow("holding an edit");
+    expect(door.requests).toHaveLength(1);
+  });
+
+  test("a door that takes the request but doesn't answer is DoorSilent, not DoorUnreachable: the note isn't shown twice", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "door-control-"));
+    const path = join(dir, "door.sock");
+    const held: Socket[] = [];
+    const server = createServer(socket => { held.push(socket); });
+    await new Promise<void>(resolve => server.listen(path, resolve));
+    try {
+      const error = await doorRequest(path, { cmd: "act" }, 100).catch(e => e);
+      expect(error).toBeInstanceOf(DoorSilent);
+      expect(error).not.toBeInstanceOf(DoorUnreachable);
+    } finally {
+      held.forEach(socket => socket.destroy());
+      server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a link left pointing at a door that quit (ECONNREFUSED on a stale socket file) is DoorUnreachable", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "door-control-"));
+    const path = join(dir, "door.sock");
+    // A door killed outright: its socket file stays, nothing listens on it.
+    const crashed = Bun.spawn([process.execPath, "-e", `require("node:net").createServer().listen(${JSON.stringify(path)}); setInterval(() => {}, 1e6)`]);
+    for (let i = 0; i < 200 && !existsSync(path); i++) await Bun.sleep(10);
+    crashed.kill("SIGKILL");
+    await crashed.exited;
+    expect(existsSync(path)).toBe(true);
+    const link = join(dir, "agent-door-claude.sock");
+    symlinkSync(path, link);
+    try {
+      await expect(openInDoor(link, BLOCK, { actor: "claude-code", reader: "middle" })).rejects.toBeInstanceOf(DoorUnreachable);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("a refusal is thrown with the door's reason", async () => {
