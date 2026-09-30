@@ -2148,7 +2148,8 @@ export class ResourceCatalog {
         resource.provider === "web"
           ? ["read", "refresh", "open-external"]
           : resource.provider === "filesystem"
-            ? ["read"]
+            // A PDF's text is derived again on refresh; any other file is read as it is.
+            ? resource.mediaType === "application/pdf" ? ["read", "refresh"] : ["read"]
             : resource.provider === "jira" || resource.provider === "linear"
               ? ["read", "refresh", "open-external", "command"]
               : resource.provider === "computed"

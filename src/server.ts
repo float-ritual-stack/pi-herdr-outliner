@@ -743,10 +743,16 @@ export class OutlinerServer {
     description: ResourceDescription,
     destination: Pick<OutlinerClientRegistration, "resourcePresentation"> | undefined,
   ): ResourceDescription {
-    const presentation = negotiateResourcePresentation(
+    const negotiated = negotiateResourcePresentation(
       description,
       destination?.resourcePresentation ?? TUI_RESOURCE_PRESENTATION_CONTEXT,
     );
+    // A refresh the catalog can't run for this Resource (a plain file is read as it is) stays unavailable
+    // whatever the destination could execute, so a client can trust `capabilities.refresh` without a table.
+    const own = description.capabilities.refresh;
+    const presentation = own.status === "unavailable" && own.factors["destination-host"].state === "blocked"
+      ? { ...negotiated, capabilities: { ...negotiated.capabilities, refresh: own } }
+      : negotiated;
     const availableCommands =
       presentation.capabilities.command.status === "available" &&
         description.requestedRevision === null
