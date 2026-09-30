@@ -51,8 +51,10 @@ if(process.argv[2]==='doctor'){
  process.exit(report.ok?0:1);
 }
 /**
- * `door-open <block-id> [--control <socket>] [--actor <id>] [--reader <tile>]`:
+ * `door-open <block-id> [--control <socket>] [--actor <id>] [--from <tile> | --reader <tile>]`:
  * shows a block in ep0ch-door as an agent's `open` (see src/door-control.ts).
+ * `--from` is the tile the caller runs in (EP0CH_TILE): the door puts it where
+ * that tile's opens land.
  * The socket defaults to EP0CH_CONTROL, which a door gives the programs in its
  * tiles. Exit 3 when no door answers there, so a caller can show it elsewhere.
  */
@@ -61,7 +63,7 @@ if (process.argv[2] === "door-open") {
   try {
     parsed = parseArgs({
       args: process.argv.slice(3),
-      options: { control: { type: "string" }, actor: { type: "string" }, reader: { type: "string" } },
+      options: { control: { type: "string" }, actor: { type: "string" }, reader: { type: "string" }, from: { type: "string" } },
       allowPositionals: true,
       strict: true,
     });
@@ -78,7 +80,7 @@ if (process.argv[2] === "door-open") {
   }
   const { DoorUnreachable, openInDoor } = await import("./door-control");
   try {
-    const opened = await openInDoor(control, blockId, { actor: values.actor ?? "agent", ...(values.reader ? { reader: values.reader } : {}) });
+    const opened = await openInDoor(control, blockId, { actor: values.actor ?? "agent", ...(values.reader ? { reader: values.reader } : {}), ...(values.from ? { from: values.from } : {}) });
     console.log(JSON.stringify(opened));
     process.exit(0);
   } catch (error) {

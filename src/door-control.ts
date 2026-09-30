@@ -50,15 +50,31 @@ export function doorRequest(path: string, request: Record<string, unknown>, time
 /**
  * Opens a block in the door as an agent's `open`: attributed to `actor` on
  * the door's screen, and never moving the person's focus (the door's rule for
- * every agent action). It goes to the `reader` tile (the daily layout's middle
- * detail). Only when the door has no such reader (its refusal "no reader
- * <name> …") is it asked again without one; any other refusal (the reader
- * holds an edit, the screen can't open notes) is the answer, so the note never
- * lands in whatever reader the person has focused instead.
+ * every agent action).
+ *
+ * - `from`: the tile the caller runs in (EP0CH_TILE). The door opens it where
+ *   that tile's opens land, its link (PIE-491: the daily layout links the
+ *   claude tile to its middle detail), so the caller never names a reader.
+ * - `reader`: a reader tile by name.
+ *
+ * Only when the door doesn't know the tile or reader (its refusal "no tile
+ * <name> …" or "no reader <name> …"), or is older than `from` ("open takes no
+ * from"), is it asked again without one: where the door's own open puts notes.
+ * Any other refusal (the reader holds an edit, the screen can't open notes) is
+ * the answer, so the note never lands in whatever reader the person has
+ * focused instead.
  */
-export async function openInDoor(path: string, blockId: string, options: { actor: string; reader?: string }): Promise<{ reader?: string; id?: string }> {
+export async function openInDoor(path: string, blockId: string, options: { actor: string; reader?: string; from?: string }): Promise<{ reader?: string | null; id?: string }> {
   const request = { cmd: "act", action: "open", args: { id: blockId }, as: options.actor };
-  if (options.reader) {
+  if (options.from) {
+    try {
+      return (await doorRequest(path, { ...request, args: { id: blockId, from: options.from } })) as { reader?: string | null; id?: string };
+    } catch (error) {
+      if (!(error instanceof Error) || error instanceof DoorUnreachable || error instanceof DoorSilent) throw error;
+      const unknownTile = error.message.startsWith(`no tile ${options.from};`) || error.message.startsWith(`no tile ${options.from} `);
+      if (!unknownTile && !error.message.startsWith("open takes no from")) throw error;
+    }
+  } else if (options.reader) {
     try {
       return (await doorRequest(path, { ...request, reader: options.reader })) as { reader?: string; id?: string };
     } catch (error) {

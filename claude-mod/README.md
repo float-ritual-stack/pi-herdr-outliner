@@ -35,17 +35,20 @@ ID, `[[page]]`, `((uuid))` or `pi-outliner://` URI).
 
 When Claude runs in an ep0ch-door terminal tile (`EP0CH_TILE` and `EP0CH_CONTROL`
 set, as the door's daily agent is, in the tile or in its Herdr pane), a click or
-`show` opens the note in that door instead: the CLI's `door-open` sends the door
-an agent's `open` of its `middle` reader over `EP0CH_CONTROL`. It goes where the
-door's own `open` puts notes when the door has no `middle` tile.
+`show` opens the note in that door instead: the CLI's `door-open --from
+$EP0CH_TILE` sends the door an agent's `open` from Claude's own tile over
+`EP0CH_CONTROL`. The door puts it where that tile's opens land (its link: the
+daily layout links the claude tile to its middle detail) and says which reader
+that was; the mod never names a tile. A door without that tile, or one older
+than `open from=`, is asked again without it, and puts it where its own `open`
+puts notes.
 
 - The door says who opened it (`claude-code`, or `EP0CH_AGENT`), and an agent's
   open never moves the person's focus.
 - If no door answers there (the door quit and the agent kept running in Herdr),
   it splits Claude's pane in Herdr as above.
-- If the door refuses (say it is on its menu, or the middle reader holds an
-  edit), the reason comes back as the tool's denial or a toast. Only a door
-  with no `middle` reader is asked again without one.
+- If the door refuses (say it is on its menu, or the reader the tile links to
+  holds an edit), the reason comes back as the tool's denial or a toast.
 - If the door takes the request but doesn't answer within 5s, `show` says so;
   it isn't shown in Herdr too.
 

@@ -66,7 +66,7 @@ export function register(on: On, options: PluginOptions): void {
       description:
         "Show an Outliner note in Claude's own Outliner Detail pane, split below this conversation " +
         'in Herdr and reused for every call, so the person can read it beside the chat. When this ' +
-        "session runs in an ep0ch-door tile, it opens in that door's middle reader instead. It never " +
+        "session runs in an ep0ch-door tile, it opens in that door, where its tile's opens land, instead. It never " +
         'moves their Trees, Details or focus. Use it when pointing the person at a note matters; ' +
         'references in replies are already clickable.',
       inputSchema: {
@@ -111,8 +111,8 @@ export function register(on: On, options: PluginOptions): void {
     const workspace = references?.workspace
     if (!workspace) return { deny: 'This session is not in a configured Outliner workspace.' }
     try {
-      const { title, place } = await showInScratchPane($, workspace, uri)
-      return { result: `Showing ${title || reference} ${place === 'door' ? "in the door's middle reader" : "in Claude's Outliner pane"}.` }
+      const { title, place, reader } = await showInScratchPane($, workspace, uri)
+      return { result: `Showing ${title || reference} ${place === 'door' ? (reader ? `in the door's ${reader} reader` : 'in the door') : "in Claude's Outliner pane"}.` }
     } catch (error) {
       return { deny: `Could not show ${reference}: ${error instanceof Error ? error.message : String(error)}` }
     }
@@ -278,13 +278,14 @@ async function loadReferences($: EngineInterface, option: unknown): Promise<void
   }
 }
 
-/** Where a note was shown: the door this session runs in, or Claude's own Detail pane in Herdr. */
-type Shown = { title: string; place: 'door' | 'pane' }
+/** Where a note was shown: the door this session runs in (and the reader tile it landed in), or Claude's own Detail pane in Herdr. */
+type Shown = { title: string; place: 'door' | 'pane'; reader?: string }
 
 /**
  * Shows an Outliner link where the person reads beside Claude. In an ep0ch-door
- * tile (EP0CH_TILE and EP0CH_CONTROL set): in that door, as an agent's open of
- * the daily layout's middle detail. Otherwise, or when no door answers: in
+ * tile (EP0CH_TILE and EP0CH_CONTROL set): in that door, as an agent's open
+ * from its tile, landing where the tile's opens go (the daily layout's middle
+ * detail; the door says which). Otherwise, or when no door answers: in
  * Claude's own Detail, the pane this session split below the Claude pane,
  * reused while it lives, else split anew. It never navigates the person's
  * Trees or Details, and never takes focus. Resolves to the shown block's title
@@ -296,10 +297,10 @@ function showInScratchPane($: EngineInterface, workspace: string, uri: string): 
   return shown
 }
 
-/** The door tile this session runs in, if any: its control socket (or a link to it). */
-async function doorOf($: EngineInterface): Promise<string | null> {
+/** The door tile this session runs in, if any: its name and the door's control socket (or a link to it). */
+async function doorOf($: EngineInterface): Promise<{ tile: string; control: string } | null> {
   const [tile, control] = await Promise.all([$.env.get('EP0CH_TILE'), $.env.get('EP0CH_CONTROL')])
-  return tile && control ? control : null
+  return tile && control ? { tile, control } : null
 }
 
 async function showNow($: EngineInterface, workspace: string, uri: string): Promise<Shown> {
@@ -311,31 +312,35 @@ async function showNow($: EngineInterface, workspace: string, uri: string): Prom
   )
   const door = await doorOf($)
   if (door) {
-    const title = await showInDoor($, outliner, door, uri)
-    if (title !== null) return { title, place: 'door' }
+    const shown = await showInDoor($, outliner, door, uri)
+    if (shown !== null) return { ...shown, place: 'door' }
   }
   return { title: await showInHerdrPane($, outliner, workspace, uri), place: 'pane' }
 }
 
 /**
- * Shows the block in the door as an agent's `open` (attributed, never moving
- * the person's focus). Resolves to its title, or null when no door answers on
- * that socket (the door quit): the caller shows it in Herdr instead.
+ * Shows the block in the door as an agent's `open` from this session's tile
+ * (attributed, never moving the person's focus): the door decides the reader,
+ * its tile's link, so no tile name is assumed here. Resolves to its title and
+ * the reader it landed in, or null when no door answers on that socket (the
+ * door quit): the caller shows it in Herdr instead.
  */
 async function showInDoor(
   $: EngineInterface,
   outliner: (args: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>,
-  control: string,
+  door: { tile: string; control: string },
   uri: string,
-): Promise<string | null> {
+): Promise<{ title: string; reader?: string } | null> {
   const resolved = await outliner(['resolve', uri])
   if (resolved.exitCode !== 0) throw Error(failureReasonOf(resolved.stderr) || 'the target did not resolve')
   const { id, title } = JSON.parse(resolved.stdout) as { id: string; title?: string }
   const actor = (await $.env.get('EP0CH_AGENT')) || 'claude-code'
-  const opened = await outliner(['door-open', id, '--control', control, '--actor', actor, '--reader', 'middle'])
+  const opened = await outliner(['door-open', id, '--control', door.control, '--actor', actor, '--from', door.tile])
   if (opened.exitCode === 3) return null
   if (opened.exitCode !== 0) throw Error(failureReasonOf(opened.stderr) || 'the door did not open it')
-  return title ?? ''
+  let reader: unknown
+  try { reader = JSON.parse(opened.stdout)?.reader } catch { reader = undefined }
+  return { title: title ?? '', ...(typeof reader === 'string' && reader ? { reader } : {}) }
 }
 
 async function showInHerdrPane(

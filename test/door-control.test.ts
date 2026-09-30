@@ -35,6 +35,27 @@ afterEach(async () => { await door?.close(); door = undefined; });
 const BLOCK = "0c0ffee0-1111-4222-8333-444455556666";
 
 describe("showing a block in ep0ch-door", () => {
+  test("from the caller's own tile: the door picks the reader (that tile's link), and says which", async () => {
+    door = await fakeDoor(() => ({ ok: true, result: { reader: "middle", id: BLOCK } }));
+    expect(await openInDoor(door.path, BLOCK, { actor: "claude-code", from: "claude" })).toEqual({ reader: "middle", id: BLOCK });
+    expect(door.requests).toEqual([{ cmd: "act", action: "open", args: { id: BLOCK, from: "claude" }, as: "claude-code" }]);
+  });
+
+  test("a door without that tile, or older than from=, is asked again without it: where its own open puts notes", async () => {
+    for (const refusal of ["no tile claude; tiles: #1 tree (@t1), or focused", "open takes no from; it takes id"]) {
+      door = await fakeDoor(request => (request.args.from ? { ok: false, error: refusal } : { ok: true, result: { reader: "side" } }));
+      expect(await openInDoor(door.path, BLOCK, { actor: "claude-code", from: "claude" })).toEqual({ reader: "side" });
+      expect(door.requests.map(request => request.args.from ?? null)).toEqual(["claude", null]);
+      await door.close(); door = undefined;
+    }
+  });
+
+  test("any other refusal from the tile's link is the answer, never asked again", async () => {
+    door = await fakeDoor(request => (request.args.from ? { ok: false, error: "reader middle is holding an edit or a comment on another note" } : { ok: true, result: {} }));
+    await expect(openInDoor(door.path, BLOCK, { actor: "claude-code", from: "claude" })).rejects.toThrow("holding an edit");
+    expect(door.requests).toHaveLength(1);
+  });
+
   test("an agent's open of the middle reader, attributed to the actor", async () => {
     door = await fakeDoor(() => ({ ok: true, result: { reader: "5", id: BLOCK } }));
     expect(await openInDoor(door.path, BLOCK, { actor: "claude-code", reader: "middle" })).toEqual({ reader: "5", id: BLOCK });
