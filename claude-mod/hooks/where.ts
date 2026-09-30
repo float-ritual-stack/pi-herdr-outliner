@@ -69,5 +69,6 @@ export function whereText(summary: string): string {
   return [
     `This Claude session runs inside these layers (outermost first; EP0CH_NEST): ${summary}.`,
     'Trust this over guesses from the repo name, window titles or other agents. `ep0ch where` checks it again, read-only.',
+    'To see or act in this door (what the person sees, opening a note in front of them, marks, tiles), use the ep0ch skill: `ep0ch peek` and `ep0ch actions` read; `ep0ch act <action> … --as <your name>` acts, attributed, and never takes the person\'s keys. EP0CH_CONTROL already points at this door.',
   ].join('\n')
 }
