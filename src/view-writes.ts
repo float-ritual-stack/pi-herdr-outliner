@@ -34,6 +34,7 @@ export const ROADMAP_NOT_CREATED_IN: ReadonlySet<string> = new Set(["review", "v
 const ALLOCATOR_KEYS = new Set(["type", "status", "priority", "work-stage", "work-batch", "project", "arc", "track", "depends-on", "related-to", "source-block", "work-id"]);
 const PRIORITIES: readonly RoadmapItemPriority[] = ["high", "medium", "low"];
 const ALLOCATOR_REQUIRED = ["project", "priority", "arc", "track"] as const;
+const BLOCK_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export interface ViewWriteChange { key: string; to: string; from: string | null }
 
@@ -330,7 +331,7 @@ function planRoadmapItem(
   if (stage && ROADMAP_NOT_CREATED_IN.has(stage)) return { refused: `roadmap items aren't created in ${stage}: create in Queued or Doing, then move` };
 
   // The title and body without the tokens the allocator writes itself.
-  const tokens = parsePropertyRecords(text).filter(t => t.syntax === "bracket" && ALLOCATOR_KEYS.has(t.key)).sort((a, b) => a.start - b.start);
+  const tokens = parsePropertyRecords(text).filter(t => t.scope === "block" && ALLOCATOR_KEYS.has(t.key)).sort((a, b) => a.start - b.start);
   let stripped = "", cursor = 0;
   for (const t of tokens) {
     let start = t.start;
@@ -346,6 +347,10 @@ function planRoadmapItem(
   const workBatchId = fields["work-batch"] ? idOf(fields["work-batch"]) : undefined;
   const dependsOn = values("depends-on").map(idOf), relatedTo = values("related-to").map(idOf);
   const sourceBlockId = fields["source-block"] ? idOf(fields["source-block"]) : undefined;
+  // The allocator takes only canonical block UUIDs for these.
+  const badId = ([["work-batch", workBatchId], ...dependsOn.map(v => ["depends-on", v]), ...relatedTo.map(v => ["related-to", v]), ["source-block", sourceBlockId]] as [string, string | undefined][])
+    .find(([, v]) => v !== undefined && !BLOCK_ID.test(v));
+  if (badId) return { refused: `${badId[0]} must be a block id (a UUID), not ${badId[1]}` };
   const input: RoadmapItemCreateInput = {
     title, ...(body ? { body } : {}), priority,
     ...(stage ? { workStage: stage as RoadmapItemCreateInput["workStage"] } : {}),
