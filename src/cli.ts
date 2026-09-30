@@ -57,12 +57,19 @@ if(process.argv[2]==='doctor'){
  * tiles. Exit 3 when no door answers there, so a caller can show it elsewhere.
  */
 if (process.argv[2] === "door-open") {
-  const { values, positionals } = parseArgs({
-    args: process.argv.slice(3),
-    options: { control: { type: "string" }, actor: { type: "string" }, reader: { type: "string" } },
-    allowPositionals: true,
-    strict: true,
-  });
+  let parsed;
+  try {
+    parsed = parseArgs({
+      args: process.argv.slice(3),
+      options: { control: { type: "string" }, actor: { type: "string" }, reader: { type: "string" } },
+      allowPositionals: true,
+      strict: true,
+    });
+  } catch (error) {
+    console.error(`error: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(2);
+  }
+  const { values, positionals } = parsed;
   const control = values.control ?? process.env.EP0CH_CONTROL;
   const [blockId, ...extra] = positionals;
   if (!blockId || extra.length || !control) {
