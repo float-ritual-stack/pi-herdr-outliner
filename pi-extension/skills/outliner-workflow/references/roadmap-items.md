@@ -58,7 +58,11 @@ change and a door change in another repository. Each delivery has a key
 
 `note section` replaces what Detail folds under the heading, up to the next
 heading of its level (a trailing callout included) and returns it as `previous`.
-The Claude mod exposes the same commands as `work_*` and `note_section` tools.
+The Claude mod exposes the same commands as `work_*` and `note_section` tools,
+and every other outline operation an agent needs (read with full text, find,
+resolve, revision-checked edit, create, comment, changes, `draft.patch`) as its
+[`outline_*` tools](../../../../claude-mod/README.md#outline-tools), which run
+the CLI's `agent` command. Use them instead of a script around `list` or `update`.
 
 ## Canonical records
 

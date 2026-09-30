@@ -14,6 +14,11 @@ The workspace database owns the current documentation operating guide. This skil
 3. Query the returned guide UUID as `subtreeRootId` with `limit: 100`. Read every section. When `presentation.omitted > 0`, use the guide's rendered section titles to query the omitted children individually under the same subtree.
 4. Follow that database guide as the workspace-local authority. Current user instructions and established workspace vocabulary override seeded examples.
 
+In Claude Code (the [Claude mod](../../../claude-mod/README.md#outline-tools)), the same steps are
+`outline_find` with `property: "system-doc=agent-documentation-guide"` and `limit: 2`, then
+`outline_read` on the guide with `depth: 2` and a `limit` that makes `complete` true. Write with
+`outline_edit` (the revision you read), `outline_create` and `outline_comment`, never a script.
+
 Completion: the full guide and every section relevant to the requested documentation mutation have been read before writing.
 
 ## Legacy workspace fallback

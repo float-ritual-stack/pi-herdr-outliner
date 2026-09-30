@@ -345,6 +345,8 @@ describe('register', () => {
     await session.begin(() => $.session.start(START))
     expect(registered).toEqual([
       'show', 'work_create', 'work_stage', 'work_set', 'work_deliver', 'work_complete', 'work_body', 'note_section',
+      'outline_read', 'outline_find', 'outline_resolve', 'outline_edit', 'outline_create', 'outline_comment',
+      'outline_reply', 'outline_resolve_thread', 'outline_changes', 'outline_patch',
     ])
 
     const shown = await $.tool.call({ tool: 'mcp__pi-outliner__show', reference: '[[Daily notes]]' })

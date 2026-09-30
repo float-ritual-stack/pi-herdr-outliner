@@ -465,6 +465,36 @@ async function runWorkCommand(group: "work" | "note", args: string[]): Promise<u
   }
 }
 
+/**
+ * `agent <operation> [--actor ID] [--session ID] [--json TEXT | --stdin]`: one agent operation on a JSON
+ * input, printed as compact JSON. Writes are `author: agent`, attributed to --actor. A refusal exits 1
+ * with the reason on stderr.
+ */
+async function runAgentCommand(args: string[]): Promise<number> {
+  const { AGENT_OPERATIONS, runAgentOperation } = await import("./agent-tools");
+  try {
+    const [operation, ...flags] = args;
+    if (!operation || !(AGENT_OPERATIONS as readonly string[]).includes(operation)) {
+      throw new Error(`agent expects one of ${AGENT_OPERATIONS.join(", ")}, then --json '{…}' or --stdin`);
+    }
+    const { values } = parseArgs({
+      args: flags, strict: true,
+      options: { json: { type: "string" }, stdin: { type: "boolean" }, actor: { type: "string" }, session: { type: "string" } },
+    });
+    if ((values.json !== undefined) === Boolean(values.stdin)) throw new Error(`agent ${operation} takes its input as --json '{…}' or --stdin`);
+    const input: unknown = JSON.parse(values.stdin ? await Bun.stdin.text() : values.json!);
+    if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("the input is a JSON object");
+    const actor = values.actor?.trim() ? { actorId: values.actor.trim(), ...(values.session ? { sessionId: values.session } : {}) } : undefined;
+    await client.requireCompatibleService();
+    const result = await runAgentOperation(client, operation as (typeof AGENT_OPERATIONS)[number], input as Record<string, unknown>, actor);
+    console.log(JSON.stringify(result));
+    return 0;
+  } catch (error) {
+    console.error(`error: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+}
+
 const [command = "list", ...rest] = process.argv.slice(2);
 const client = createOutlinerClient(paths);
 let request: RequestInput | null = null;
@@ -600,6 +630,7 @@ switch (command) {
       id: {type: "string"}, expected: {type: "string"}, text: {type: "string"}, stdin: {type: "boolean"},
       "request-id": {type: "string"}, quote: {type: "string"}, start: {type: "string"},
       prefix: {type: "string"}, suffix: {type: "string"}, item: {type: "string"}, whole: {type: "boolean"},
+      author: {type: "string", default: "user"}, actor: {type: "string"}, session: {type: "string"},
     }});
     if (!values.id || !values["request-id"]) throw new Error("comment requires --id and a stable --request-id");
     if (values.whole === (values.quote !== undefined) || (!values.whole && values.quote === undefined)) {
@@ -613,9 +644,13 @@ switch (command) {
     const start = values.start === undefined ? undefined : Number(values.start);
     if (start !== undefined && (!Number.isSafeInteger(start) || start < 0)) throw new Error("--start must be a non-negative UTF-16 source offset");
     await client.requireCompatibleService();
+    // An agent's comment says which agent (--author agent --actor <id>); the person's stays the default.
+    const author = writerAuthor(values.author, values.actor);
+    if (author === "system") throw new Error("--author must be user or agent for a comment");
     directResult = await createBlockComment(client, {
-      requestId: values["request-id"], author: "user",
-      input: {blockId: values.id, expectedRevision: parseRevision(values.expected), body, source: "user",
+      requestId: values["request-id"], author,
+      ...(author === "agent" ? {provenance: {actorId: values.actor!, ...(values.session ? {sessionId: values.session} : {})}} : {}),
+      input: {blockId: values.id, expectedRevision: parseRevision(values.expected), body, source: author,
         ...(values.whole ? {} : {passage: {quote: values.quote!, start, prefix: values.prefix, suffix: values.suffix, itemId: values.item}})},
     });
     break;
@@ -729,11 +764,14 @@ switch (command) {
         after: { type: "string" },
         author: { type: "string" },
         kinds: { type: "string" },
+        actor: { type: "string" },
       },
       strict: true,
     });
+    if (values.actor !== undefined) await client.requireCompatibleService(["activity.actor"]);
     request = {
       action: "activity.recent",
+      ...(values.actor !== undefined ? { actorId: values.actor } : {}),
       ...(values.kinds ? { kinds: values.kinds.split(",").map(kind => kind.trim()).filter(Boolean) as BlockActivityKind[] } : {}),
       ...(values.limit ? { limit: parseRevision(values.limit) } : {}),
       ...(values.since ? { since: values.since } : {}),
@@ -882,6 +920,10 @@ switch (command) {
   case "note": {
     directResult = await runWorkCommand(command, rest);
     break;
+  }
+  case "agent": {
+    // The outline operations the Claude mod's outline_* tools run (src/agent-tools.ts): JSON in, compact JSON out.
+    process.exit(await runAgentCommand(rest));
   }
   case "work-id-status":
     request = { action: "work-ids.status" };

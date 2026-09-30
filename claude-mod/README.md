@@ -1,4 +1,4 @@
-# Claude Code mod: Recent Mentions and workboard tools
+# Claude Code mod: Recent Mentions, outline, workboard and door tools
 
 A [Claude Mod](https://github.com/anthropics/claude-code/issues/91870) (a plugin
 with a function-hooks module) that forwards each completed Claude Code answer to
@@ -99,6 +99,63 @@ An item can have several deliveries, one per PR. `work_deliver` takes a `key`
 is refused, naming what is left, while any other delivery is incomplete; and
 `work_set` sets `delivery-stage` on a delivery named by UUID or key, such as
 one left in validate on an item that is already done.
+
+## Outline tools
+
+In the same workspaces Claude gets typed tools for everything an agent does to
+the outline, so it never writes a script around `list --subtree`, `update` or a
+comment socket. Each runs the installed CLI's `agent <operation>` command
+(`src/agent-tools.ts`) with the tool's input as JSON on stdin, in the session's
+workspace, and returns compact JSON. The service keeps the rules; a refusal
+comes back as the tool's error with the reason.
+
+| Tool | Input | Returns |
+|---|---|---|
+| `outline_read` | `ref`, `depth?` (1), `limit?` (50) | full `text` (never the title alone), `properties`, `revision`, `author`, `actorId`, `updated`, children to `depth` with full text, `complete` |
+| `outline_find` | `text?`, `property?` (`key=value` or `key`), `hasKey?`, `query?`, `under?`, or `view?`; `limit?` | rows: `id`, `title`, `revision`; `complete` |
+| `outline_resolve` | `ref` | `id`, `title`, `revision`, `workId`, `fragmentId` |
+| `outline_edit` | `ref`, `expectedRevision`, one of `text`, `replaceSection {heading, body}`, `append`; `allowStructural?` | the new `revision` and a short `diff` |
+| `outline_create` | `parent` (a ref or `root`), `text`, `position?` | `id`, `ref`, `revision` |
+| `outline_comment` | `ref`, `body`, `quote` (with `start`/`prefix`/`suffix` when it repeats) or `whole: true`, `requestId?` | the `thread` id |
+| `outline_reply` | `thread`, `body` | the `reply` id |
+| `outline_resolve_thread` | `thread`, `resolved` | the thread's `lifecycle` |
+| `outline_changes` | `since` (an ISO time or a returned `cursor`), `author?`, `actor?`, `limit?` | each changed block once, newest first, with who changed it, and the next `cursor` |
+| `outline_patch` | `ref`, `revision`, `patches: [{observed, replacement}]`, `mark?` | `draft.patch`'s outcome: `applied`, or `proposed` with the reason |
+
+A `ref` is a block id, `((id))`, `[[page]]` or a Work ID. A title is refused:
+find it with `outline_find` first.
+
+- **The safe path is read, then edit with the revision.** `outline_edit` refuses
+  an empty or whitespace-only result, a revision that isn't the block's (read it
+  again), and an edit that drops a `[page::…]` or an `^anchor` another note
+  links to, unless `allowStructural: true` (the check is `droppedStructure` in
+  `src/draft-patch.ts`, beside `draft.patch`'s own policy).
+- For a small prose fix in a note the person may be typing in, `outline_patch`
+  sends `draft.patch`: the door holding the live draft applies it in place, and
+  a patch that would change links, anchors or properties becomes a proposal
+  the person can apply.
+- Every write is `author: agent`, with the session id as provenance, and an
+  actor id: the call's `actor`, else `OUTLINER_ACTOR`, else `EP0CH_AGENT` (the
+  name the door shows for the agent), else `claude-code`. The workboard tools
+  use the same actor, from the environment.
+
+## Door tools
+
+When Claude runs in an ep0ch-door tile (`EP0CH_CONTROL` set), it also gets
+`door_where`, `door_peek`, `door_act { action, args?, reader? }` and
+`door_open { id }`. They run `ep0ch where --json`, `ep0ch peek`, `ep0ch act …`
+and `ep0ch act open id=… from=$EP0CH_TILE` on that socket. Without
+`EP0CH_CONTROL` they are not offered, and a call is refused.
+
+- `door_act` and `door_open` are attributed with `--as` (the same actor as
+  above), and the door says so on the person's screen.
+- The door never lets an agent take the person's focus, keys or selection.
+  Its refusal comes back as the tool's error; `block.mark` is how to ask for
+  their attention.
+- `ep0ch` reads an argument starting with `@` as a file, so the tool sends one
+  such value through stdin (`key=@-`) and refuses a second.
+- `door_open` resolves a `[[page]]` or Work ID in the session's outline first.
+  `show` (above) is still the way to put a note beside Claude wherever it runs.
 
 ## Use
 

@@ -66,6 +66,17 @@ These shipped with README or PR notes but no changelog line. Newest first.
 
 ### Recorded with their PRs
 
+- Outline tools for agents in the Claude mod (PIE-504): `outline_read` (full
+  text, properties, revision, bounded children, completeness), `outline_find`,
+  `outline_resolve`, `outline_edit` (revision-checked; refuses an empty write
+  and dropping a `[page::…]` or a linked anchor), `outline_create`,
+  `outline_comment`, `outline_reply`, `outline_resolve_thread`,
+  `outline_changes` and `outline_patch` (`draft.patch`), each attributed to the
+  agent; and in a door tile `door_where`, `door_peek`, `door_act` and
+  `door_open`. They run the new CLI `agent` command. CLI `comment` takes
+  `--author agent --actor`, and `activity` takes `--actor` (service capability
+  `activity.actor`).
+
 - Fresh workspaces get seed 6 of the Documentation hub (PIE-502). The agent
   guide describes the boolean saved-view grammar, `[child-depth::…]`,
   `[expanded::…]`, `[expand-when::…]` and `views.planWrite`, page rename by

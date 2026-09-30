@@ -182,6 +182,11 @@ source evidence or distinguish authored glyphs from controls.
   delivery stage, note sections, item bodies) over the existing RPCs. The CLI
   `work`/`note` commands, the Claude mod tools and Pi's task completion call it;
   add workboard operations there rather than in a host adapter or a one-off script.
+- `src/agent-tools.ts` owns the other outline operations an agent makes (read with
+  full text and bounded children, find, resolve, revision-checked edit, create,
+  comment/reply/resolve as the agent, recent changes, `draft.patch`) over the
+  existing RPCs. The CLI `agent` command runs them and the Claude mod's
+  `outline_*` tools call that command; add an agent operation there, not in the mod.
 
 Reuse these seams. Do not add a second property parser, context resolver, query path, authoritative block cache, or independent persistence layer. A bounded disposable Detail preview cache may retain service-owned revisions but never authorizes writes.
 

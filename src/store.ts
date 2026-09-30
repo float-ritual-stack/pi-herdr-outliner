@@ -2094,6 +2094,8 @@ export class OutlinerStore {
     kinds?: readonly BlockActivityKind[];
     /** `exclude`: leave out extension writes (`actor_id` `ext:…`); `only`: just those. */
     extensions?: "exclude" | "only";
+    /** Only entries recorded with this actor id. */
+    actorId?: string;
   } = {}): BlockEditActivityPage {
     const afterCursor = options.afterCursor ?? 0;
     if (!Number.isSafeInteger(afterCursor) || afterCursor < 0) {
@@ -2121,14 +2123,19 @@ export class OutlinerStore {
     if (options.extensions !== undefined && options.extensions !== "exclude" && options.extensions !== "only") {
       throw new Error("Activity extensions must be exclude or only");
     }
+    if (options.actorId !== undefined && (typeof options.actorId !== "string" || !options.actorId.trim())) {
+      throw new Error("Activity actorId must be a non-empty actor id");
+    }
+    // The actor id is bound as the clause's last parameter, after the kinds.
+    const actor = options.actorId === undefined ? [] : [options.actorId.trim()];
     const kindClause = `kind IN (${kinds.map(() => "?").join(", ")})${
       options.extensions === "exclude" ? " AND (actor_id IS NULL OR actor_id NOT LIKE 'ext:%')"
-        : options.extensions === "only" ? " AND actor_id LIKE 'ext:%'" : ""}`;
+        : options.extensions === "only" ? " AND actor_id LIKE 'ext:%'" : ""}${actor.length ? " AND actor_id = ?" : ""}`;
     const cursorRow = this.database.query(`
       SELECT COALESCE(MAX(activity_id), ?) AS cursor
       FROM block_edit_activity
       WHERE activity_id > ? AND author = ? AND edited_at >= ? AND ${kindClause}
-    `).get(afterCursor, afterCursor, author, since, ...kinds) as { cursor: number };
+    `).get(afterCursor, afterCursor, author, since, ...kinds, ...actor) as { cursor: number };
     const rows = this.database.query(`
       SELECT activity_id, block_id, author, actor_id, session_id, task_id, kind, edited_at
       FROM block_edit_activity
@@ -2140,7 +2147,7 @@ export class OutlinerStore {
       )
       ORDER BY activity_id DESC, block_id ASC
       LIMIT ?
-    `).all(afterCursor, author, since, ...kinds, limit) as BlockEditActivityRow[];
+    `).all(afterCursor, author, since, ...kinds, ...actor, limit) as BlockEditActivityRow[];
     const entries = rows.flatMap((row): BlockEditActivity[] => {
       const block = this.get(row.block_id);
       if (!block) return [];

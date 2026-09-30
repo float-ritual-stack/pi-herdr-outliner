@@ -2427,6 +2427,7 @@ export class OutlinerServer {
             author: request.author,
             kinds: request.kinds,
             ...(request.extensions !== undefined ? { extensions: request.extensions } : {}),
+            ...(request.actorId !== undefined ? { actorId: request.actorId } : {}),
           });
           break;
         case "properties.catalog":

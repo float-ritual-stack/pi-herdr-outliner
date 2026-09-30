@@ -17,6 +17,7 @@ import {
   outlinerUriOf,
   scratchPaneOf,
 } from './references'
+import { actorOf, DOOR_TOOLS, doorActArgv, OUTLINE_TOOLS, peekOf } from './outline-tools'
 import { WORK_TOOLS } from './work-tools'
 import {
   type DoorEnv,
@@ -102,8 +103,14 @@ export function register(on: On, options: PluginOptions): void {
         additionalProperties: false,
       },
     })
-    for (const tool of WORK_TOOLS) {
+    for (const tool of [...WORK_TOOLS, ...OUTLINE_TOOLS]) {
       await $.tool.register({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema })
+    }
+    // The door tools act in the door this Claude runs in: only in a door tile, where EP0CH_CONTROL names it.
+    if (await $.env.get('EP0CH_CONTROL')) {
+      for (const tool of DOOR_TOOLS) {
+        await $.tool.register({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema })
+      }
     }
     return result
   })
@@ -133,7 +140,37 @@ export function register(on: On, options: PluginOptions): void {
       const workspace = references?.workspace
       if (!workspace) return { deny: 'This session is not in a configured Outliner workspace.' }
       try {
-        return { result: await runWorkCommand($, workspace, command) }
+        return { result: await runWorkCommand($, workspace, command, await actorFor($, {})) }
+      } catch (error) {
+        return { deny: error instanceof Error ? error.message : String(error) }
+      }
+    })
+  }
+
+  for (const tool of OUTLINE_TOOLS) {
+    on('tool.call', { tool: `mcp__pi-outliner__${tool.name}` }, async ($, e) => {
+      const input = e as Record<string, unknown>
+      const command = tool.command(input)
+      if (typeof command === 'string') return { deny: command }
+      if (!references) await loadReferences($, option)
+      const workspace = references?.workspace
+      if (!workspace) return { deny: 'This session is not in a configured Outliner workspace.' }
+      // outline_changes' `actor` filters by agent; every other tool's names who the write is attributed to.
+      const actor = await actorFor($, tool.name === 'outline_changes' ? {} : input)
+      try {
+        return { result: await runOutlinerCli($, workspace, ['agent', command.operation, '--stdin', '--actor', actor], JSON.stringify(command.input)) }
+      } catch (error) {
+        return { deny: error instanceof Error ? error.message : String(error) }
+      }
+    })
+  }
+
+  for (const tool of DOOR_TOOLS) {
+    on('tool.call', { tool: `mcp__pi-outliner__${tool.name}` }, async ($, e) => {
+      const control = await $.env.get('EP0CH_CONTROL')
+      if (!control) return { deny: 'The door tools work only in an ep0ch-door tile (EP0CH_CONTROL is not set).' }
+      try {
+        return { result: await runDoorTool($, tool.name, e as Record<string, unknown>, control, option) }
       } catch (error) {
         return { deny: error instanceof Error ? error.message : String(error) }
       }
@@ -298,22 +335,95 @@ async function runWorkCommand(
   $: EngineInterface,
   workspace: string,
   command: { args: string[]; stdin?: string },
+  actor: string,
 ): Promise<string> {
+  return runOutlinerCli($, workspace, [...command.args, '--author', 'agent', '--actor', actor], command.stdin)
+}
+
+/**
+ * Who this session's writes are attributed to: the tool call's `actor`, else
+ * OUTLINER_ACTOR, else EP0CH_AGENT (the door's name for the agent), else
+ * claude-code. The session id goes beside it as provenance.
+ */
+async function actorFor($: EngineInterface, input: Record<string, unknown>): Promise<string> {
+  const [OUTLINER_ACTOR, EP0CH_AGENT] = await Promise.all([$.env.get('OUTLINER_ACTOR'), $.env.get('EP0CH_AGENT')])
+  return actorOf(input, { ...(OUTLINER_ACTOR ? { OUTLINER_ACTOR } : {}), ...(EP0CH_AGENT ? { EP0CH_AGENT } : {}) })
+}
+
+/**
+ * Runs the installed CLI in the session's workspace with this session as the
+ * write's provenance (`--session`). Resolves to its output; a refusal throws
+ * with the CLI's reason.
+ */
+async function runOutlinerCli($: EngineInterface, workspace: string, args: string[], stdin?: string): Promise<string> {
   const root = await outlinerRootOf($)
   if (!root) throw Error('the Outliner plugin is disabled')
   const sessionId = await $.session.id()
   const ran = await $.process.run(
-    ['/bin/sh', `${root}/scripts/run-bun.sh`, `${root}/src/cli.ts`, ...command.args,
-      '--author', 'agent', '--actor', 'claude-code', '--session', sessionId],
+    ['/bin/sh', `${root}/scripts/run-bun.sh`, `${root}/src/cli.ts`, ...args, '--session', sessionId],
     {
       cwd: workspace,
       env: envFor(workspace),
-      ...(command.stdin === undefined ? {} : { stdin: command.stdin }),
+      ...(stdin === undefined ? {} : { stdin }),
       timeoutMs: 60_000,
     },
   )
-  if (ran.exitCode !== 0) throw Error(failureReasonOf(ran.stderr) || `${command.args.slice(0, 2).join(' ')} failed`)
+  if (ran.exitCode !== 0) throw Error(failureReasonOf(ran.stderr) || `${args.slice(0, 2).join(' ')} failed`)
   return ran.stdout.trim()
+}
+
+const UUID_REF = /^\(?\(?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)?\)?$/i
+
+/**
+ * One door tool through `ep0ch` on this session's door (EP0CH_CONTROL, passed
+ * explicitly). Acting and opening are attributed with --as; the door's
+ * refusal (an agent never takes the person's focus) throws with its reason.
+ */
+async function runDoorTool(
+  $: EngineInterface,
+  name: string,
+  input: Record<string, unknown>,
+  control: string,
+  option: unknown,
+): Promise<string> {
+  const ep0ch = async (argv: string[], stdin?: string) => {
+    const ran = await $.process.run(argv, { env: { EP0CH_CONTROL: control }, ...(stdin === undefined ? {} : { stdin }), timeoutMs: 15_000 })
+    if (ran.exitCode !== 0) throw Error(failureReasonOf(ran.stderr) || ran.stderr.trim() || `${argv.slice(0, 2).join(' ')} failed`)
+    return ran.stdout
+  }
+  const compact = (stdout: string) => {
+    try { return JSON.stringify(JSON.parse(stdout)) } catch { return stdout.trim() }
+  }
+  switch (name) {
+    case 'door_where': {
+      // An ep0ch older than `where` would open a door on this terminal-less session: its help must list it.
+      const help = await $.process.run(['ep0ch', 'help', HELP_PROBE], { timeoutMs: 5000 })
+      if (help.exitCode !== 0 || !knowsWhere(help.stdout)) throw Error('this ep0ch is too old for where; update it (ep0ch install)')
+      return compact(await ep0ch(['ep0ch', 'where', '--json']))
+    }
+    case 'door_peek':
+      return JSON.stringify(peekOf(await ep0ch(['ep0ch', 'peek'])))
+    case 'door_act': {
+      const command = doorActArgv(input, await actorFor($, input))
+      if (typeof command === 'string') throw Error(command)
+      return compact(await ep0ch(command.argv, command.stdin))
+    }
+    case 'door_open': {
+      const ref = typeof input.id === 'string' ? input.id.trim() : ''
+      if (!ref) throw Error('Give the note to open: its id, ((id)), [[page]] or Work ID.')
+      let id = UUID_REF.exec(ref)?.[1]?.toLowerCase()
+      if (!id) {
+        if (!references) await loadReferences($, option)
+        const workspace = references?.workspace
+        if (!workspace) throw Error('Give a block id: this session is not in a configured Outliner workspace to resolve a reference in.')
+        id = String(JSON.parse(await runOutlinerCli($, workspace, ['agent', 'resolve', '--stdin'], JSON.stringify({ ref }))).id)
+      }
+      const tile = await $.env.get('EP0CH_TILE')
+      return compact(await ep0ch(['ep0ch', 'act', 'open', `id=${id}`, ...(tile ? [`from=${tile}`] : []), '--as', await actorFor($, input)]))
+    }
+    default:
+      throw Error(`unknown door tool ${name}`)
+  }
 }
 
 /**

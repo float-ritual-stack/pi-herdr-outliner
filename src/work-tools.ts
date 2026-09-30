@@ -734,13 +734,35 @@ export async function replaceNoteSection(
   actor: WorkActor,
   options: { expectedRevision?: number } = {},
 ): Promise<TextReplaceResult & { heading: string }> {
+  const block = await resolveBlock(client, address);
+  const revision = requireRevision(block, options.expectedRevision);
+  const section = replaceSectionText(block.text, heading, body, block.id);
+  const updated = await client.request<Block>({
+    action: "update",
+    blockId: block.id,
+    text: section.text,
+    expectedRevision: revision,
+    mutation: mutationOf(actor),
+  });
+  return { ...textResult(updated, section.previous), heading: section.heading };
+}
+
+/**
+ * A note's text with one heading's section replaced: what Detail folds under
+ * that heading, up to the next heading of the same or a higher level. The
+ * heading line stays. `heading` may carry its `##` level; a missing or
+ * ambiguous heading is refused, naming the headings there are.
+ */
+export function replaceSectionText(
+  text: string,
+  heading: string,
+  body: string,
+  blockId: string,
+): { text: string; previous: string; heading: string } {
   const wanted = /^(#{1,6})\s+(.*)$/.exec(heading.trim());
   const title = (wanted ? wanted[2]! : heading).trim();
   const depth = wanted ? wanted[1]!.length : undefined;
   if (!title) throw new WorkToolRefusal("Name the section heading to replace");
-  const block = await resolveBlock(client, address);
-  const revision = requireRevision(block, options.expectedRevision);
-  const text = block.text;
   const headings = markdownSourceTokens(text).flatMap((node) =>
     node.token.type === "heading" ? [{ node, depth: node.token.depth as number, text: String(node.token.text).trim() }] : []
   );
@@ -749,8 +771,8 @@ export async function replaceNoteSection(
     const available = headings.map((candidate) => `${"#".repeat(candidate.depth)} ${candidate.text}`).join("; ") || "none";
     throw new WorkToolRefusal(
       matches.length === 0
-        ? `No heading "${heading.trim()}" in ${block.id}; headings: ${available}`
-        : `More than one heading "${heading.trim()}" in ${block.id}; include its level (## …) or rename one`,
+        ? `No heading "${heading.trim()}" in ${blockId}; headings: ${available}`
+        : `More than one heading "${heading.trim()}" in ${blockId}; include its level (## …) or rename one`,
     );
   }
   const target = matches[0]!.node;
@@ -763,15 +785,11 @@ export async function replaceNoteSection(
   const sectionEnd = fold ? fold.sourceSpan!.end : Math.min(text.length, headingEnd + 1);
   const previous = text.slice(Math.min(text.length, headingEnd + 1), sectionEnd).trim();
   const rest = text.slice(sectionEnd).replace(/^\n+/, "");
-  const next = [text.slice(0, headingEnd), body.trim(), rest].filter(Boolean).join("\n\n");
-  const updated = await client.request<Block>({
-    action: "update",
-    blockId: block.id,
-    text: next,
-    expectedRevision: revision,
-    mutation: mutationOf(actor),
-  });
-  return { ...textResult(updated, previous), heading: `${"#".repeat(matches[0]!.depth)} ${title}` };
+  return {
+    text: [text.slice(0, headingEnd), body.trim(), rest].filter(Boolean).join("\n\n"),
+    previous,
+    heading: `${"#".repeat(matches[0]!.depth)} ${title}`,
+  };
 }
 
 /** The first line plus any block-property lines directly under it. */

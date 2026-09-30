@@ -158,6 +158,18 @@ export function draftPatchTextPolicy(before: string, after: string): string | nu
   return null;
 }
 
+/**
+ * What a whole-text edit (an agent's `outline_edit`, not a prose patch) would take away that others rely on:
+ * the `[page::…]` properties that register the note's page addresses, and its `^anchors` (the caller asks how
+ * many notes link to each; one nobody links to may go). Links, other properties and additions are the edit's
+ * business: unlike `draftPatchTextPolicy`, this is not a prose-only rule.
+ */
+export function droppedStructure(before: string, after: string): { pages: string[]; anchors: string[] } {
+  const pages = (text: string) => parsePropertyRecords(text).filter(property => property.key === "page").map(property => property.raw);
+  const anchors = (text: string) => fragmentAnchors(text).map(anchor => anchor.id);
+  return { pages: missingFrom(pages(before), pages(after)), anchors: [...new Set(missingFrom(anchors(before), anchors(after)))] };
+}
+
 // ── holds: which door has a live draft of which note ────────────────────────
 
 export interface DraftHold {

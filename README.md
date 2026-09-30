@@ -30,7 +30,7 @@ addressable as `[[outliner-tour]]`.
 | Share notes and track work with an agent | [Agent tools, stages, and batches](#agent-integration) |
 | Put a note or an attached page at a URL | [Publishing blocks](#publishing-blocks) |
 | Open a named outline from any folder | [Outline names](#outline-names) and `bun run cli outlines` |
-| Let Claude Code see and open notes | The [Claude Code mod](claude-mod/README.md): Recent Mentions, clickable references, `show`, and ep0ch-door tiles |
+| Let Claude Code see, open and edit notes | The [Claude Code mod](claude-mod/README.md): Recent Mentions, clickable references, `show`, workboard and `outline_*` tools, and `door_*` tools in ep0ch-door tiles |
 
 The [combined Tree/Detail surface](#combined-tree-and-detail-experiment) and
 [automatic Inbox editor](#automatic-inbox-agent) are shipped experiments. The
@@ -649,7 +649,9 @@ bun run cli create --text "Agent's note" --author agent --actor claude-code [--s
 bun run cli move --id <block-uuid> --parent <block-uuid|root> [--position 0] [--author agent --actor claude-code]
 bun run cli delete --id <block-uuid> [--author agent --actor claude-code]
 bun run cli restore --id <block-uuid> [--author agent --actor claude-code]
-bun run cli activity --limit 50 [--since 2026-09-27T00:00:00Z] [--after <cursor>] [--author agent] [--kinds text,properties,move,delete,restore]
+bun run cli activity --limit 50 [--since 2026-09-27T00:00:00Z] [--after <cursor>] [--author agent] [--actor claude-code] [--kinds text,properties,move,delete,restore]
+bun run cli agent read --json '{"ref":"PIE-123","depth":2}'          # full text, properties, revision, children
+bun run cli agent edit --stdin --actor claude-code [--session <id>] < edit.json   # {"ref","expectedRevision","text"|"replaceSection"|"append"}
 bun run cli selection
 bun run cli changes --since <sequence> --limit 50
 bun run cli clients --role tree
@@ -2144,7 +2146,13 @@ bun run cli comment --id <block-uuid> --expected <revision> \
   --request-id <stable-request-id>
 bun run cli comment --id <block-uuid> --expected <revision> \
   --whole --stdin --request-id <stable-request-id> < comment.md
+bun run cli comment --id <block-uuid> --expected <revision> --whole --text 'Checked' \
+  --request-id <stable-request-id> --author agent --actor claude-code [--session <id>]
 ```
+
+A comment is the person's unless `--author agent --actor <id>` says which agent
+wrote it. `bun run cli agent comment|reply|resolve-thread` do the same for an
+agent from JSON input, as the Claude mod's `outline_comment` tools do.
 
 The public `createBlockComment` helper in `src/block-comments.ts` accepts request
 identity, a `BlockCommentInput`, author and provenance. Protocol80 adds the
