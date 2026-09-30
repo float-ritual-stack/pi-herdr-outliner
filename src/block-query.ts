@@ -1,4 +1,5 @@
 import { matchesFilters, normalizePropertyKey } from "./properties";
+import { isPropertyKey, PROPERTY_KEY_SOURCE } from "./property-grammar";
 import type {
   BlockProperty,
   BlockSearchQuery,
@@ -11,6 +12,7 @@ import type {
 } from "./types";
 
 export const MAX_BLOCK_QUERY_LIMIT = 1000;
+const KEYED_RANGE = new RegExp(`^(${PROPERTY_KEY_SOURCE})(<=|>=|<|>)(.*)$`, "s");
 
 const BOOLEAN_OPERATORS = new Set(["and", "not", "or"]);
 const PROPERTY_QUERY_SCOPES = new Set<PropertyQueryScope>([
@@ -315,7 +317,7 @@ function lexQueryExpression(input: string): { tokens: ExpressionToken[]; simple:
     text = text.slice(0, text.length - closing);
     if (text) {
       const lower = text.toLowerCase();
-      const keyedRange = /^([A-Za-z][A-Za-z0-9_.-]*)(<=|>=|<|>)(.*)$/s.exec(text);
+      const keyedRange = KEYED_RANGE.exec(text);
       const bareRange = /^(<=|>=|<|>)(.*)$/s.exec(text);
       if (lower === "and" || lower === "or" || lower === "not") {
         tokens.push({ kind: lower, start });
@@ -826,7 +828,7 @@ export function filterCompletionTargetAtCursor(
   const separator = separatorIn(beforeCursor);
   if (!separator) {
     const prefix = beforeCursor.trim();
-    if (prefix && !/^[A-Za-z][A-Za-z0-9_.-]*$/.test(prefix)) return null;
+    if (prefix && !isPropertyKey(prefix)) return null;
     return {
       kind: "key",
       start: range.start,

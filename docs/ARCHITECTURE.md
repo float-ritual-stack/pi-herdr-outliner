@@ -809,6 +809,8 @@ Do not leave older editors running across this upgrade.
 - compact Tree reads: `tree.index`
 - bounded search: `blocks.query` (optional `fields` projection), `tree.query`, `tree.focus`
 - saved-view evaluation: `views.read`
+- saved-view writes (capability `views.planWrite`): `views.planWrite { viewIds, blockId | text }` plans, without writing, the property patch that moves a block into each view or what a new block there is born with (see "Saved-view write plans"); `query.matches { expression, blockIds }` (capability `query.matches`) returns which of those active blocks a saved-view query holds for
+- `ping.propertyGrammar`: `ping` reports `propertyGrammar: { version }`, the version of `src/property-grammar.ts`, which clients copy to find tokens while painting
 - fragments and transclusions (PIE-424; capabilities `fragments.read`, `transclusions.read`): `fragments.read { blockId, fragmentId }` returns a `((id^fragment))` slice (kind, label, note lines, offsets and the text a reader shows) or `missing` / `duplicate`; `transclusions.read { targets, hostBlockId?, maxDepth? }` projects `!((id))` and `!((id^fragment))` as readers show them, nested to a bounded depth (default 3, ceiling 6), cycle-safe by `(block, fragment)` on the path from the host, at most 16 per document and 64 per read, each note sent once (`blocks`) with its steps once (`checklists`, without their text or properties) and each projection naming the lines it shows (`shownLines`), at most 512 KB of notes and steps per read (past it `EMBED TOO LARGE`); every failure carries its reader wording. Notes are parsed once per text and revision (kept across reads), and a document's embeds aren't scanned past the 17th. `fragments.candidates { query: { noteQuery?, fragmentQuery, mode, limit?, draft? } }` searches every active note for `((note#…` / `((note^…` completion (`src/fragment-search.ts`); an unanchored heading comes with the anchor it would get, and `fragments.ensure { blockId, lineIndex, expectedRevision, mutation }` writes it, revision-checked. `src/transclusions.ts` owns these rules; Detail's embed projection takes its limit and wording from it
 - resource identity and documents: `resource-sources.create | list | get` and `resources.intern | intern-filesystem | get | relocate | describe | open | refresh`
 - resource projections (capability `resources.projection`): `resources.projection.read` returns stored details for a block's provider lines and ticket-page property; it never registers, refreshes or contacts a provider
@@ -1298,6 +1300,33 @@ Optional properties:
 - `[create::key=value]` — one property applied to new canonical children.
 - `[create-parent::<block-id>]` — physical parent for branch-created blocks.
 - `[summary-properties::key,key,…]` — ordered Tree summary allowlist for projected occurrences in this view.
+
+### Saved-view write plans (`views.planWrite`)
+
+```ts
+{ action: "views.planWrite"; viewIds: string[]; blockId?: string; text?: string }
+→ { sequence; revision?; plans: { viewId; plan }[] }
+```
+
+Exactly one of `blockId` or `text`. `src/view-writes.ts` splits each view's query
+the way a write sees it: its plain top-level clauses are what a write sets, and
+everything else (an OR group, a NOT, a created/updated range) must already hold,
+judged on the block as the patch would leave it (updated now). With `blockId`, a
+plan is `{ kind: "patch", revision, changes, operations }` (the
+`properties.patch` operations, with the service's token ordinals), `already`
+(the query holds for the block now), or `refused` with the reason: a presence
+clause a move would have to invent a value for, two values for one key, a block
+with two values for the key, a group the block doesn't meet, a Trash view, an
+invalid or missing view. With `text`, a plan is `{ kind: "create", born,
+defaults, needs, roadmap }` (the view's plain value clauses, its `[create::…]`
+default, the terms the text must still meet); non-blank text adds `text` (what a
+plain create saves: the typed text with the needed tokens appended to its first
+line) or, in a `type=roadmap-item` view, `item` (the `roadmap.items.create`
+input), and `bornWith`. A typed value that contradicts the view is refused, never
+overwritten. Where a new block goes (`create-parent`) is the caller's choice.
+Planning reads one transaction and writes nothing; a client applies a move with
+`properties.patch` at the plan's `revision`, so a block changed in between is
+refused there.
 
 ### Saved-view reads (`views.read`)
 

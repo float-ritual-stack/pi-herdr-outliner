@@ -1,4 +1,5 @@
 import { protectedCodeRanges } from "./markdown-code-ranges";
+import { isEscapedAt, PROPERTY_KEY_PATTERN, PROPERTY_KEY_SOURCE, propertyTokenPattern } from "./property-grammar";
 import { blockReferenceEnvelopeRanges } from "./reference-envelopes";
 import type {
   BlockProperty,
@@ -9,8 +10,8 @@ import type {
   PropertyRecord,
 } from "./types";
 
-const PROPERTY_PATTERN = /\[([A-Za-z][A-Za-z0-9_.-]*)::([^\]\r\n]+)\]/g;
-const PROPERTY_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]*$/;
+const BARE_PROPERTY_PATTERN = new RegExp(String.raw`^([ \t]*)(${PROPERTY_KEY_SOURCE})::[ \t]*`);
+const DIRECTIVE_LINE_PATTERN = new RegExp(String.raw`^([ \t]*)(?:([-*+])[ \t]+)?(${PROPERTY_KEY_SOURCE})::`);
 const HASHTAG_VALUE_PATTERN = /[\p{L}\p{N}_][\p{L}\p{M}\p{N}_-]*(?:\/[\p{L}\p{N}_][\p{L}\p{M}\p{N}_-]*)*/u;
 
 export const PROPERTY_PARSER_VERSION = 4;
@@ -37,9 +38,6 @@ interface PropertyMatch {
 
 type PropertyCandidate = Omit<PropertyRecord, "ordinal" | "scope">;
 
-function createPropertyPattern(): RegExp {
-  return new RegExp(PROPERTY_PATTERN.source, "g");
-}
 
 function sourceLines(text: string): SourceLine[] {
   const lines: SourceLine[] = [];
@@ -243,11 +241,6 @@ function containsNonWhitespace(text: string, start: number, end: number): boolea
   return false;
 }
 
-function hasOddBackslashEscape(text: string, offset: number): boolean {
-  let cursor = offset;
-  while (cursor > 0 && text[cursor - 1] === "\\") cursor -= 1;
-  return (offset - cursor) % 2 === 1;
-}
 
 function removeRanges(text: string, ranges: SourceRange[], start = 0, end = text.length): string {
   if (ranges.length === 0) return text.slice(start, end);
@@ -302,7 +295,7 @@ function parseBarePropertyCandidate(
   bracketCandidates: readonly PropertyCandidate[],
 ): PropertyCandidate | null {
   const content = text.slice(line.start, line.contentEnd);
-  const match = /^([ \t]*)([A-Za-z][A-Za-z0-9_.-]*)::[ \t]*/.exec(content);
+  const match = BARE_PROPERTY_PATTERN.exec(content);
   if (!match) return null;
 
   const start = line.start + match[1].length;
@@ -338,7 +331,7 @@ function hashtagCandidates(
   // already have an owner; a hash inside one must not create another property.
   const excluded = [...literalRanges, ...protectedCodeRanges(text), ...properties, ...blockReferenceEnvelopeRanges(text)];
   for (const pattern of [
-    createPropertyPattern(),
+    propertyTokenPattern(),
     /\[\[[^\]\r\n]*\]\]/g,
     /!?\[[^\]\r\n]*\]\((?:\\.|[^\\)\r\n])*\)/g,
     /^[ \t]{0,3}\[[^\]\r\n]+\]:[^\r\n]*/gm,
@@ -353,7 +346,7 @@ function hashtagCandidates(
   let lineIndex = 0;
   for (const match of text.matchAll(new RegExp(`#(${HASHTAG_VALUE_PATTERN.source})`, "gu"))) {
     const start = match.index;
-    if (!/\p{L}/u.test(match[1]!) || hasOddBackslashEscape(text, start) || offsetInRanges(start, excluded)) continue;
+    if (!/\p{L}/u.test(match[1]!) || isEscapedAt(text, start) || offsetInRanges(start, excluded)) continue;
     let boundary = start;
     while (boundary > 0 && text[boundary - 1] === "\\") boundary -= 1;
     if (boundary > 0 && !/[\s([{"'“‘]/u.test(text[boundary - 1]!)) continue;
@@ -377,14 +370,14 @@ export function parsePropertyRecords(text: string): PropertyRecord[] {
   const literalRanges = scanPropertyLiteralRanges(text);
   const matches: PropertyMatch[] = [];
   let literalIndex = 0;
-  for (const match of text.matchAll(createPropertyPattern())) {
+  for (const match of text.matchAll(propertyTokenPattern())) {
     const start = match.index;
     while (literalIndex < literalRanges.length && literalRanges[literalIndex].end <= start) {
       literalIndex += 1;
     }
     const literalRange = literalRanges[literalIndex];
     const isLiteral = literalRange !== undefined && literalRange.start <= start;
-    if (!isLiteral && !hasOddBackslashEscape(text, start)) matches.push({ match, start });
+    if (!isLiteral && !isEscapedAt(text, start)) matches.push({ match, start });
   }
 
   const lines = sourceLines(text);
@@ -536,7 +529,7 @@ export function parsePropertyDirectiveLines(
   const directives: PropertyDirectiveLine[] = [];
   sourceLines(text).forEach((line, lineIndex) => {
     const content = text.slice(line.start, line.contentEnd);
-    const match = /^([ \t]*)(?:([-*+])[ \t]+)?([A-Za-z][A-Za-z0-9_.-]*)::/.exec(content);
+    const match = DIRECTIVE_LINE_PATTERN.exec(content);
     if (!match) return;
     const key = match[3]!.toLowerCase();
     if (!keys.has(key)) return;

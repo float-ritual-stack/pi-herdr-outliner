@@ -79,6 +79,21 @@ source evidence or distinguish authored glyphs from controls.
   (`fragments.candidates`) and `fragments.ensure` writes a heading's anchor.
   Every client's `((note#…` / `((note^…` completion asks it (Detail, Tree,
   Quick Capture and ep0ch-door).
+- `src/property-grammar.ts` owns the property token's grammar: what a property key
+  is, what a `[key::value]` token matches, and the backslash escape. The parser
+  (`properties.ts`), the query language (`block-query.ts`) and context resolution
+  build on it; no other file restates the key rule. It imports nothing, because
+  clients that find tokens while they paint copy it byte for byte (ep0ch-door's
+  `src/vendor/property-grammar.ts`, checked by its tests). Bump
+  `PROPERTY_GRAMMAR_VERSION` with any change to what it matches; `ping` reports it
+  (`ping.propertyGrammar`). Where a token counts as a property (code, literal
+  regions, scope) stays with `properties.preview`.
+- `src/view-writes.ts` owns what a write into a saved view must change
+  (`views.planWrite`): the property patch that moves a block into a view, or the
+  properties, text or roadmap-item input a new block there is born with, and the
+  reason when a patch can't satisfy the query. Clients (ep0ch-door's lanes,
+  agents) ask it instead of porting the query language; `query.matches` answers
+  which of given blocks a query holds for.
 - `src/context-resolution.ts` owns context-scoped resolution ("the nearest key"
   for a line: the line, lines above, the block, ancestors). It is the first
   slice of PIE-408; resource projections and later soft links use it rather than

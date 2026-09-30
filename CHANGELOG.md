@@ -4,6 +4,16 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+- The service plans writes into saved views (PIE-490). `views.planWrite` says
+  what moving a block into each view would patch (with token ordinals, at the
+  block's revision), or what a new block there is born with, and why not when a
+  patch can't satisfy the view's query; `query.matches` says which of given
+  blocks a query holds for. The property token grammar moved into
+  `src/property-grammar.ts`, one definition the parser, the query language and
+  context resolution share, and `ping` reports its version for clients that
+  copy it. ep0ch-door uses all three instead of its own copies. Additive
+  capabilities `views.planWrite`, `query.matches`, `ping.propertyGrammar`.
+
 - Rename or remove a page by editing its text. Changing `[page::x]` to
   `[page::y]` in Detail, Tree, `outliner update` or any client renames the page
   (`[[x]]` stays an alias, so links keep resolving; renaming back promotes it);

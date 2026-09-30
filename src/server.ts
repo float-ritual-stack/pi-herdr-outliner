@@ -7,6 +7,7 @@ import {searchInboxHistory,visibleInboxSearch} from './inbox-search';
 import {rankSearchWithJev} from './search-ranking';
 import { blockDisplayTitle } from "./references";
 import { previewPropertyParse } from "./properties";
+import { PROPERTY_GRAMMAR_VERSION } from "./property-grammar";
 import { rankGotoWithJev, visibleGotoResults } from "./goto-search";
 import { InboxWorker, assistantActivity } from "./inbox-worker";
 import { InboxRepository, summarizeInboxResult } from "./inbox-repository";
@@ -1500,7 +1501,7 @@ export class OutlinerServer {
           break;
         }
         case "ping":
-          result = { status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION, minClientProtocol: OUTLINER_MIN_CLIENT_PROTOCOL, capabilities: [...OUTLINER_CAPABILITIES, ...(this.host ? OUTLINER_HOST_CAPABILITIES : [])], location:{hostname:this.hostname,workspaceRoot:this.store.workspaceRoot,database:this.store.database.filename,stateDirectory:this.host ? this.stateDirectory : dirname(this.store.database.filename)}, ...(this.outline ? { outline: { ...this.outline } } : {}), ...(this.host ? { host: this.host() } : {}) };
+          result = { status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION, minClientProtocol: OUTLINER_MIN_CLIENT_PROTOCOL, capabilities: [...OUTLINER_CAPABILITIES, ...(this.host ? OUTLINER_HOST_CAPABILITIES : [])], location:{hostname:this.hostname,workspaceRoot:this.store.workspaceRoot,database:this.store.database.filename,stateDirectory:this.host ? this.stateDirectory : dirname(this.store.database.filename)}, propertyGrammar: { version: PROPERTY_GRAMMAR_VERSION }, ...(this.outline ? { outline: { ...this.outline } } : {}), ...(this.host ? { host: this.host() } : {}) };
           break;
         case "outlines.list":
         case "outlines.create":
@@ -1525,6 +1526,12 @@ export class OutlinerServer {
             : this.store.readSavedView(request.viewId, options);
           break;
         }
+        case "views.planWrite":
+          result = this.store.planViewWrites({ viewIds: request.viewIds, blockId: request.blockId, text: request.text });
+          break;
+        case "query.matches":
+          result = this.store.matchQuery(request.expression, request.blockIds);
+          break;
         case "blocks.authored-links":
           result = readAuthoredLinks(this.store, request.ownerBlockId);
           break;

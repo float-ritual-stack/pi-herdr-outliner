@@ -1,4 +1,5 @@
 import { parsePropertyRecords } from "./properties";
+import { PROPERTY_KEY_SOURCE, PROPERTY_TOKEN_SOURCE } from "./property-grammar";
 
 /**
  * Context-scoped resolution: "the nearest X" for a position in a block.
@@ -140,7 +141,7 @@ export function blockPropertyKeys(text: string, matcher: ContextKeyMatcher): str
     }));
 }
 
-const PROPERTY_ONLY_LINE = /^[ \t]*(?:(?:\[[A-Za-z][A-Za-z0-9_.-]*::[^\]\r\n]+\][ \t]*)+|[A-Za-z][A-Za-z0-9_.-]*::.*)$/;
+const PROPERTY_ONLY_LINE = new RegExp(String.raw`^[ \t]*(?:(?:${PROPERTY_TOKEN_SOURCE}[ \t]*)+|${PROPERTY_KEY_SOURCE}::.*)$`);
 
 /**
  * The subject line and the preamble after it: where an ancestor's own

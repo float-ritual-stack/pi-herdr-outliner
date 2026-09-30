@@ -2,6 +2,7 @@ import type { MentionMessage, MentionScope } from "./mentions-types";
 import type { FragmentCandidateQuery } from "./fragment-search";
 import type { AuthoredResourceReference } from "./resource-references";
 import type { PromptRevision } from "./ai-prompts";
+import type { ViewCreatePlan, ViewMovePlan } from "./view-writes";
 import type {
   ComputedExecutionReceipt,
   CreateComputedInvocationInput,
@@ -1432,6 +1433,23 @@ export interface SavedViewReadProblem {
   position?: number;
 }
 
+/**
+ * `views.planWrite`: plan a write into saved views. With `blockId`, a move of that block into each view;
+ * with `text`, a new block in each view (without text, or blank text, only the view's side is planned).
+ */
+export interface ViewWritePlanRequest {
+  viewIds: string[];
+  blockId?: string;
+  text?: string;
+}
+
+export interface ViewWritePlanResult {
+  sequence: number;
+  /** The block's revision the move plans were made at (move plans only). */
+  revision?: number;
+  plans: Array<{ viewId: string; plan: ViewMovePlan | ViewCreatePlan }>;
+}
+
 /** One saved view's members, evaluated atomically by the service (views.read). */
 export interface SavedViewReadResult<B = VisibleBlock> {
   status: SavedViewReadStatus;
@@ -1666,6 +1684,12 @@ export const OUTLINER_CAPABILITIES = [
   /** `transclusions.read`: `!((id))` and `!((id^fragment))` projected, nested to a bounded depth, cycle-safe. */
   "transclusions.read",
   "views.read",
+  /** `views.planWrite`: the property patch that moves a block into a saved view, or what a new block there is born with (PIE-490). */
+  "views.planWrite",
+  /** `query.matches`: which of the given blocks a query holds for, in the saved-view grammar (PIE-490). */
+  "query.matches",
+  /** `ping` reports `propertyGrammar`: the version of src/property-grammar.ts, which clients may copy (PIE-490). */
+  "ping.propertyGrammar",
 ] as const;
 
 /**
@@ -1709,6 +1733,8 @@ export interface OutlinerServiceStatus {
   outline?: OutlinerServiceOutline;
   /** Present when an outline host answers (capability `ping.host`). */
   host?: OutlinerHostStatus;
+  /** The property token grammar clients may copy (capability `ping.propertyGrammar`, src/property-grammar.ts). */
+  propertyGrammar?: { version: number };
 }
 
 /** The outline host behind a socket: one per user and machine, serving outlines by name. */
@@ -1813,6 +1839,10 @@ export type OutlinerRequestAction =
   | { id: string; action: "blocks.query"; query: BlockSearchQuery; fields?: BlockReadField[] }
   | { id: string; action: "blocks.read"; ids: string[]; fields?: BlockReadField[] }
   | ({ id: string; action: "views.read"; viewId: string; format?: "full" | "tree" } & SavedViewReadOptions)
+  /** Capability `views.planWrite`: what a move of `blockId` into each view, or a new block with `text`, must change. Reads only. */
+  | ({ id: string; action: "views.planWrite" } & ViewWritePlanRequest)
+  /** Capability `query.matches`: which of `blockIds` a query holds for (the saved-view grammar). Reads only. */
+  | { id: string; action: "query.matches"; expression: string; blockIds: string[] }
   | { id: string; action: "blocks.authored-links"; ownerBlockId: string }
   /** Capability `resources.projection`. Stored ticket details for provider lines; never fetches. */
   | { id: string; action: "resources.projection.read"; blockId: string; line?: number }

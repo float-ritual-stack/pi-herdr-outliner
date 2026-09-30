@@ -7,7 +7,8 @@ import { searchFragmentCandidates, type FragmentCandidateCollection, type Fragme
 import { ensureHeadingFragment } from "./fragments";
 import { readFragment, readTransclusions, type FragmentRead, type TransclusionOptions, type TransclusionRead, type TransclusionTarget } from "./transclusions";
 import type { ChecklistCollection, ChecklistIdentityChange, ChecklistQuery, ChecklistSearchQuery, ChecklistSearchCollection, ChecklistUpdateInput, ChecklistUpdateReceipt } from "./types";
-import type {QueryExpression, SavedViewReadOptions, SavedViewReadProblem, SavedViewReadResult, VirtualBranchOrder, VirtualBranchPlacementInput} from "./types";
+import { planCreateInView, planMoveIntoView, writeView } from "./view-writes";
+import type {QueryExpression, SavedViewReadOptions, ViewWritePlanRequest, ViewWritePlanResult, SavedViewReadProblem, SavedViewReadResult, VirtualBranchOrder, VirtualBranchPlacementInput} from "./types";
 import { BLOCK_ACTIVITY_KINDS, BLOCK_EDIT_ACTIVITY_KINDS } from "./types";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
@@ -34,6 +35,7 @@ import { migrateRoadmapText } from "./roadmap-migration";
 import {
   compileQueryExpression,
   normalizeBlockSearchQuery,
+  parseSearchExpression,
   positivePropertyFilters,
 } from "./block-query";
 import {
@@ -2493,6 +2495,48 @@ export class OutlinerStore {
         ...(selected.truncated ? { nextOffset: offset + selected.members.length } : {}),
       };
     })();
+  }
+
+  /**
+   * views.planWrite: in one read, what a move of a block into each view (or a new block with the given
+   * text) must change, or why it can't. Nothing is written; the client applies a move with
+   * properties.patch at the returned revision.
+   */
+  planViewWrites(input: ViewWritePlanRequest): ViewWritePlanResult {
+    if (!input || typeof input !== "object") throw new Error("View write plan request is required");
+    const { viewIds, blockId, text } = input;
+    if (!Array.isArray(viewIds) || viewIds.length < 1 || viewIds.length > 100 || viewIds.some(id => typeof id !== "string" || !id)) {
+      throw new Error("View write plans need 1 through 100 view IDs");
+    }
+    if ((blockId === undefined) === (text === undefined)) throw new Error("View write plans need exactly one of blockId or text");
+    if (blockId !== undefined && (typeof blockId !== "string" || !blockId)) throw new Error("View write plan blockId must be a block ID");
+    if (text !== undefined && typeof text !== "string") throw new Error("View write plan text must be a string");
+    return this.database.transaction((): ViewWritePlanResult => {
+      const now = Date.now();
+      const active = (id: string) => { const block = this.getFromCurrentRead(id); return block && !block.effectiveDeletedRootId ? block : undefined; };
+      const block = blockId === undefined ? undefined : active(blockId);
+      if (blockId !== undefined && !block) throw new Error(`Block not found in the active workspace: ${blockId}`);
+      const plans = viewIds.map(viewId => {
+        const view = writeView(viewId, active(viewId));
+        return { viewId, plan: block ? planMoveIntoView(view, block, now) : planCreateInView(view, text, now) };
+      });
+      return { sequence: this.sequence, ...(block ? { revision: block.revision } : {}), plans };
+    })();
+  }
+
+  /** query.matches: which of `ids` (active blocks) the query holds for, with saved-view semantics. */
+  matchQuery(expression: unknown, ids: unknown): { blockIds: string[] } {
+    if (typeof expression !== "string" || !expression.trim()) throw new Error("Query match needs a query expression");
+    if (!Array.isArray(ids) || ids.length > 1000 || ids.some(id => typeof id !== "string")) throw new Error("Query match needs at most 1000 block IDs");
+    const { filters, where } = parseSearchExpression(expression);
+    if (filters.some(filter => filter.key === "deleted")) throw new Error("deleted=true selects Trash; it isn't a property to match");
+    const test = where ? compileQueryExpression(where) : null;
+    return this.database.transaction(() => ({
+      blockIds: (ids as string[]).filter(id => {
+        const block = this.getFromCurrentRead(id);
+        return !!block && !block.effectiveDeletedRootId && matchesFilters(block.properties, filters) && (!test || test(block, block.properties));
+      }),
+    }))();
   }
 
   /** Reads many blocks in one consistent read, reduced to the requested fields. */
