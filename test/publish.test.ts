@@ -573,6 +573,27 @@ test("a [publish::never] note is never published, embedded or linked: its place 
   for (const secret of ["4471", "Spare key", "Gate codes", "Shed inventory"]) expect(markdown).not.toContain(secret);
 });
 
+test("the lock holds through an embed of an embed, in a markdown attachment and in index.json", async () => {
+  const { store, get, write } = await setup();
+  const vault = store.create("Gate codes [publish::never]\nside gate 4471");
+  const shelf = store.create("Potting shed");
+  const seeds = store.create(`Seed tin, unpublished\n!((${vault.id}))`, shelf.id);
+  const tour = store.create(`Garden tour [publish::tour]\n!((${seeds.id}))`);
+  const markdown = await (await get("/p/tour")).text();
+  expect(markdown).toContain("Seed tin, unpublished");
+  expect(markdown).toContain("*locked note*");
+  write("notes/tour.md", `# Tour notes\n\n!((${seeds.id}))\n\n!((${vault.id}))\n`);
+  store.create("Tour notes [publish::tour-notes] [file::notes/tour.md]");
+  const rendered = await (await get("/p/tour-notes?view=html")).text();
+  expect(rendered).toContain("locked note");
+  const json = await (await get("/index.json")).text();
+  for (const page of [markdown, rendered, json]) {
+    for (const secret of ["4471", "Gate codes", vault.id]) expect(page).not.toContain(secret);
+  }
+  expect(json).not.toContain(seeds.id);
+  expect(json).toContain(tour.id);
+});
+
 test("a [publish::never] ancestor locks everything under it, however deep", async () => {
   const { store, get } = await setup();
   const diary = store.create("Private diary [publish::never]");

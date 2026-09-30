@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { OutlinerClient } from "../src/client";
 import { resolvePaths } from "../src/paths";
 import { Publisher } from "../src/publish";
-import { artifactPackageFor, inlineScript, MERMAID_MODULE, TAILWIND_PLAY_CDN } from "../src/publish-artifacts";
+import { ArtifactCompiler, artifactPackageFor, inlineScript, MERMAID_MODULE, TAILWIND_PLAY_CDN } from "../src/publish-artifacts";
 import { OutlinerServer } from "../src/server";
 import { OutlinerStore } from "../src/store";
 
@@ -218,6 +218,73 @@ test("compiling never runs the artifact's code: a macro import is refused, not e
   expect(response.status).toBe(422);
   expect(existsSync(marker)).toBe(false);
 }, COMPILE_TIMEOUT);
+
+/**
+ * A package cache with stand-ins for the pinned packages, so these tests run
+ * offline: `lodash` here writes a marker file if it is ever run on the server,
+ * and a `d3-lantern` package sits in a node_modules folder above the cache.
+ */
+function standInCache() {
+  const root = mkdtempSync(join(tmpdir(), "outliner-artifact-standin-"));
+  cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+  const cache = join(root, "state", "artifacts");
+  const marker = join(root, "lodash-ran");
+  const pkg = (directory: string, name: string, version: string, main: string) => {
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, "package.json"), JSON.stringify({ name, version, main: "index.js",
+      exports: { ".": "./index.js", "./client": "./index.js", "./jsx-runtime": "./index.js" } }));
+    writeFileSync(join(directory, "index.js"), main);
+  };
+  const react = "export const jsx = () => 0, jsxs = () => 0, Fragment = 0, createElement = () => 0; export class Component {}\n" +
+    "export const createRoot = () => ({ render() {} }); export default {};\n";
+  pkg(join(cache, "node_modules", "react"), "react", "18.3.1", react);
+  pkg(join(cache, "node_modules", "react-dom"), "react-dom", "18.3.1", react);
+  pkg(join(cache, "node_modules", "d3"), "d3", "7.9.0", "export const moths = 3;\n");
+  pkg(join(cache, "node_modules", "lodash"), "lodash", "4.17.21",
+    `const fs = require("node:fs");\nexports.lamp = () => { fs.writeFileSync(${JSON.stringify(marker)}, "ran"); return "on"; };\n`);
+  pkg(join(root, "state", "node_modules", "d3-lantern"), "d3-lantern", "1.0.0", "export default \"beyond the cache\";\n");
+  return { root, cache, marker, compiler: new ArtifactCompiler({ cacheDirectory: cache }) };
+}
+
+test("a macro import of a pinned package is refused under every spelling, and never run", async () => {
+  const { marker, compiler } = standInCache();
+  const spellings = [
+    `import { lamp } from "lodash" with { type: "macro" };\nexport default () => lamp();\n`,
+    `import { lamp } from "lodash" assert { type: "macro" };\nexport default () => lamp();\n`,
+    `export { lamp } from "lodash" with { type: "macro" };\nexport default () => 1;\n`,
+    `import { lamp } from "macro:lodash";\nexport default () => lamp();\n`,
+  ];
+  for (const source of spellings) {
+    const build = await compiler.compile(source, ".jsx");
+    expect(build.ok).toBe(false);
+    expect(existsSync(marker)).toBe(false);
+  }
+  // A dynamic import or require with the attribute only bundles the package for the browser.
+  const dynamic = await compiler.compile(`export default async () => (await import("lodash", { with: { type: "macro" } })).lamp();\n`, ".jsx");
+  const required = await compiler.compile(`const { lamp } = require("lodash");\nexport default () => lamp();\n`, ".jsx");
+  expect(dynamic.ok && required.ok).toBe(true);
+  expect(existsSync(marker)).toBe(false);
+});
+
+test("a bundle names no path on this machine: __dirname, import.meta and module.id are fixed", async () => {
+  const { root, compiler } = standInCache();
+  const build = await compiler.compile(
+    "export default () => [__dirname, __filename, import.meta.dir, import.meta.dirname, import.meta.path, import.meta.file,\n" +
+    "  import.meta.filename, import.meta.url, module.id, module.filename];\n", ".jsx");
+  expect(build.ok).toBe(true);
+  if (!build.ok) return;
+  for (const secret of [root, root.slice(1), tmpdir(), "state/artifacts"]) expect(build.script).not.toContain(secret);
+});
+
+test("a d3-* import resolves only inside the package cache, never in a node_modules above it", async () => {
+  const { compiler } = standInCache();
+  const build = await compiler.compile(`import lantern from "d3-lantern";\nexport default () => lantern;\n`, ".jsx");
+  expect(build.ok).toBe(false);
+  if (build.ok) return;
+  expect(build.problems.join("\n")).toContain("\"d3-lantern\" is not available");
+  const d3 = await compiler.compile(`import { moths } from "d3";\nexport default () => moths;\n`, ".jsx");
+  expect(d3.ok).toBe(true);
+});
 
 test("an svg artifact is served as svg in the sandbox; a mermaid artifact gets a page that draws it", async () => {
   const { store, get, write } = await setup();

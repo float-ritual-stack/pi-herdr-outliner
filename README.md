@@ -831,20 +831,25 @@ above.
 - Packages are fetched the first time an artifact needs them, with `bun add
   --exact --ignore-scripts` into the artifact cache (`--artifact-cache`, default
   `<state root>/publish/artifacts`, i.e. `$OUTLINER_STATE_DIR/publish/artifacts`).
-  Compiled bundles are cached there by a hash of the source (`builds/`, the 200
-  newest kept) and in memory, so editing the file compiles it again and an
-  unchanged file is served from the cache. One build or fetch runs at a time.
+  Compiled bundles are cached there by a hash of the source, the shims and the
+  Bun version (`builds/`, the 200 newest up to 256 MiB kept) and in memory, so
+  editing the file compiles it again and an unchanged file is served from the
+  cache. One build or fetch runs at a time, even after a build has run past its
+  60 seconds.
 - A compile error is a readable page (`422`) with the line and message, never a
   stack trace or a path on this machine; `?view=source` shows the source. A fetch
-  that fails (offline) says so (`503`) and is tried again on the next request.
+  that fails (offline) says so (`503`) and is tried again after 30 seconds.
 - **Compiling never runs the artifact's code.** `Bun.build` only bundles, with
   macros off (a `with { type: "macro" }` import is the one way it would run code
   while bundling; it is refused). A plugin decides every import the artifact
   makes: a pinned package, a shadcn/ui shim, or nothing; a relative or absolute
   path, a URL or any other package is refused with a message naming it. The
   artifact is handed to the bundler in memory, so the build reads no file but it,
-  the shims and the package cache. The source is capped by `--max-bytes` and the
-  bundle at 16 MiB; a build is given 60 seconds.
+  the shims and the package cache; a package the artifact names must be in the
+  cache itself, never in a `node_modules` above it. The bundle names no path on
+  this machine (`__dirname`, `import.meta.dir`, `module.id` and the like are
+  fixed values). The source is capped by `--max-bytes` and the bundle at 16 MiB;
+  a build is given 60 seconds.
 - **SVG** is served as `image/svg+xml`; **mermaid** is drawn by mermaid 11 from
   jsDelivr with `securityLevel: "strict"`, and the diagram's text is escaped
   into the page, never inserted as markup.

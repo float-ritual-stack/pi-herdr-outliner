@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 /**
  * Artifacts as claude.ai runs them, for the publisher (README "Publishing
@@ -50,16 +50,43 @@ const PACKAGE_ALIASES: Readonly<Record<string, string>> = {
 export const TAILWIND_PLAY_CDN = "https://cdn.tailwindcss.com/3.4.17";
 export const MERMAID_MODULE = "https://cdn.jsdelivr.net/npm/mermaid@11.12.0/dist/mermaid.esm.min.mjs";
 
-/** Changes to the build (options, entry, shims) change this, so old cached bundles are not reused. */
-const COMPILER_REVISION = "1";
+/** Changes to the build (options, entry) change this, so old cached bundles are not reused. */
+const COMPILER_REVISION = "2";
 /** A bundle larger than this is refused rather than served. */
 export const MAX_ARTIFACT_BUNDLE_BYTES = 16 * 1024 * 1024;
 const BUILD_TIMEOUT_MS = 60_000;
 const INSTALL_TIMEOUT_MS = 180_000;
 const MEMORY_CACHE_ENTRIES = 24;
+/** Bundles kept in memory, in bytes: each can be up to 16 MiB. */
+const MEMORY_CACHE_BYTES = 64 * 1024 * 1024;
 const DISK_CACHE_ENTRIES = 200;
+/** Bundles kept in `builds/`, in bytes, so the cache cannot fill the disk. */
+const DISK_CACHE_BYTES = 256 * 1024 * 1024;
+/** A fetch or build that failed for a passing reason is not tried again for this long. */
+const TRANSIENT_RETRY_MS = 30_000;
+
+/**
+ * Where the bundle would otherwise say where it was built: `__dirname`,
+ * `import.meta.dir`, `module.id` and the rest are replaced by fixed values, in
+ * the artifact and in the packages alike, so no path on this machine reaches a
+ * reader.
+ */
+const PATH_FREE_DEFINES: Readonly<Record<string, string>> = Object.fromEntries(Object.entries({
+  __dirname: "/",
+  __filename: "/artifact.js",
+  "import.meta.dir": "/",
+  "import.meta.dirname": "/",
+  "import.meta.path": "/artifact.js",
+  "import.meta.filename": "/artifact.js",
+  "import.meta.file": "artifact.js",
+  "import.meta.url": "file:///artifact.js",
+  "module.filename": "/artifact.js",
+  "module.path": "/",
+}).map(([name, value]) => [name, JSON.stringify(value)]));
 
 const SHIMS_SOURCE = join(import.meta.dir, "publish-artifact-ui.jsx");
+
+type Remembered = { build: ArtifactBuild; until?: number };
 
 export type ArtifactBuild =
   | { ok: true; script: string; cached: "memory" | "disk" | "built" }
@@ -107,6 +134,20 @@ function scrub(text: string, cacheDirectory: string): string {
     .replace(/(^|[\s"'(])(?:\/[\w.@~+-]+)+\/([\w.@~+-]+)/g, "$1$2");
 }
 
+/**
+ * `module.id` is written into the bundle as the file's path from the working
+ * directory, which no `define` replaces; the cache's own folder is taken out of
+ * it (both spellings), so it names only `artifact/…` or a package's file.
+ */
+function withoutCachePaths(script: string, cacheDirectory: string): string {
+  const fromHere = relative(process.cwd(), cacheDirectory);
+  const spellings = [...new Set([cacheDirectory, cacheDirectory.replace(/^\/+/, ""), fromHere].filter(Boolean))]
+    .sort((left, right) => right.length - left.length);
+  let result = script;
+  for (const spelling of spellings) result = result.split(`${spelling}/`).join("");
+  return result;
+}
+
 /** Escapes a bundle so it can sit inside `<script>` without ending it early. */
 export function inlineScript(script: string): string {
   return script.replace(/<\/(script)/gi, "<\\/$1").replace(/<!--/g, "<\\x21--");
@@ -142,10 +183,13 @@ root.render(App
 export class ArtifactCompiler {
   readonly cacheDirectory: string;
   private readonly log: (line: string) => void;
-  private readonly memory = new Map<string, ArtifactBuild>();
+  private readonly memory = new Map<string, Remembered>();
+  private readonly shims = readFileSync(SHIMS_SOURCE, "utf8");
   private readonly inFlight = new Map<string, Promise<ArtifactBuild>>();
   /** One build or install at a time: the host is shared with the outline. */
   private queue: Promise<unknown> = Promise.resolve();
+  /** A build that ran past its time and is still going; the queue waits for it. */
+  private lingering: Promise<unknown> = Promise.resolve();
 
   constructor(options: ArtifactCompilerOptions) {
     this.cacheDirectory = options.cacheDirectory;
@@ -154,12 +198,15 @@ export class ArtifactCompiler {
 
   /** Compiles a React artifact, from cache when this exact source was built before. */
   compile(source: string, extension: ".jsx" | ".tsx"): Promise<ArtifactBuild> {
-    const key = sha256(`${COMPILER_REVISION}\0${JSON.stringify(ARTIFACT_PACKAGES)}\0${extension}\0${source}`);
+    // The shims and the bundler's version are part of the key, so a new publisher never serves an old bundle.
+    const key = sha256(`${COMPILER_REVISION}\0${Bun.version}\0${sha256(this.shims)}\0${JSON.stringify(ARTIFACT_PACKAGES)}\0${extension}\0${source}`);
     const remembered = this.memory.get(key);
-    if (remembered) {
-      this.remember(key, remembered);
-      return Promise.resolve(remembered.ok ? { ...remembered, cached: "memory" } : remembered);
+    if (remembered && (remembered.until === undefined || remembered.until > Date.now())) {
+      this.remember(key, remembered.build, remembered.until);
+      const build = remembered.build;
+      return Promise.resolve(build.ok ? { ...build, cached: "memory" } : build);
     }
+    if (remembered) this.memory.delete(key);
     const onDisk = join(this.cacheDirectory, "builds", `${key}.js`);
     if (existsSync(onDisk)) {
       const build: ArtifactBuild = { ok: true, script: readFileSync(onDisk, "utf8"), cached: "disk" };
@@ -175,8 +222,9 @@ export class ArtifactCompiler {
       })
       .then((build) => {
         if (build.ok) this.store(key, build.script);
-        // A failed fetch may work next time; a compile error stays until the source changes.
-        if (build.ok || !build.transient) this.remember(key, build);
+        // A compile error stays until the source changes; a failed fetch is tried again after a pause,
+        // so reloads while offline do not start one `bun add` after another.
+        this.remember(key, build, !build.ok && build.transient ? Date.now() + TRANSIENT_RETRY_MS : undefined);
         return build;
       })
       .finally(() => this.inFlight.delete(key));
@@ -186,14 +234,17 @@ export class ArtifactCompiler {
 
   private enqueue<T>(work: () => Promise<T>): Promise<T> {
     const next = this.queue.then(work, work);
-    this.queue = next.catch(() => {});
+    this.queue = next.catch(() => {}).then(() => this.lingering);
     return next;
   }
 
-  private remember(key: string, build: ArtifactBuild): void {
+  private remember(key: string, build: ArtifactBuild, until?: number): void {
     this.memory.delete(key);
-    this.memory.set(key, build);
-    while (this.memory.size > MEMORY_CACHE_ENTRIES) this.memory.delete(this.memory.keys().next().value!);
+    this.memory.set(key, until === undefined ? { build } : { build, until });
+    const size = () => [...this.memory.values()].reduce((total, entry) => total + (entry.build.ok ? entry.build.script.length : 0), 0);
+    while (this.memory.size > 1 && (this.memory.size > MEMORY_CACHE_ENTRIES || size() > MEMORY_CACHE_BYTES)) {
+      this.memory.delete(this.memory.keys().next().value!);
+    }
   }
 
   private store(key: string, script: string): void {
@@ -203,10 +254,19 @@ export class ArtifactCompiler {
       const temporary = join(builds, `.${key}.${process.pid}.tmp`);
       writeFileSync(temporary, script);
       renameSync(temporary, join(builds, `${key}.js`));
-      const files = readdirSync(builds).filter((name) => name.endsWith(".js"))
-        .map((name) => ({ name, at: statSync(join(builds, name)).mtimeMs }))
+      const files = readdirSync(builds).filter((name) => name.endsWith(".js") || name.endsWith(".tmp"))
+        .map((name) => { const stat = statSync(join(builds, name)); return { name, at: stat.mtimeMs, size: stat.size }; })
         .sort((left, right) => right.at - left.at);
-      for (const old of files.slice(DISK_CACHE_ENTRIES)) unlinkSync(join(builds, old.name));
+      let kept = 0;
+      let bytes = 0;
+      for (const file of files) {
+        // A temporary file is from a write that failed; the newest bundle is always kept.
+        const keep = file.name.endsWith(".js") && (kept === 0 || (kept < DISK_CACHE_ENTRIES && bytes + file.size <= DISK_CACHE_BYTES));
+        if (keep) {
+          kept += 1;
+          bytes += file.size;
+        } else if (file.name !== `.${key}.${process.pid}.tmp`) unlinkSync(join(builds, file.name));
+      }
     } catch (error) {
       this.log(`publish: artifact cache: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -290,6 +350,12 @@ export class ArtifactCompiler {
           }
           const alias = PACKAGE_ALIASES[packageName(args.path)];
           if (alias) return { path: Bun.resolveSync(alias + args.path.slice(packageName(args.path).length), cache) };
+          // The package the import names must be in the cache itself (a `d3-*` module comes with d3):
+          // otherwise the resolver would look in node_modules folders above the cache.
+          if (!existsSync(join(cache, "node_modules", packageName(args.path), "package.json"))) {
+            refused.push(args.path);
+            return { path: args.path, namespace: "refused" };
+          }
           return undefined;
         });
         builder.onLoad({ filter: /.*/, namespace: "refused" }, () => ({ contents: "export default undefined;", loader: "js" }));
@@ -298,7 +364,7 @@ export class ArtifactCompiler {
     };
     const build = Bun.build({
       entrypoints: [entry],
-      files: { [entry]: ENTRY_SOURCE, [artifact]: source, [shims]: readFileSync(SHIMS_SOURCE, "utf8") },
+      files: { [entry]: ENTRY_SOURCE, [artifact]: source, [shims]: this.shims },
       target: "browser",
       format: "esm",
       minify: true,
@@ -308,12 +374,18 @@ export class ArtifactCompiler {
       // Bun.build runs a `with { type: "macro" }` import at bundle time; this turns that off.
       macros: false,
       jsx: { runtime: "automatic", importSource: "react" },
-      define: { "process.env.NODE_ENV": "\"production\"" },
+      define: { ...PATH_FREE_DEFINES, "process.env.NODE_ENV": "\"production\"" },
       plugins: [guard],
     } as Bun.BuildConfig);
-    const timeout = Bun.sleep(BUILD_TIMEOUT_MS).then(() => null);
-    const result = await Promise.race([build, timeout]);
-    if (!result) return { ok: false, problems: [`Compiling took longer than ${BUILD_TIMEOUT_MS / 1000} seconds.`], transient: true };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), BUILD_TIMEOUT_MS); });
+    const result = await Promise.race([build, timeout]).finally(() => clearTimeout(timer));
+    if (!result) {
+      // Bun.build cannot be stopped: the next build or fetch waits until this one ends, so a slow
+      // artifact never has two builds running. The failure stays until the source changes.
+      this.lingering = build.catch(() => {});
+      return { ok: false, problems: [`Compiling took longer than ${BUILD_TIMEOUT_MS / 1000} seconds.`] };
+    }
     if (refused.length) {
       const allowed = [...Object.keys(ARTIFACT_PACKAGES), ...Object.keys(PACKAGE_ALIASES), "@/components/ui/*"].join(", ");
       return {
@@ -339,7 +411,7 @@ export class ArtifactCompiler {
     if (output.size > MAX_ARTIFACT_BUNDLE_BYTES) {
       return { ok: false, problems: [`The compiled artifact is larger than ${MAX_ARTIFACT_BUNDLE_BYTES} bytes.`] };
     }
-    return { ok: true, script: await output.text(), cached: "built" };
+    return { ok: true, script: withoutCachePaths(await output.text(), cache), cached: "built" };
   }
 }
 
