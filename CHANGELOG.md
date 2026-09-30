@@ -4,6 +4,14 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+- Outline as server: `outliner publish serve` gives every block carrying
+  `[publish::…]` a URL on 127.0.0.1 (`/p/<page address|block id|slug>`), serving
+  an attached `.html`/`.md` file or the block and its subtree as markdown (with
+  `?view=html`), and `/index` lists them all. Read-only; attachments are served
+  only from allowed roots, never through `..`, escaping symlinks, hidden paths
+  or non-regular files. Expose it with `tailscale serve --set-path /pub`. See
+  README "Publishing blocks".
+
 - The service plans writes into saved views (PIE-490). `views.planWrite` says
   what moving a block into each view would patch (with token ordinals, at the
   block's revision), or what a new block there is born with, and why not when a

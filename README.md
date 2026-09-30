@@ -684,6 +684,119 @@ Missing or protected destinations fail before Resource registration. Use
 `--tree-client` for source-free block, page, Work-ID, or goto URLs. These three
 client options are mutually exclusive; goto URLs accept Tree targeting only.
 
+### Publishing blocks
+
+`outliner publish serve` gives published blocks a URL. It is a read-only client
+of the service (`blocks.query`, `pages.resolve`, `files.read` and the content
+event feed) and listens on `127.0.0.1` only; exposing it is Tailscale's job.
+
+```sh
+bun run cli publish serve --outline pie --port 8790 --base-path /pub [--root ~/writing]… [--max-bytes 1048576]
+bun run cli publish list --outline pie [--json]
+```
+
+**Publish a block** by giving it a `[publish::…]` property:
+
+| Property | URL |
+| --- | --- |
+| `[publish::true]` or `[publish::yes]` | `/p/<page address>` when the block has `[page::…]`, else `/p/<block id>` |
+| `[publish::<slug>]` | `/p/<slug>`; `/` makes folders, e.g. `[publish::field-notes/moths]` |
+| `[publish::false]`, `no`, `off`, `0` | not published |
+
+Page addresses and slugs are lower-cased, and anything other than letters,
+digits, `.`, `_`, `~` and `-` becomes `-` (`[page::Moth Garden]` →
+`/p/moth-garden`). Every published block also answers at `/p/<block id>`. When
+two blocks ask for the same slug, the one created first keeps it and the other
+gets `/p/<slug>~<first 8 characters of its id>`; the index shows the collision.
+
+**What a URL returns** depends on the block's `[file::path]`, the same
+attachment Detail shows:
+
+- an attached `.html`/`.htm` file: that HTML;
+- an attached `.md`/`.markdown` file: the markdown, raw, as
+  `text/markdown; charset=utf-8`; add `?view=html` for a plain rendered page;
+- an attached `.txt` file: plain text;
+- no attachment (or one that is refused, below): the block rendered from its
+  text and its subtree as markdown, with `?view=html` for the rendered page.
+
+Publishing covers **the block and its subtree**. The block's first line is the
+heading and its other lines follow; its descendants follow as a nested list, as
+they sit in the outline. A descendant marked `[publish::false]` is left out with
+everything under it, and Trash is never published. Property tokens are removed.
+A `((block))` or `[[page]]` link becomes a link when its target is published;
+otherwise only its authored label is shown (or "unpublished note"), never the
+target's text. At most 1,000 blocks of a subtree are published, and the page
+says so when it is cut off.
+
+`/` and `/index` list everything published like a little file system (title,
+URL, type, updated): HTML by default, plain text with `Accept: text/plain` or at
+`/index.txt`, and JSON at `/index.json`. "Updated" is the block's last edit, or
+the attached file's modification time when that is later.
+
+**Safety.** The publisher serves only published blocks and only files attached
+to them. There is no query endpoint and no directory listing; any other path is
+`404`, and anything but `GET`/`HEAD` is `405`. An attachment is served only when:
+
+- its authored path has no `..` segment;
+- its real path, with every symlink resolved, is inside an allowed root: the
+  outline's workspace root (from the service's `ping`, only when the service runs
+  on the same machine) plus each `--root`. `/` is never a root;
+- no folder or file below that root is hidden (`.git`, `.env`, `.ssh`, …);
+- it is a regular file, not a device, FIFO, socket or directory;
+- it is at most `--max-bytes` (default and ceiling 2 MiB, the service's own
+  `files.read` limit);
+- its type is `.html`, `.htm`, `.md`, `.markdown` or `.txt`.
+
+These checks run when the index is built and again on every request; the content
+is then read through the service's `files.read` (so a workspace policy that
+denies reading a filesystem Source still applies), and a file that changed
+between the check and the read is refused with `409`. A refused attachment is
+never read: the block is published as text instead and the index says why.
+Pages the publisher renders carry a `Content-Security-Policy` that allows no
+script, and authored raw HTML in markdown is shown as text; an attached `.html`
+file is served as authored. Unpublishing (removing the property or setting it
+to `false`) removes the URL on the next request: any content change clears the
+cached index, which is otherwise at most five seconds old.
+
+**Expose it on the tailnet.** `--base-path` must match the mount so links carry
+it (the publisher accepts requests with or without the prefix):
+
+```sh
+tailscale serve --bg --set-path /pub http://127.0.0.1:8790
+tailscale serve status                      # https://<machine>.<tailnet>.ts.net/pub
+tailscale serve --https=443 --set-path /pub off   # to stop
+```
+
+A systemd user unit, for example `~/.config/systemd/user/outliner-publish.service`:
+
+```ini
+[Unit]
+Description=Pi Outliner publisher: read-only published blocks on 127.0.0.1:8790
+After=outliner-host.service
+Wants=outliner-host.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/pi-herdr-outliner
+Environment=OUTLINER_STATE_DIR=%h/.local/state/pi-herdr-outliner
+Environment=PATH=%h/.bun/bin:/usr/local/bin:/usr/bin:/bin
+UnsetEnvironment=OUTLINER_SOCKET_PATH OUTLINER_WORKSPACE_ROOT
+ExecStart=%h/.bun/bin/bun src/cli.ts publish serve --outline pie --port 8790 --base-path /pub
+Restart=always
+RestartSec=3
+NoNewPrivileges=yes
+UMask=0077
+
+[Install]
+WantedBy=default.target
+```
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now outliner-publish.service
+journalctl --user -u outliner-publish.service -f
+```
+
 ## Keyboard controls
 
 The footer in each pane is generated from the effective action registry and is
