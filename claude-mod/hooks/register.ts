@@ -21,6 +21,7 @@ import { WORK_TOOLS } from './work-tools'
 import {
   type DoorEnv,
   envSummaryOf,
+  HELP_PROBE,
   inDoorEnv,
   knowsWhere,
   WHERE_BLOCK,
@@ -114,7 +115,8 @@ export function register(on: On, options: PluginOptions): void {
     try {
       const env = await doorEnvOf($)
       if (!inDoorEnv(env)) return result
-      const load = whereLoad ?? loadWhere($)
+      // Before session.start's work is queued (or after a reload): start it once, here.
+      const load = (whereLoad ??= loadWhere($).catch(() => null))
       const summary = (await Promise.race([load, $.clock.sleep(WHERE_WAIT_MS).then(() => null)])) ?? envSummaryOf(env)
       const block = { name: WHERE_BLOCK, text: whereText(summary) }
       return { ...result, blocks: [...result.blocks.filter(b => b.name !== WHERE_BLOCK), block] }
@@ -227,8 +229,10 @@ async function loadWhere($: EngineInterface): Promise<string | null> {
   if (!inDoorEnv(env)) return null
   try {
     // An ep0ch older than `where` would read `where` as a socket path and open a door on the terminal-less
-    // session (attaching, maybe creating, an outline): its help must list `where` first.
-    const help = await $.process.run(['ep0ch', 'help'], { timeoutMs: 5000 })
+    // session (attaching, maybe creating, an outline): its help must list `where` first. An ep0ch older than
+    // `help` (before ep0ch-door #31) reads `help` the same way; the probe socket it then picks instead of
+    // the default one doesn't exist, so it stops at "no carrier" before opening anything.
+    const help = await $.process.run(['ep0ch', 'help', HELP_PROBE], { timeoutMs: 5000 })
     if (help.exitCode !== 0 || !knowsWhere(help.stdout)) return envSummaryOf(env)
     const ran = await $.process.run(['ep0ch', 'where', '--json'], { timeoutMs: WHERE_TIMEOUT_MS })
     const summary = ran.exitCode === 0 ? whereSummaryOf(ran.stdout) : null

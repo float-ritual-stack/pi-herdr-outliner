@@ -23,6 +23,17 @@ export const WHERE_TIMEOUT_MS = 8000
 /** How long the first prompt waits for it before using the variables alone. */
 export const WHERE_WAIT_MS = 1500
 
+/**
+ * The extra argument `ep0ch help` is asked with: a socket path that never
+ * exists. Every ep0ch with `help` prints its usage and ignores it; one older
+ * than `help` takes it for the socket to open and stops at "no carrier",
+ * instead of opening a door on the default outline.
+ */
+export const HELP_PROBE = '/nonexistent/ep0ch-where-probe.sock'
+
+/** One line: control characters (a newline in an inherited EP0CH_NEST) become spaces. */
+const oneLine = (s: string): string => s.replace(/[\x00-\x1f\x7f]+/g, ' ').trim()
+
 /** Whether to look at all: only a session a door started (or its Herdr agent pane). */
 export const inDoorEnv = (env: DoorEnv): boolean => !!(env.EP0CH_NEST?.trim() || env.EP0CH_CONTROL?.trim())
 
@@ -37,7 +48,7 @@ export function whereSummaryOf(stdout: string): string | null {
   try {
     const parsed: unknown = JSON.parse(stdout)
     const summary = (parsed as { summary?: unknown } | null)?.summary
-    return typeof summary === 'string' && summary.trim() ? summary.trim().slice(0, 1000) : null
+    return typeof summary === 'string' && oneLine(summary) ? oneLine(summary).slice(0, 1000) : null
   } catch {
     return null
   }
@@ -45,8 +56,8 @@ export function whereSummaryOf(stdout: string): string | null {
 
 /** What the variables alone say, when `ep0ch where` can't be run: unchecked. */
 export function envSummaryOf(env: DoorEnv): string {
-  const nest = env.EP0CH_NEST?.trim()
-  const tile = env.EP0CH_TILE_ID || env.EP0CH_TILE
+  const nest = oneLine(env.EP0CH_NEST ?? '').slice(0, 1000)
+  const tile = oneLine(env.EP0CH_TILE_ID || env.EP0CH_TILE || '').slice(0, 120)
   return [
     nest ? `stack: ${nest}` : `in an ep0ch-door tile${tile ? ` (${tile})` : ''}, from a door older than EP0CH_NEST`,
     'unchecked: `ep0ch where` could not run, so no layer was checked and where the keys are is unknown',

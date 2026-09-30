@@ -75,7 +75,9 @@ in, outermost first (`ssh:pts/5 › herdr:w1:p1 › door:<pid>/desk/t1:claude`, 
 then doesn't have to guess from the repo name or a window title.
 
 - `where` only reads. The mod asks `ep0ch help` first. An ep0ch older than `where`
-  would take the word for a socket and open a door, so it is never run.
+  would take the word for a socket and open a door, so it is never run. The help
+  call carries a socket path that never exists, so an ep0ch older than `help` (which
+  would take `help` the same way) stops at "no carrier" instead of opening a door.
 - Without a usable `ep0ch` (not on PATH, too old, an error, or no answer within
   1.5s of the first prompt), the block has the variables alone and says they are unchecked.
 - It never blocks or fails the session: the work runs after the start, and any
