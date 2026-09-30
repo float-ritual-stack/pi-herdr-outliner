@@ -111,15 +111,15 @@ comes back as the tool's error with the reason.
 
 | Tool | Input | Returns |
 |---|---|---|
-| `outline_read` | `ref`, `depth?` (1), `limit?` (50) | full `text` (never the title alone), `properties`, `revision`, `author`, `actorId`, `updated`, children to `depth` with full text, `complete` |
+| `outline_read` | `ref`, `depth?` (1, at most 6), `limit?` (50, at most 500) | full `text` (never the title alone), `properties`, `revision`, `author`, `actorId`, `updated`, children to `depth` with full text (60k characters of children's text at most), `complete` |
 | `outline_find` | `text?`, `property?` (`key=value` or `key`), `hasKey?`, `query?`, `under?`, or `view?`; `limit?` | rows: `id`, `title`, `revision`; `complete` |
 | `outline_resolve` | `ref` | `id`, `title`, `revision`, `workId`, `fragmentId` |
-| `outline_edit` | `ref`, `expectedRevision`, one of `text`, `replaceSection {heading, body}`, `append`; `allowStructural?` | the new `revision` and a short `diff` |
+| `outline_edit` | `ref`, `expectedRevision`, one of `text`, `replaceSection {heading, body}`, `append`; `allowStructural?` | the new `revision`, a short `diff`, and with `allowStructural` what it `dropped` |
 | `outline_create` | `parent` (a ref or `root`), `text`, `position?` | `id`, `ref`, `revision` |
 | `outline_comment` | `ref`, `body`, `quote` (with `start`/`prefix`/`suffix` when it repeats) or `whole: true`, `requestId?` | the `thread` id |
 | `outline_reply` | `thread`, `body` | the `reply` id |
 | `outline_resolve_thread` | `thread`, `resolved` | the thread's `lifecycle` |
-| `outline_changes` | `since` (an ISO time or a returned `cursor`), `author?`, `actor?`, `limit?` | each changed block once, newest first, with who changed it, and the next `cursor` |
+| `outline_changes` | `since` (an ISO time or a returned `cursor`), `author?`, `actor?`, `limit?`, `before?` | each changed block once, newest first, with who changed it; `complete`, with `before` for the older page when it is false; the next `cursor` |
 | `outline_patch` | `ref`, `revision`, `patches: [{observed, replacement}]`, `mark?` | `draft.patch`'s outcome: `applied`, or `proposed` with the reason |
 
 A `ref` is a block id, `((id))`, `[[page]]` or a Work ID. A title is refused:
@@ -128,8 +128,10 @@ find it with `outline_find` first.
 - **The safe path is read, then edit with the revision.** `outline_edit` refuses
   an empty or whitespace-only result, a revision that isn't the block's (read it
   again), and an edit that drops a `[page::…]` or an `^anchor` another note
-  links to, unless `allowStructural: true` (the check is `droppedStructure` in
-  `src/draft-patch.ts`, beside `draft.patch`'s own policy).
+  links to, unless `allowStructural: true` (the check is `refuseDroppedStructure`
+  in `src/work-tools.ts`, over `droppedStructure` in `src/draft-patch.ts`). An
+  agent's `note_section` and `work_body` get the same check, with no way past it:
+  removing them is an `outline_edit` with `allowStructural`.
 - For a small prose fix in a note the person may be typing in, `outline_patch`
   sends `draft.patch`: the door holding the live draft applies it in place, and
   a patch that would change links, anchors or properties becomes a proposal

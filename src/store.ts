@@ -2096,6 +2096,8 @@ export class OutlinerStore {
     extensions?: "exclude" | "only";
     /** Only entries recorded with this actor id. */
     actorId?: string;
+    /** Only blocks whose latest matching entry is below this cursor: the next, older page of a cut one. */
+    beforeCursor?: number;
   } = {}): BlockEditActivityPage {
     const afterCursor = options.afterCursor ?? 0;
     if (!Number.isSafeInteger(afterCursor) || afterCursor < 0) {
@@ -2126,6 +2128,10 @@ export class OutlinerStore {
     if (options.actorId !== undefined && (typeof options.actorId !== "string" || !options.actorId.trim())) {
       throw new Error("Activity actorId must be a non-empty actor id");
     }
+    if (options.beforeCursor !== undefined && (!Number.isSafeInteger(options.beforeCursor) || options.beforeCursor < 1)) {
+      throw new Error("Activity beforeCursor must be a positive safe integer");
+    }
+    const before = options.beforeCursor === undefined ? [] : [options.beforeCursor];
     // The actor id is bound as the clause's last parameter, after the kinds.
     const actor = options.actorId === undefined ? [] : [options.actorId.trim()];
     const kindClause = `kind IN (${kinds.map(() => "?").join(", ")})${
@@ -2144,10 +2150,10 @@ export class OutlinerStore {
         FROM block_edit_activity
         WHERE activity_id > ? AND author = ? AND edited_at >= ? AND ${kindClause}
         GROUP BY block_id
-      )
+      )${before.length ? " AND activity_id < ?" : ""}
       ORDER BY activity_id DESC, block_id ASC
       LIMIT ?
-    `).all(afterCursor, author, since, ...kinds, ...actor, limit) as BlockEditActivityRow[];
+    `).all(afterCursor, author, since, ...kinds, ...actor, ...before, limit) as BlockEditActivityRow[];
     const entries = rows.flatMap((row): BlockEditActivity[] => {
       const block = this.get(row.block_id);
       if (!block) return [];

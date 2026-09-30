@@ -1724,7 +1724,10 @@ export const OUTLINER_CAPABILITIES = [
   "extensions.records",
   /** `activity.recent` takes `extensions` (`exclude` or `only`); `changes.since` entries keep `actor`. */
   "activity.extensions",
-  /** `activity.recent` takes `actorId`: one agent's (or extension's) entries only (PIE-504). */
+  /**
+   * `activity.recent` takes `actorId` (one agent's or extension's entries only) and `beforeCursor` (the next,
+   * older page of a page cut at its limit) (PIE-504).
+   */
   "activity.actor",
 ] as const;
 
@@ -2335,6 +2338,8 @@ export type OutlinerRequestAction =
       extensions?: "exclude" | "only";
       /** Capability `activity.actor`: only entries recorded with this actor id (`claude-code`, `ext:jira`…). */
       actorId?: string;
+      /** Capability `activity.actor`: only blocks whose latest matching entry is below this cursor (the next page). */
+      beforeCursor?: number;
     }
   | {
       id: string;

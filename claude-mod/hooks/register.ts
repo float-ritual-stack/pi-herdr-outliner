@@ -103,15 +103,15 @@ export function register(on: On, options: PluginOptions): void {
         additionalProperties: false,
       },
     })
-    for (const tool of [...WORK_TOOLS, ...OUTLINE_TOOLS]) {
-      await $.tool.register({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema })
-    }
-    // The door tools act in the door this Claude runs in: only in a door tile, where EP0CH_CONTROL names it.
-    if (await $.env.get('EP0CH_CONTROL')) {
-      for (const tool of DOOR_TOOLS) {
+    // Off the start's dispatch: each registration republishes the tool server (~20ms), and these tools are
+    // loaded on demand, so the session never waits for them. The door tools act in the door this Claude runs
+    // in: only in a door tile, where EP0CH_CONTROL names it.
+    $.clock.after(0, () => void (async () => {
+      const tools = [...WORK_TOOLS, ...OUTLINE_TOOLS, ...((await $.env.get('EP0CH_CONTROL')) ? DOOR_TOOLS : [])]
+      for (const tool of tools) {
         await $.tool.register({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema })
       }
-    }
+    })().catch(() => {}))
     return result
   })
 
@@ -516,7 +516,8 @@ async function showInDoor(
   const resolved = await outliner(['resolve', uri])
   if (resolved.exitCode !== 0) throw Error(failureReasonOf(resolved.stderr) || 'the target did not resolve')
   const { id, title } = JSON.parse(resolved.stdout) as { id: string; title?: string }
-  const actor = (await $.env.get('EP0CH_AGENT')) || 'claude-code'
+  // The same attribution as every other write from this session (actorFor).
+  const actor = await actorFor($, {})
   // `--reader middle` only for a door older than `open from=` (ep0ch-door #61), which lands it where this mod
   // always did; a door that knows `from=` never reads it. Drop it once every door has `from=`.
   const opened = await outliner(['door-open', id, '--control', door.control, '--actor', actor, '--from', door.tile, '--reader', 'middle'])

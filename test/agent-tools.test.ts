@@ -1,11 +1,11 @@
 // The CLI's `agent` command (src/agent-tools.ts), which the Claude mod's outline_* tools run: each operation
 // against a private scratch service, as a spawned CLI the way the mod calls it. Fictional notes only.
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { droppedStructure } from "../src/draft-patch";
-import { changesSince, referenceTarget, shortDiff } from "../src/agent-tools";
+import { changesSince, READ_CHILDREN_MAX_CHARS, referenceTarget, shortDiff } from "../src/agent-tools";
 import { requireCapabilities } from "../src/service-compatibility";
 import type { OutlinerServiceStatus } from "../src/types";
 import { resolvePaths } from "../src/paths";
@@ -50,7 +50,7 @@ async function setup() {
     const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     return { exitCode, stdout, stderr };
   };
-  return { store, agent, cli };
+  return { store, agent, cli, root };
 }
 
 const LONG_NOTE = "Seed swap plan [page::Seed Swap] [kind::plan]\n\n## Beans\n\nBorlotti and runner beans. ^beans\n\n## Squash\n\nButternut only.";
@@ -173,8 +173,42 @@ test("edit refuses dropping a [page::] or a linked anchor unless allowStructural
   const linked = await agent("edit", { ref: note.id, expectedRevision: back.json.revision, text: LONG_NOTE.replace(" ^beans", "") });
   expect(linked.exitCode).toBe(1);
   expect(linked.stderr).toContain("^beans (1 note links to it)");
+  for (const allowStructural of ["true", 1]) {
+    expect((await agent("edit", { ref: note.id, expectedRevision: back.json.revision, text: LONG_NOTE.replace(" ^beans", ""), allowStructural })).exitCode).toBe(1);
+  }
   const allowed = await agent("edit", { ref: note.id, expectedRevision: back.json.revision, text: LONG_NOTE.replace(" ^beans", ""), allowStructural: true });
   expect(allowed.exitCode).toBe(0);
+  // What it let go is said in the result.
+  expect(allowed.json.dropped).toEqual(["^beans"]);
+});
+
+test("an agent's note section or item body can't drop them either; the person's can", async () => {
+  const { store, cli, root } = await setup();
+  const note = store.create(LONG_NOTE);
+  store.create(`Bean list: ((${note.id}^beans))`);
+  const body = join(root, "body.md");
+  writeFileSync(body, "Runner beans only.");
+  const asAgent = await cli(["note", "section", note.id, "Beans", "--file", body, "--author", "agent", "--actor", "garden-agent"]);
+  expect(asAgent.exitCode).toBe(1);
+  expect(asAgent.stderr).toContain("^beans (1 note links to it)");
+  expect(store.get(note.id)!.text).toBe(LONG_NOTE);
+  const itemBody = await cli(["work", "body", note.id, "--file", body, "--author", "agent", "--actor", "garden-agent"]);
+  expect(itemBody.exitCode).toBe(1);
+  expect(itemBody.stderr).toContain("^beans (1 note links to it)");
+  expect(store.get(note.id)!.text).toBe(LONG_NOTE);
+  const asPerson = await cli(["note", "section", note.id, "Beans", "--file", body]);
+  expect(asPerson.exitCode).toBe(0);
+  expect(store.get(note.id)!.text).toContain("## Beans\n\nRunner beans only.");
+});
+
+test("read stops at a budget of children's text, saying it is incomplete", async () => {
+  const { store, agent } = await setup();
+  const note = store.create("Seed catalogue");
+  store.create(`Tomatoes ${"x".repeat(READ_CHILDREN_MAX_CHARS - 100)}`, note.id);
+  store.create(`Peppers ${"y".repeat(500)}`, note.id);
+  const read = await agent("read", { ref: note.id, limit: 500 });
+  expect(read.json.children).toHaveLength(1);
+  expect(read.json.complete).toBe(false);
 });
 
 test("create puts a block under a parent at a position, as the agent", async () => {
@@ -239,8 +273,23 @@ test("changes since a time or cursor, narrowed by author or actor", async () => 
   expect(people.json.entries.map((e: any) => e.id)).toContain(mine.id);
   expect(people.json.entries.map((e: any) => e.id)).not.toContain(note.id);
 
+  expect(all.json.complete).toBe(true);
+  // A cut answer pages back with `before` until complete: every block once, none skipped.
+  const seen: string[] = [];
+  let page = await agent("changes", { since: start, limit: 2 });
+  expect(page.json.entries).toHaveLength(2);
+  expect(page.json.complete).toBe(false);
+  for (let calls = 0; ; calls++) {
+    seen.push(...page.json.entries.map((e: any) => e.id));
+    expect(page.json.cursor).toBe(all.json.cursor);
+    if (page.json.complete) break;
+    expect(calls).toBeLessThan(5);
+    page = await agent("changes", { since: start, limit: 2, before: page.json.before });
+  }
+  expect(seen.sort()).toEqual(all.json.entries.map((e: any) => e.id).sort());
   const later = await agent("changes", { since: all.json.cursor });
   expect(later.json.entries).toEqual([]);
+  expect(later.json.complete).toBe(true);
   expect((await agent("changes", { since: "last tuesday" })).exitCode).toBe(1);
 });
 

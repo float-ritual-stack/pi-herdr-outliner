@@ -23,11 +23,10 @@ import { pageAddressReferences } from "./page-addresses";
 import { blockDisplayTitle, blockReferenceOccurrences } from "./references";
 import { readSavedView } from "./saved-view-read";
 import { parseWorkId } from "./work-ids";
-import { replaceSectionText, WorkToolRefusal, type WorkToolsClient } from "./work-tools";
+import { refuseDroppedStructure, replaceSectionText, WorkToolRefusal, type WorkToolsClient } from "./work-tools";
 import type {
   AnnotationBatchReceipt,
   AnnotationRecord,
-  BacklinkCollection,
   Block,
   BlockAuthor,
   BlockEditActivityPage,
@@ -188,10 +187,14 @@ export interface ReadResult extends ResolvedReference {
   complete: boolean;
 }
 
+/** How much children's text one read returns at most (the note's own text is always whole). */
+export const READ_CHILDREN_MAX_CHARS = 60_000;
+
 /**
  * A block with its full text (never the title alone), properties, revision and
  * who last wrote it, and its children to `depth` levels (default 1), at most
- * `limit` descendants in all (default 50), each with full text. `complete` says
+ * `limit` descendants in all (default 50), each with full text, and at most
+ * READ_CHILDREN_MAX_CHARS of children's text. `complete` says
  * whether anything was left out; a child marked `more` has unread children.
  */
 export async function readBlock(
@@ -200,6 +203,8 @@ export async function readBlock(
 ): Promise<ReadResult> {
   const depth = boundedInteger(input.depth, "depth", 1, 0, 6);
   const limit = boundedInteger(input.limit, "limit", 50, 0, 500);
+  // The children's text in all, so a read of a large subtree never floods the caller: past it, `complete` is false.
+  let chars = READ_CHILDREN_MAX_CHARS;
   const resolved = await resolveRef(client, input.ref);
   const block = await client.request<Block>({ action: "get", blockId: resolved.id });
   let budget = limit;
@@ -217,8 +222,9 @@ export async function readBlock(
     const blocks = await client.request<Block[]>({ action: "children", parentId });
     const children: ReadChild[] = [];
     for (const child of blocks) {
-      if (budget === 0) { complete = false; break; }
+      if (budget === 0 || child.text.length > chars) { budget = 0; complete = false; break; }
       budget--;
+      chars -= child.text.length;
       children.push({ id: child.id, text: child.text, revision: child.revision });
     }
     const unread: ReadChild[] = [];
@@ -349,6 +355,8 @@ export interface EditResult {
   diff: string;
   /** For replaceSection: the heading and the text it replaced. */
   section?: { heading: string; previous: string };
+  /** With allowStructural: the `[page::…]` properties and `^anchors` the edit removed. */
+  dropped?: string[];
 }
 
 /** A short line diff: the changed lines between the common head and tail, `-` then `+`, at most `max` lines. */
@@ -364,16 +372,6 @@ export function shortDiff(before: string, after: string, max = 40): string {
   const lines = [`@@ line ${head + 1}`, ...removed, ...added];
   if (!removed.length && !added.length) return "";
   return lines.length > max ? [...lines.slice(0, max), `… ${lines.length - max} more lines`].join("\n") : lines.join("\n");
-}
-
-/** How many notes link to `((blockId^anchor))`. */
-async function inboundAnchorLinks(client: AgentToolsClient, blockId: string, anchor: string): Promise<number> {
-  const backlinks = await client.request<BacklinkCollection>({ action: "references.backlinks", query: { targetBlockId: blockId, limit: 200 } });
-  const ids = backlinks.sources.filter(source => !source.deletedRootId).map(source => source.blockId);
-  if (!ids.length) return 0;
-  const read = await client.request<BlockReadCollection>({ action: "blocks.read", ids, fields: ["text"] });
-  return read.blocks.filter(row => blockReferenceOccurrences(row.text ?? "")
-    .some(reference => reference.blockId === blockId && reference.fragmentId === anchor)).length;
 }
 
 /**
@@ -410,19 +408,12 @@ export async function editBlock(client: AgentToolsClient, input: EditInput, acto
   if (next === block.text) {
     return { id: block.id, ref: `((${block.id}))`, revision: block.revision, previousRevision: block.revision, diff: "", ...(section ? { section } : {}) };
   }
-  if (input.allowStructural !== true) {
-    const dropped = droppedStructure(block.text, next);
-    const linked: string[] = [];
-    for (const anchor of dropped.anchors) {
-      const count = await inboundAnchorLinks(client, block.id, anchor);
-      if (count) linked.push(`^${anchor} (${count} ${count === 1 ? "note links" : "notes link"} to it)`);
-    }
-    const lost = [...dropped.pages, ...linked];
-    if (lost.length) {
-      throw new WorkToolRefusal(
-        `The edit would drop ${lost.join(", ")}; keep them, or pass allowStructural: true if removing them is the point`,
-      );
-    }
+  // Only an explicit boolean true skips the guard ("true" or 1 do not), and what it let go is said in the result.
+  let dropped: string[] = [];
+  if (input.allowStructural !== true) await refuseDroppedStructure(client, block, next);
+  else {
+    const lost = droppedStructure(block.text, next);
+    dropped = [...lost.pages, ...lost.anchors.map(anchor => `^${anchor}`)];
   }
   const updated = await client.request<Block>({
     action: "update",
@@ -438,6 +429,7 @@ export async function editBlock(client: AgentToolsClient, input: EditInput, acto
     previousRevision: block.revision,
     diff: shortDiff(block.text, updated.text),
     ...(section ? { section } : {}),
+    ...(dropped.length ? { dropped } : {}),
   };
 }
 
@@ -581,13 +573,18 @@ export interface ChangeRow {
  * What changed since a point: an ISO time, or the `cursor` a previous call
  * returned. Each block once, at its latest edit, newest first. Without
  * `author`, the person's, agents' and the system's edits together; `actor`
- * narrows to one agent (or extension). Pass the returned `cursor` as `since`
- * next time for only what is newer.
+ * narrows to one agent (or extension).
+ *
+ * When more changed than `limit`, `complete` is false and `before` is given:
+ * call again with the same `since` and that `before` for the older ones, until
+ * `complete` is true. Then pass `cursor` as `since` next time for only what is
+ * newer; it is past everything that matched, so take it only once every page
+ * is read.
  */
 export async function changesSince(
   client: AgentToolsClient,
-  input: { since: string | number; author?: string; actor?: string; limit?: number },
-): Promise<{ entries: ChangeRow[]; cursor: number }> {
+  input: { since: string | number; author?: string; actor?: string; limit?: number; before?: number },
+): Promise<{ entries: ChangeRow[]; cursor: number; complete: boolean; before?: number }> {
   const limit = boundedInteger(input.limit, "limit", 20, 1, 100);
   const since = typeof input.since === "number" ? String(input.since) : typeof input.since === "string" ? input.since.trim() : "";
   if (!since) throw new WorkToolRefusal("Give since: an ISO time (2026-01-31T09:00:00Z) or a cursor from an earlier call");
@@ -596,16 +593,20 @@ export async function changesSince(
   if (input.author !== undefined && !["user", "agent", "system"].includes(input.author)) {
     throw new WorkToolRefusal("author is user, agent or system");
   }
+  const before = input.before === undefined ? undefined : boundedInteger(input.before, "before", 1, 1, Number.MAX_SAFE_INTEGER);
   const actor = typeof input.actor === "string" && input.actor.trim() ? input.actor.trim() : undefined;
-  await client.requireCompatibleService(["mutations.provenance", ...(actor ? ["activity.actor" as const] : [])]);
+  await client.requireCompatibleService(["mutations.provenance", ...(actor || before ? ["activity.actor" as const] : [])]);
   const authors = (input.author ? [input.author] : actor ? ["agent", "system", "user"] : ["user", "agent", "system"]) as BlockAuthor[];
+  // One more than asked (the service's cap is 100), to tell a full page from a cut one.
+  const asked = Math.min(limit + 1, 100);
   const pages = await Promise.all(authors.map(author => client.request<BlockEditActivityPage>({
     action: "activity.recent",
     ...point,
     author,
-    limit,
+    limit: asked,
     kinds: ["text", "properties", "move", "delete", "restore"],
     ...(actor ? { actorId: actor } : {}),
+    ...(before ? { beforeCursor: before } : {}),
   })));
   // One entry per block across authors: its latest.
   const latest = new Map<string, ChangeRow>();
@@ -624,9 +625,30 @@ export async function changesSince(
       revision: entry.block.revision,
     });
   }
-  const entries = [...latest.values()].sort((a, b) => b.cursor - a.cursor).slice(0, limit);
+  const sorted = [...latest.values()].sort((a, b) => b.cursor - a.cursor);
+  // `cut`: every entry above it is here; at or below it, some may not be. A page the service filled is whole only
+  // above its oldest entry (one cursor can cover several blocks), and so is this answer past `limit`.
+  let cut = 0;
+  for (const page of pages) {
+    if (page.entries.length >= asked) cut = Math.max(cut, Math.min(...page.entries.map(entry => entry.cursor)));
+  }
+  let entries = sorted.filter(entry => entry.cursor > cut);
+  if (entries.length > limit) {
+    cut = entries[limit]!.cursor;
+    entries = entries.filter(entry => entry.cursor > cut);
+  }
+  // More blocks at one cursor than `limit`: return them all rather than page forever.
+  if (cut && !entries.length) {
+    entries = sorted.filter(entry => entry.cursor >= cut);
+    cut -= 1;
+  }
   const floor = "afterCursor" in point ? point.afterCursor ?? 0 : 0;
-  return { entries, cursor: Math.max(floor, ...pages.map(page => page.cursor)) };
+  return {
+    entries,
+    cursor: Math.max(floor, ...pages.map(page => page.cursor)),
+    complete: cut === 0,
+    ...(cut ? { before: cut + 1 } : {}),
+  };
 }
 
 // ─── draft.patch ───────────────────────────────────────────────────────────

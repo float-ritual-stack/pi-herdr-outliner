@@ -75,7 +75,10 @@ These shipped with README or PR notes but no changelog line. Newest first.
   agent; and in a door tile `door_where`, `door_peek`, `door_act` and
   `door_open`. They run the new CLI `agent` command. CLI `comment` takes
   `--author agent --actor`, and `activity` takes `--actor` (service capability
-  `activity.actor`).
+  `activity.actor`, which also gives `activity.recent` a `beforeCursor` so
+  `outline_changes` pages back through a cut answer instead of skipping it). An
+  agent's `note_section` and `work_body` refuse dropping a `[page::…]` or a
+  linked anchor too.
 
 - Fresh workspaces get seed 6 of the Documentation hub (PIE-502). The agent
   guide describes the boolean saved-view grammar, `[child-depth::…]`,

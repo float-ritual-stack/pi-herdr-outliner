@@ -107,7 +107,7 @@ export const OUTLINE_TOOLS: readonly OutlineToolDefinition[] = [
     name: 'outline_edit',
     description:
       'Rewrite a note, checked against the revision you read with outline_read: its whole `text`, one ' +
-      '`replaceSection` (the text under a heading, as Detail folds it), or an `append` at the end. Give exactly one. ' +
+      '`replaceSection` (the text under a heading, subheadings included, as Detail folds it), or an `append` at the end. Give exactly one. ' +
       'Refused before anything is written: an empty or whitespace-only result, a stale revision (read again, then ' +
       'edit), and dropping a [page::…] property or an ^anchor other notes link to (pass allowStructural: true only ' +
       'when removing them is the point). Returns the new revision and a short diff. For a small change in a note ' +
@@ -198,16 +198,18 @@ export const OUTLINE_TOOLS: readonly OutlineToolDefinition[] = [
     description:
       'What changed since a point: an ISO time, or the `cursor` an earlier call returned. Each block once, at its ' +
       'latest change, newest first, with who made it (author, actorId, sessionId). `author` (user, agent, system) and ' +
-      '`actor` (an agent id, such as claude-code) narrow it. Pass the returned cursor as since next time.',
+      '`actor` (an agent id, such as claude-code) narrow it. `complete: false`: more changed than `limit`; call again ' +
+      'with the same since and the returned `before` for older ones. Once complete, pass `cursor` as since next time.',
     inputSchema: schema({
       since: { type: ['string', 'integer'], description: 'An ISO time, or a cursor from an earlier call' },
       author: { type: 'string', enum: ['user', 'agent', 'system'] },
       actor: { type: 'string', description: 'Only this agent’s changes, by actor id (claude-code, garden-agent…)' },
       limit: { type: 'integer', minimum: 1, maximum: 100 },
+      before: { type: 'integer', minimum: 1, description: 'The `before` an incomplete answer returned: its older changes' },
     }, ['since'], false),
     command(input) {
       if (!nonEmpty(input.since) && typeof input.since !== 'number') return 'Give since: an ISO time or a cursor.'
-      return { operation: 'changes', input: inputOf(input, ['since', 'author', 'actor', 'limit']) }
+      return { operation: 'changes', input: inputOf(input, ['since', 'author', 'actor', 'limit', 'before']) }
     },
   },
   {

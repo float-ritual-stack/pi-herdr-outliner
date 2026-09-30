@@ -11,12 +11,16 @@
 import type { RequestInput } from "./client";
 import { deliveryIdentities, parseDeliveryIdentity, type DeliveryIdentity } from "./delivery-lifecycle";
 import { documentFolds } from "./document-folds";
+import { droppedStructure } from "./draft-patch";
 import { markdownSourceTokens } from "./markdown-structure";
 import { getProperty, matchesFilters, normalizePropertyKey, parsePropertyRecords, patchPropertyText, validateProperty } from "./properties";
+import { blockReferenceOccurrences } from "./references";
 import { parseWorkId } from "./work-ids";
 import {
   ROADMAP_WORK_STAGES,
+  type BacklinkCollection,
   type Block,
+  type BlockReadCollection,
   type BlockAuthor,
   type BlockProvenance,
   type DeliveryReceipt,
@@ -712,6 +716,38 @@ export async function setDeliveryStage(
 
 // ─── Prose ─────────────────────────────────────────────────────────────────
 
+/**
+ * Refuses an agent's rewrite of `block` to `next` that drops a `[page::…]`
+ * property, or an `^anchor` another note links to (`((id^anchor))`). Every
+ * agent text write that can drop them (outline_edit, a note section, an item
+ * body) asks this first; only outline_edit's explicit `allowStructural` skips it.
+ * When more notes link to the block than one backlink read returns, a dropped
+ * anchor is refused rather than guessed about.
+ */
+export async function refuseDroppedStructure(client: WorkToolsClient, block: Block, next: string): Promise<void> {
+  const dropped = droppedStructure(block.text, next);
+  const lost = [...dropped.pages];
+  if (dropped.anchors.length) {
+    const backlinks = await client.request<BacklinkCollection>({ action: "references.backlinks", query: { targetBlockId: block.id, limit: 1000 } });
+    const ids = backlinks.sources.filter(source => !source.deletedRootId && source.blockId !== block.id).map(source => source.blockId);
+    const texts = ids.length
+      ? (await client.request<BlockReadCollection>({ action: "blocks.read", ids: [...new Set(ids)], fields: ["text"] })).blocks
+      : [];
+    const unchecked = backlinks.completeness.kind !== "complete";
+    for (const anchor of dropped.anchors) {
+      const count = texts.filter(row => blockReferenceOccurrences(row.text ?? "")
+        .some(reference => reference.blockId === block.id && reference.fragmentId === anchor)).length;
+      if (count) lost.push(`^${anchor} (${count} ${count === 1 ? "note links" : "notes link"} to it)`);
+      else if (unchecked) lost.push(`^${anchor} (too many notes link here to check it)`);
+    }
+  }
+  if (lost.length) {
+    throw new WorkToolRefusal(
+      `The edit would drop ${lost.join(", ")}; keep them, or use outline_edit with allowStructural: true if removing them is the point`,
+    );
+  }
+}
+
 export interface TextReplaceResult extends BlockRef {
   workId: string | null;
   previous: string;
@@ -737,6 +773,7 @@ export async function replaceNoteSection(
   const block = await resolveBlock(client, address);
   const revision = requireRevision(block, options.expectedRevision);
   const section = replaceSectionText(block.text, heading, body, block.id);
+  if (actor.author === "agent") await refuseDroppedStructure(client, block, section.text);
   const updated = await client.request<Block>({
     action: "update",
     blockId: block.id,
@@ -817,10 +854,12 @@ export async function replaceItemBody(
   const head = lines.slice(0, preambleLineCount(block.text)).join("\n");
   const previous = lines.slice(preambleLineCount(block.text)).join("\n").trim();
   const content = body.trim();
+  const next = content ? `${head}\n\n${content}` : head;
+  if (actor.author === "agent") await refuseDroppedStructure(client, block, next);
   const updated = await client.request<Block>({
     action: "update",
     blockId: block.id,
-    text: content ? `${head}\n\n${content}` : head,
+    text: next,
     expectedRevision: revision,
     mutation: mutationOf(actor),
   });

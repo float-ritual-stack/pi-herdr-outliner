@@ -381,6 +381,17 @@ describe('register', () => {
       expect(session.runs.some(run => run.argv.includes('link'))).toBe(false)
     })
 
+    test('show is attributed like every other write: OUTLINER_ACTOR before EP0CH_AGENT', async ($, on) => {
+      const session = sessionIn(on, WORKSPACE, run =>
+        run.argv.includes('door-open') ? result(0, '{"reader":"centre","id":"x"}\n', '') : succeeding(run),
+      `${WORKSPACE}/`, { ...DOOR, OUTLINER_ACTOR: 'garden-agent', EP0CH_AGENT: 'loki' })
+      on('tool.register', ($, e) => ({ value: { tool: `mcp__pi-outliner__${e.name}` } }))
+      await session.begin(() => $.session.start(START))
+      await $.tool.call({ tool: 'mcp__pi-outliner__show', reference: '[[Daily notes]]' })
+      const opened = doorOpenOf(session.runs)!
+      expect(opened.argv[opened.argv.indexOf('--actor') + 1]).toBe('garden-agent')
+    })
+
     test('with no door answering (it quit), show falls back to Claude\'s pane in Herdr', async ($, on) => {
       const session = sessionIn(on, WORKSPACE, run =>
         run.argv.includes('door-open') ? result(3, '', 'error: no door at /state/x (ECONNREFUSED)\n') : succeeding(run),

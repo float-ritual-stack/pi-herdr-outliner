@@ -2428,6 +2428,7 @@ export class OutlinerServer {
             kinds: request.kinds,
             ...(request.extensions !== undefined ? { extensions: request.extensions } : {}),
             ...(request.actorId !== undefined ? { actorId: request.actorId } : {}),
+            ...(request.beforeCursor !== undefined ? { beforeCursor: request.beforeCursor } : {}),
           });
           break;
         case "properties.catalog":
