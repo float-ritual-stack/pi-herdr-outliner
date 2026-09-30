@@ -2,7 +2,9 @@
 
 A persistent, local-first block outliner shared by a person and coding agents.
 
-Pi Herdr Outliner runs as a workspace-scoped SQLite service with two terminal clients:
+Pi Herdr Outliner runs as a SQLite service with two terminal clients. One
+[outline host](#the-outline-host) per machine serves every outline by
+[name](#outline-names) (`pie`, `jam-shelf`); a folder binds to one outline.
 
 - **Tree** — navigate, create, edit, move, filter, and project blocks.
 - **Detail** — read Markdown, inspect referenced files, annotate line ranges, and edit long-form block text.
@@ -26,6 +28,9 @@ addressable as `[[outliner-tour]]`.
 | Capture a thought and inspect its cleanup | Tree `c`, then `Shift+I`: [Capture and Inbox](#capture-and-inbox) |
 | Tune the AI's instructions | [Editable prompt files](#editing-ai-prompts) |
 | Share notes and track work with an agent | [Agent tools, stages, and batches](#agent-integration) |
+| Put a note or an attached page at a URL | [Publishing blocks](#publishing-blocks) |
+| Open a named outline from any folder | [Outline names](#outline-names) and `bun run cli outlines` |
+| Let Claude Code see and open notes | The [Claude Code mod](claude-mod/README.md): Recent Mentions, clickable references, `show`, and ep0ch-door tiles |
 
 The [combined Tree/Detail surface](#combined-tree-and-detail-experiment) and
 [automatic Inbox editor](#automatic-inbox-agent) are shipped experiments. The
@@ -96,22 +101,28 @@ No shared user host is used.
 
 ## Current capabilities
 
-- SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per workspace root.
-- Workspace-isolated service and runtime paths.
+- SQLite-backed hierarchical blocks with stable UUIDs, sibling order, authors, timestamps, and one canonical graph per outline.
+- One outline host per user and machine serves any number of named outlines on one socket. Folders bind to an outline through `client.json` or a folder-name guess; opening from Herdr in an unbound folder shows **Choose outline** and never creates one by itself. See [The outline host](#the-outline-host).
 - Versioned JSON-lines RPC over a Unix socket. `ping` reports the service protocol, the oldest client protocol it serves and its capabilities; clients accept any service at or above their minimum that offers the capabilities they use (see [Protocol and schema changes](CONTRIBUTING.md#protocol-and-schema-changes)).
 - Reactive canonical content/view broadcasts, per-process Tree/Detail/observer registration with operation protection, exact-client UI commands, and source-aware `preview | open | reveal` navigation.
 - Durable resources have UUID identities independent of blocks and mutable locators. Provider-qualified Sources bind filesystem roots or remote namespaces; overlapping Sources remain distinct, relocations preserve Resource IDs, provider revisions remain explicit, and capability resolution reports blockers across provider, credentials, workspace policy, host, and connectivity. Registered Detail hosts declare Surface, Placement, renderer, capability, credential, and connectivity facts; open/describe/refresh deterministically negotiate cached Markdown, embedded-browser, native-document, metadata, or external-link representations without changing Resource identity. PDF is a media type reachable through filesystem and web Sources: one captured binary snapshot can produce both native PDF and page-aware Markdown representations through versioned replaceable extractors.
 - Each Tree owns its cursor, occurrence selection, filter, viewport, collapsed rows, multiline expansion, explicit-navigation history, and browsing context; moving a standalone Tree updates its own local Preview; composed Tree updates its embedded Detail Preview, while Current stays in place.
 - Indexed `[property::value]` metadata with optimistic property patching and catalog queries.
 - Exact block and fragment references using `((block-id))` and `((block-id^fragment-id))`, resolved to display titles in read mode while raw text remains editable.
-- Unique normalized symbolic addresses from explicit `[page::address]` declarations and Work IDs, with aliases, explicit removal, bounded completion, dangling links, and transactional create-on-follow.
+- Unique normalized symbolic addresses from explicit `[page::address]` declarations and Work IDs, with aliases, explicit removal, bounded completion, dangling links, and transactional create-on-follow. Editing the `[page::…]` text renames the page (the old address stays an alias) or, when the token is deleted, frees it.
+- Literal regions (`<!-- literal -->` … `<!-- /literal -->`) show property and hashtag syntax as text without indexing it.
 - Workspace-scoped monotonic Work-ID allocation adopts a clean existing prefix or requires explicit configuration, optimistically assigns the next immutable ID, and never reuses reserved or purged identifiers.
 - Atomic canonical roadmap-item creation discovers the single project work queue, validates UUID relationships and complete routing metadata, allocates the immutable Work ID, and returns matching virtual-branch memberships in one transaction.
 - Plain-clickable Work IDs, canonical UUIDs, exact references, and `[[address]]` links inside Tree/Detail, with OSC 8 `pi-outliner://` links retained for external terminal interoperability.
 - Tree can project a selected block's Outlinks, Resources and Backlinks as read-only generated branches. Enumeration never creates pages, Resources, Sources, or provider traffic. Explicit activation follows or creates unresolved ordinary `[[page]]` links and human-authored `[file::…]`, `[web::…]`, `[jira::…]`, and `[app::…]` Resources; unresolved Work IDs stay unavailable.
-- Property-driven virtual branches with ranked or timestamp-sorted canonical roots, contextual descendants through relative depth 2, independent occurrence disclosure, a 1,000-row branch budget, property-aware creation, and persisted manual root ordering.
-- Fresh databases seed version 5 of the Documentation hub: an addressable feature tour, the agent documentation guide, native transclusions, a working virtual branch, and authored block, page, file, web, SSH-application, and Jira reference examples. Existing workspaces keep their customized content.
-- Agent-created blocks retain immutable creator provenance. Every later text or property mutation records its own `user`, `agent`, or `system` identity plus available actor, session, and task IDs, so edit attribution never depends on the creator.
+- Property-driven virtual branches (saved views) evaluated by the service (`views.read`), with `OR`, `NOT`, parentheses and `created`/`updated` ranges in `[query::…]`, ranked or timestamp-sorted canonical roots, contextual descendants to `[child-depth::0..8]` (default 2), `[expanded::false]` and `[expand-when::…]` disclosure, a 1,000-row branch budget, canonical child creation from a branch, and persisted manual root ordering. `views.planWrite` tells a client what patch moves a block into a view.
+- Tree multi-select collects items for bulk ranking and canonical copy; the Advanced property filter accepts the same boolean grammar, and a filter can stay inside one branch.
+- The service owns fragment slices and nested transclusion (`fragments.read`, `transclusions.read`, used by ep0ch-door and published pages); Detail shows one level of embeds with the same limits and wording.
+- Detail Backlinks are grouped by kind and stage from service facets, with the note itself, its descendants and resolved comments hidden by default.
+- Fresh databases seed version 6 of the Documentation hub: an addressable feature tour, the agent documentation guide, native transclusions, a working virtual branch, and authored block, page, file, web, SSH-application, and Jira reference examples. Existing workspaces keep their customized content.
+- Agent-created blocks retain immutable creator provenance. Every later text or property mutation, and every move, trash and restore, records its own `user`, `agent`, or `system` identity plus available actor, session, and task IDs, so edit attribution never depends on the creator. CLI writes take `--author`/`--actor`, and `bun run cli activity` reads the record.
+- Clients catch up after a disconnect with `changes.since`, read many blocks at once with field projection (`blocks.read`), and preview how a draft's properties will parse (`properties.preview`).
+- `outliner publish serve` gives blocks with `[publish::…]` a read-only URL, including attached HTML, claude.ai React artifacts, SVG, Mermaid and Markdown; `[publish::never]` locks a subtree. See [Publishing blocks](#publishing-blocks).
 - Recoverable deletion preserves canonical structure and identity, excludes Trash content from normal queries/completions, and requires explicit identifier-confirmed purge.
 - Idempotent quick capture retains drafts and writes ordinary canonical children under one workspace Inbox without moving selection or navigation history. The automatic Inbox agent can organize them using the configured Pi model, with optional Jev judgments, inspectable results, Pause/Resume, guarded Undo, and directed reconsideration.
 - Canonical bookmarks use one strict record per target beneath the durable Bookmarks system view; Tree and Detail toggle them optimistically, and the generic split navigator resolves each record back to its live target without rewriting target text.
@@ -1510,9 +1521,16 @@ while `Card [stage::queued] more` has only an inline token: a client can compare
 the preview with the block it read and warn before a save drops a property.
 CLI: `bun run cli properties-preview --text '<draft>'` or `--stdin`.
 
+The property token grammar lives in one place, `src/property-grammar.ts`, which
+the parser, the query language and context resolution share; `ping` reports its
+version as `propertyGrammar`. To place a block into a saved view, ask
+`views.planWrite` (capability `views.planWrite`) for the property patch each view
+needs, or why no patch can satisfy its query; `query.matches` says which of given
+blocks a query holds for. See [ARCHITECTURE](docs/ARCHITECTURE.md#saved-view-write-plans-viewsplanwrite).
+
 ### Bounded block queries
 
-The service owns one structured `BlockSearchQuery` used by Tree filters, virtual branches, CLI, Pi commands, and agent tools. Property filters are positive AND clauses with presence or exact equality:
+The service owns one structured `BlockSearchQuery` used by Tree filters, virtual branches, CLI, Pi commands, and agent tools. A plain filter list is positive AND clauses with presence or exact equality (saved views and `expression` add `OR`, `NOT`, groups and ranges, below):
 
 ```text
 status=open priority
@@ -1624,17 +1642,20 @@ continuation lines and nested items, never the preceding siblings or introductio
 IDs inside fenced or indented code examples do not declare addresses.
 
 The checklist service operations and identity-preserving write contract are
-documented in [Checklist items](docs/CHECKLIST_ITEMS.md). Reader controls and
-item projections are still under development on the PIE-367 branch.
+documented in [Checklist items](docs/CHECKLIST_ITEMS.md), along with the
+reader status controls, item-attached comments and live item queries.
 
 Detail read mode projects `!((block-id))` without changing authored text.
 Ordinary targets render their full canonical Markdown once.
 `!((block-id^fragment-id))` renders only the deterministic fragment slice.
 Canonical `[type::virtual-branch]` targets execute their existing bounded query.
 Generated embed output is read-only, refreshes after canonical content events,
-and is never recursively evaluated. Missing/deleted targets, fragment failures,
+and Detail does not expand an embed inside an embed. Missing/deleted targets, fragment failures,
 invalid definitions, query failures, truncation, and the 16-embed document limit
-remain explicit.
+remain explicit. Clients that need nesting ask the service's `transclusions.read`
+(default depth 3, ceiling 6, cycle-safe, 64 embeds per read); ep0ch-door and
+published pages use it. Detail takes its limit, pattern and wording from the same
+rules (`src/transclusions.ts`).
 
 Generated embed regions use Pi TUI's `Box` background component to preserve
 Markdown styling and wrapped-line boundaries while shading the full available

@@ -65,6 +65,7 @@ test("seeds working documentation tours and preserves local edits on restart", a
     const tourSections = tourChildren.filter(block => getProperty(block.properties, "tour-section"));
     expect(tourSections.map(block => getProperty(block.properties, "tour-section"))).toEqual([
       "navigation", "capture-inbox", "prompts", "reading-comments", "resources", "workboard", "surfaces",
+      "outlines-publishing",
     ]);
     expect([...tour.text.matchAll(/!\(\(([0-9a-f-]+)\)\)/g)].map(match => match[1]))
       .toEqual(tourSections.map(block => block.id));
@@ -76,6 +77,8 @@ test("seeds working documentation tours and preserves local edits on restart", a
     const source = tourChildren.find(block => getProperty(block.properties, "demo-kind") === "source")!;
     const reader = tourChildren.find(block => getProperty(block.properties, "demo-kind") === "reader")!;
     const examplesView = tourChildren.find(block => getProperty(block.properties, "type") === "virtual-branch")!;
+    // Seed 6 demonstrates the boolean saved-view grammar the service evaluates.
+    expect(getProperty(examplesView.properties, "query")).toContain(" OR ");
     const readerLinks = readAuthoredLinks(store, reader.id);
     if (readerLinks.kind !== "ready") throw new Error(`Expected ready reader, got ${readerLinks.kind}`);
     expect(readerLinks.outlinks.entries.map(entry => entry.resolution)).toEqual([
@@ -146,6 +149,9 @@ test("seeds working documentation tours and preserves local edits on restart", a
     expect(getProperty(documentation!.properties, "type")).toBe("documentation");
 
     const sections = store.children(guide.id);
+    const branchGuide = sections.find(block => getProperty(block.properties, "guide-section") === "virtual-branches")!;
+    expect(branchGuide.text).not.toContain("positive AND");
+    expect(branchGuide.text).toContain("views.planWrite");
     expect(sections.map((block) => getProperty(block.properties, "guide-section"))).toEqual(
       EXPECTED_GUIDE_SECTIONS,
     );

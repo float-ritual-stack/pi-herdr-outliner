@@ -38,11 +38,14 @@ const result = await runHerdrScenario({
       await session.waitFor("seeded block selected", selection, target => target?.kind === "block" && target.blockId === block.id);
     };
 
+    // Goto's Enter reveals in Tree; Tree's Enter opens through the linked Detail (PIE-306, #189).
     await go("outliner-tour", tour);
+    await session.keys(session.panes.tree, "enter");
     await session.waitVisible(session.panes.detail, "Explore the Outliner");
     await session.waitVisible(session.panes.detail, "Find and keep your place");
     await session.checkpoint("01-find-seeded-tour");
     await go(reader.id, reader);
+    await session.keys(session.panes.tree, "enter");
     await session.waitVisible(session.panes.detail, "This is one ordinary editable note");
     assert.equal((await session.client.request<Block>({ action: "get", blockId: source.id })).text, source.text);
     await session.checkpoint("02-reader-renders-source-fragment");

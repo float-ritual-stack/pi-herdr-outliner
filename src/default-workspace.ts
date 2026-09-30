@@ -1,4 +1,4 @@
-export const DEFAULT_WORKSPACE_SEED_VERSION = 5;
+export const DEFAULT_WORKSPACE_SEED_VERSION = 6;
 export const AGENT_DOCUMENTATION_SYSTEM_DOC = "agent-documentation-guide";
 export const AUTHORED_LINKS_EXAMPLE_SYSTEM_DOC = "authored-links-example";
 export const FEATURE_TOUR_SYSTEM_DOC = "feature-tour";
@@ -63,9 +63,10 @@ const DOCUMENTATION_SECTIONS = [
       "- Reference a canonical block with its full UUID: `((block-id))` or `((block-id|label))`. The label changes presentation, not identity.",
       "- Address a stable passage with `((block-id^fragment-id|label))`. Fragment IDs must be unique inside the block.",
       "- Compose a reader document with `!((block-id))` or `!((block-id^fragment-id))`. Generated content is read-only and refreshes after source changes.",
-      "- Register a human-facing symbolic address with `[page::address]` and reference it as `[[address]]`.",
+      "- Register a human-facing symbolic address with `[page::address]` and reference it as `[[address]]`. Rename the page by editing that token: the old address stays an alias, so existing links keep resolving. Deleting the token frees the address.",
+      "- Wrap example syntax in `<!-- literal -->` … `<!-- /literal -->` lines so `[key::value]` and `#tags` inside are shown, not indexed.",
       "",
-      "Generated embeds are non-recursive, report failures or truncation explicitly, and are bounded to 16 per document.",
+      "Every embed reports failures or truncation explicitly, and a document projects at most 16. Detail shows one level. The service's `transclusions.read` nests embeds to depth 3 by default (6 at most), stops at cycles and expands at most 64 per read; ep0ch-door and published pages use it.",
       "",
       "Complete when changing the source updates every composed reading surface without copied prose.",
     ],
@@ -83,6 +84,8 @@ const DOCUMENTATION_SECTIONS = [
       "- `[app::scheme://authority/namespace/item]` addresses a generic application deep link.",
       "",
       "Showing authored Resource rows and moving selection are read-only. Press Enter to resolve or intern an unregistered Resource only when navigating.",
+      "",
+      "A `jira::` line (or a block with `[jira::KEY]`) shows the ticket's stored details in Detail without contacting Jira; only an explicit refresh fetches.",
       "",
       "Filesystem text and cached web/PDF text support source-backed comments. Direct Detail comments on metadata fields or computed/remote-entity Markdown are not available yet. Application Resources expose metadata and external-open behavior but do not fabricate local content.",
       "",
@@ -104,9 +107,11 @@ const DOCUMENTATION_SECTIONS = [
       "[limit::50]",
       "```",
       "",
-      "Queries are positive AND clauses using property presence or case-insensitive exact equality. Context projects through relative depth 2, roots and context share a 1000-row budget, and nested branches stop at four boundaries.",
+      "The service evaluates the query. Whitespace-separated clauses are AND; `key` checks presence and `key=value` case-insensitive equality. `OR`, `NOT`, parentheses and `created`/`updated` ranges also work: `[query::type=task (priority=high OR due) NOT status=done updated >= -7d]`. Invalid queries fail with a position; they are never read as empty.",
       "",
-      "Add `[create::key=value]` and `[create-parent::<canonical-parent-id>]` only when branch creation has one clear canonical destination. Rank only unsorted branches with `outliner_branch_rank`.",
+      "Context projects through relative depth 2 unless `[child-depth::0..8]` says otherwise. `[expanded::false]` starts roots collapsed, and `[expand-when::type=annotation annotation-status=open]` reveals paths to matching blocks. Roots and context share a 1000-row budget, and nested branches stop at four boundaries.",
+      "",
+      "Add `[create::key=value]` and `[create-parent::<canonical-parent-id>]` only when branch creation has one clear canonical destination. To move an existing block into a view, ask `views.planWrite` for the property patch instead of guessing it. Rank only unsorted branches with `outliner_branch_rank`.",
       "",
       "Complete when every projected row traces to one physical canonical block and no view owns unique prose.",
     ],
@@ -118,6 +123,10 @@ const DOCUMENTATION_SECTIONS = [
       "Use `outliner_capture` for raw intake, `outliner_publish` for durable typed artifacts, and `outliner_create` for ordinary canonical sections.",
       "",
       "Read before writing. Use `outliner_update` with the version read and `outliner_property_patch` for metadata-only changes. Use `outliner_move` when canonical physical organization changes; categorization belongs in properties and virtual branches.",
+      "",
+      "Every write is attributed. Agent tools record the agent; through the CLI, pass `--author agent --actor <your-id>` to `create`, `update`, `move`, `delete` and `restore`. `activity` shows who wrote what. The CLI's `read` returns a note's title, not its body: read the body with `list --subtree <id>` before replacing whole text, and never write empty text.",
+      "",
+      "`outliner_publish` records a durable typed artifact in the outline. It is not web publishing: a `[publish::…]` property is what puts a block at a URL, and `[publish::never]` keeps a subtree off every page.",
       "",
       "Use `outliner_work_id` and `outliner_roadmap_create` for actual work records rather than imitating their metadata in documentation. Preserve source notes and connect promoted documentation back to them.",
       "",
@@ -152,6 +161,7 @@ const FEATURE_TOUR_SECTIONS = [
       "- Tree cursor movement updates local Preview while Current keeps your place. `F7` switches Current/Preview, `Shift+F7` closes Preview, and `Alt+Enter` keeps it. Explicit Open uses your saved Detail link; use Alt+L in Tree or Detail (or ? → Link destination) to choose it.",
       "- `.` expands the selected Tree occurrence's inline preview. Other appearances of the same block keep their own expansion state.",
       "- `m` bookmarks a block and `Shift+M` opens the bookmark navigator. A pointer click selects; deletion is an explicit action.",
+      "- `x` adds the selected Tree row to a working selection and `Shift+X` opens its menu to copy references or rank the group. The Advanced property filter accepts `OR`, `NOT`, parentheses and date ranges.",
       "- Option/Alt+Up and Down reorder eligible siblings or unsorted virtual-branch roots. Option/Alt+Shift+Right and Down open independent Details.",
     ],
   },
@@ -187,7 +197,9 @@ const FEATURE_TOUR_SECTIONS = [
       "",
       "In Detail, e edits the current document. Ctrl+S saves with the revision originally read; Esc cancels the editing session. Ctrl+E hands off to your configured external editor. A stale draft is rejected instead of replacing someone else's edit.",
       "",
-      "Drag a rendered passage and press c to comment on that source range. The keyboard v path begins source-line selection. A comment without a positioned range remains inspectable as an unpositioned comment; these entry points have not been unified. Existing threads support replies, resolution/reopening and source navigation.",
+      "Drag a rendered passage and press c to comment on that source range, in Detail or in Preview. The keyboard v path begins source-line selection. A comment without a positioned range remains inspectable as an unpositioned comment. Threads group beneath a collapsible Comments row and support replies, resolution/reopening and source navigation.",
+      "",
+      "Click a heading or list disclosure to fold it in this reader only. `b` expands Backlinks, grouped by kind with stage counts; the note itself and resolved comments are hidden until you ask (`n`, `h`).",
       "",
       "Several mentions of the same file share a Resource target but can retain distinct occurrence annotations. Removed or ambiguous occurrences stay recoverable rather than silently moving a comment to the next mention.",
     ],
@@ -223,9 +235,19 @@ const FEATURE_TOUR_SECTIONS = [
       "",
       "The opt-in Herdr action `open-composed` places Tree and Detail in one application-owned surface. F6 switches regions; q returns from Detail to Tree. Selection, history, scroll, drafts and Current/Preview state remain local to their owning view.",
       "",
-      "Independent references and editors can still open in Herdr panes. The combined layout is a fixed split experiment: orientation switching, interactive resizing and multiple embedded Details are not shipped. Browser pane prototypes are separate experiments, not an installed web UI.",
+      "Independent references and editors can still open in Herdr panes; **? → New Tree** opens a Tree without a companion Detail. The combined layout is a fixed split experiment: orientation switching, interactive resizing and multiple embedded Details are not shipped. Browser pane prototypes are separate experiments, not an installed web UI.",
       "",
       "Closing a pane closes a view. It never means deleting the underlying block, file, Resource or annotation. Save or cancel active drafts before closing.",
+    ],
+  },
+  {
+    key: "outlines-publishing", title: "Outlines by name, publishing and other clients",
+    lines: [
+      "One outline host per machine serves every outline by name. `bun run cli outlines` lists them; `OUTLINER_OUTLINE=<name>` or `--outline <name>` picks one. A folder binds to an outline through its `client.json`. Opening from Herdr in an unbound folder shows Choose outline and never creates an outline by itself.",
+      "",
+      "Give a block `[publish::true]` or `[publish::<slug>]` and `outliner publish serve` shows it read-only at `/p/<page or slug>`, along with an attached HTML page, claude.ai artifact, SVG, Mermaid or Markdown file. `[publish::false]` opts one block out; `[publish::never]` keeps it and everything under it off every page, embed and link.",
+      "",
+      "The Claude Code mod turns Work IDs, `[[pages]]` and `((ids))` in Claude's replies into links that open in Claude's own Detail, and feeds Recent Mentions. ep0ch-door is a separate terminal client for the same outlines, with boards, readers and an agent drawer.",
     ],
   },
 ] as const;
@@ -301,7 +323,7 @@ export function seedDefaultWorkspace(writer: DefaultWorkspaceSeedWriter): void {
     "", `!((${example.id}^context))`,
   ].join("\n"), tour.id);
   const exampleView = writer.create([
-    "Ranked example notes [type::virtual-branch] [query::demo-set=feature-tour] [limit::10]",
+    "Ranked example notes [type::virtual-branch] [query::demo-set=feature-tour (demo-kind=source OR demo-kind=reader)] [limit::10]",
     "[summary-properties::demo-kind]",
   ].join("\n"), tour.id);
   writer.update(tour, [
