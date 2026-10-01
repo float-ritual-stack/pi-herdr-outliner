@@ -197,7 +197,8 @@ export class ExtensionCalls {
     // Only a person's own save may spend: not an agent's, not a system or unattributed one (an import).
     const byPerson = actor?.author === "user";
     const pending = this.saves.get(blockId);
-    this.saves.set(blockId, { byPerson: (pending?.byPerson ?? false) || byPerson, created: (pending?.created ?? false) || created });
+    // Saves in one tick run as one pass: it spends only if every one of them was a person's.
+    this.saves.set(blockId, { byPerson: pending ? pending.byPerson && byPerson : byPerson, created: (pending?.created ?? false) || created });
     if (this.scheduled.has(blockId)) return;
     this.scheduled.add(blockId);
     setTimeout(() => {

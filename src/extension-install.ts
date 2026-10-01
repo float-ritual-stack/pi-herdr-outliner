@@ -111,9 +111,13 @@ export async function addExtension(nameOrPath: string, options: { from?: string;
   await mkdir(target, { recursive: true });
   const entries = (await readdir(source)).filter((entry) => entry !== "config.json" && entry !== "node_modules");
   // An update matches the source: a file the new version no longer has goes (config.json stays).
+  // Your own files in an install (dotfiles such as .env or .git, config.json, node_modules) always stay.
+  const removed: string[] = [];
   if (updating) {
     for (const entry of await readdir(target)) {
-      if (entry !== "config.json" && entry !== "node_modules" && !entries.includes(entry)) await rm(join(target, entry), { recursive: true, force: true });
+      if (entry.startsWith(".") || entry === "config.json" || entry === "node_modules" || entries.includes(entry)) continue;
+      await rm(join(target, entry), { recursive: true, force: true });
+      removed.push(entry);
     }
   }
   for (const entry of entries) {
@@ -125,6 +129,7 @@ export async function addExtension(nameOrPath: string, options: { from?: string;
     await rename(staged, join(target, entry));
   }
   lines.push(`${updating ? "updated" : "installed"} ${id} in ${target}`);
+  if (removed.length) lines.push(`removed what the new version no longer has: ${removed.join(", ")}`);
   const configPath = join(target, "config.json");
   if (existsSync(configPath)) {
     lines.push(`kept ${configPath}`);
@@ -154,7 +159,7 @@ export async function removeExtension(id: string, options: { outlineFolder?: str
   if (!existsSync(join(target, "extension.json"))) {
     throw new Error(`No extension ${id} in ${root}${options.outlineFolder ? "" : " (an outline's own: --outline-folder <root>)"}`);
   }
-  if (realpathSync(target).startsWith(`${realpathSync(BUILT_INS)}/`)) throw new Error("That is the repo's built-in source, not an install");
+  if (existsSync(BUILT_INS) && realpathSync(target).startsWith(`${realpathSync(BUILT_INS)}/`)) throw new Error("That is the repo's built-in source, not an install");
   await rm(target, { recursive: true, force: true });
   return [
     `removed ${target}`,

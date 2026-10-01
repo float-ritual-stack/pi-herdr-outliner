@@ -1571,7 +1571,9 @@ export class OutlinerServer {
         // A data handler's record (no Resource) refetches its one key; an extension's handler lines (or the one
         // on `line`) run now.
         const dataRecord = record !== null && !record.resourceId && record.extensionId !== "jira";
-        if (dataRecord) await this.extensionCalls.refreshRecord(record.extensionId, record.itemKey);
+        if (dataRecord && !(await this.extensionCalls.refreshRecord(record.extensionId, record.itemKey))) {
+          throw new Error(`Nothing asks for ${record.itemKey} with a ${record.extensionId}:: line that parses, or ${record.extensionId} isn't installed here: nothing to refresh`);
+        }
         const handlerLines = dataRecord || record ? [] : (this.extensionCalls.calls(normalized.blockId)?.calls ?? [])
           .filter((call) => normalized.line === undefined || call.line === normalized.line);
         if (handlerLines.length) {
