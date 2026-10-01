@@ -22,8 +22,9 @@ UUIDs in the answer then show up in Tree/Detail `?` → **Recent mentions**.
 ## Clickable references and Claude's Outliner pane
 
 In the same workspaces, Work IDs (the workspace's prefixes), `[[pages]]` and
-`((block references))` in Claude's replies are drawn as links. A plain click
-shows the target in **Claude's own Outliner Detail**: a pane split below the
+`((block references))` in Claude's replies are drawn as links. In an ep0ch-door
+tile a click opens the note in that door ([Where a note opens](#where-a-note-opens)).
+In Herdr a plain click shows the target in **Claude's own Outliner Detail**: a pane split below the
 Claude pane the first time, then reused for every later click in the session.
 It never navigates your Trees or Details and never takes focus; move or resize
 it as you like. References in code and existing links are left alone.
@@ -31,27 +32,34 @@ it as you like. References in code and existing links are left alone.
 Claude can put a note there too, with the `mcp__pi-outliner__show` tool (a Work
 ID, `[[page]]`, `((uuid))` or `pi-outliner://` URI).
 
-### In an ep0ch-door tile
+### Where a note opens
 
-When Claude runs in an ep0ch-door terminal tile (`EP0CH_TILE` and `EP0CH_CONTROL`
-set, as the door's daily agent is, in the tile or in its Herdr pane), a click or
-`show` opens the note in that door instead: the CLI's `door-open --from
-$EP0CH_TILE` sends the door an agent's `open` from Claude's own tile over
-`EP0CH_CONTROL`. The door puts it where that tile's opens land (its link: the
-daily layout links the claude tile to its middle detail) and says which reader
-that was. A door older than `open from=`, or without that tile, is asked for
-its `middle` reader instead (`--reader middle`, where the mod opened notes
-before), and a door without that either puts it where its own `open` puts
-notes.
+A click, `show` and `door_open` share one open (`openNote` in
+`hooks/register.ts`), tried in this order:
 
-- The door says who opened it (`claude-code`, or `EP0CH_AGENT`), and an agent's
-  open never moves the person's focus.
-- If no door answers there (the door quit and the agent kept running in Herdr),
-  it splits Claude's pane in Herdr as above.
-- If the door refuses (say it is on its menu, or the reader the tile links to
-  holds an edit), the reason comes back as the tool's denial or a toast.
-- If the door takes the request but doesn't answer within 5s, `show` says so;
-  it isn't shown in Herdr too.
+1. **In an ep0ch-door tile** (`EP0CH_CONTROL` set: the daily agent, the dock's
+   agent, or a `claude` started in a `^W o s` terminal tile, in the tile or in
+   its Herdr pane): the CLI's `door-open --from <tile>` sends the door an
+   agent's `open` from Claude's own tile over `EP0CH_CONTROL`. The tile is
+   `EP0CH_TILE`, or its id (`EP0CH_TILE_ID`, `t<n>`) when the name is empty. The
+   door puts it where that tile's opens land (its link: the daily layout links
+   the claude tile to its middle detail) and says which reader that was. A door
+   older than `open from=`, or without that tile, is asked for its `middle`
+   reader instead (`--reader middle`, where the mod opened notes before), and a
+   door without that either puts it where its own `open` puts notes.
+   - The door says who opened it (`claude-code`, or `OUTLINER_ACTOR` /
+     `EP0CH_AGENT`), and an agent's open never moves the person's focus.
+   - If the door refuses (say it is on its menu, or the reader the tile links
+     to holds an edit), its reason is the answer: the tool's denial or a toast.
+     It is never shown somewhere else instead.
+   - If the door takes the request but doesn't answer within 5s, it says so;
+     it isn't shown in Herdr too.
+   - Only if no door answers there (the door quit) does it go on.
+2. **In Herdr** (`HERDR_PANE_ID` set): Claude's own Detail, as above. A door
+   tile drops Herdr's pane variables, so this is a plain Herdr pane, or the
+   daily agent's Herdr pane after its door quit.
+3. **Anywhere else**: a toast (or the tool's denial) saying it can't open the
+   note here and why, with its `((id))` to copy. A click never fails silently.
 
 - The pane is recognized by its browsing context, which is the Claude session
   id, so it survives plugin reloads and resumed sessions. Close it and the next
@@ -145,8 +153,9 @@ find it with `outline_find` first.
 
 When Claude runs in an ep0ch-door tile (`EP0CH_CONTROL` set), it also gets
 `door_where`, `door_peek`, `door_act { action, args?, reader? }` and
-`door_open { id }`. They run `ep0ch where --json`, `ep0ch peek`, `ep0ch act …`
-and `ep0ch act open id=… from=$EP0CH_TILE` on that socket. Without
+`door_open { id }`. They run `ep0ch where --json`, `ep0ch peek` and
+`ep0ch act …` on that socket; `door_open` is the same open as a click or `show`
+([Where a note opens](#where-a-note-opens)). Without
 `EP0CH_CONTROL` they are not offered, and a call is refused.
 
 - `door_act` and `door_open` are attributed with `--as` (the same actor as
@@ -156,8 +165,9 @@ and `ep0ch act open id=… from=$EP0CH_TILE` on that socket. Without
   their attention.
 - `ep0ch` reads an argument starting with `@` as a file, so the tool sends one
   such value through stdin (`key=@-`) and refuses a second.
-- `door_open` resolves a `[[page]]` or Work ID in the session's outline first.
-  `show` (above) is still the way to put a note beside Claude wherever it runs.
+- `door_open` resolves a `[[page]]` or Work ID in the session's outline first;
+  a block id opens without a configured workspace. `show` (above) is the way to
+  put a note beside Claude wherever it runs.
 
 ## Use
 

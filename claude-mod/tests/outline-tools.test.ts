@@ -35,6 +35,13 @@ const ANSWERS: Record<string, string> = {
 
 type Run = { argv: readonly string[]; init?: ProcessRunInit }
 
+/** The CLI's `resolve <uri>` and `door-open` (a door that lands it in middle), as a click or `show` runs them. */
+function resolveAnswer(run: Run): ProcessRunResult | undefined {
+  if (run.argv.includes('door-open')) return result(0, `{"reader":"middle","id":"${NOTE}"}\n`)
+  if (run.argv[3] === 'resolve') return result(0, `{"id":"${NOTE}","title":"Seed swap plan"}\n`)
+  return undefined
+}
+
 function sessionIn(on: On, answer: (run: Run) => ProcessRunResult | undefined, env: Record<string, string> = {}, cwd = WORKSPACE) {
   const runs: Run[] = []
   const registered: string[] = []
@@ -55,6 +62,8 @@ function sessionIn(on: On, answer: (run: Run) => ProcessRunResult | undefined, e
     if (e.argv.includes('work-id-status')) return { value: result(0, '{"prefix":"PIE","observedPrefixes":["PIE"]}') }
     if (e.argv[0] === 'ep0ch' && e.argv[1] === 'help') return { value: result(0, 'usage:\n  ep0ch where [--json]  where this runs\n') }
     if (e.argv[0] === 'ep0ch' && e.argv[1] === 'where') return { value: result(0, '{"summary":"door:4242/desk/t1:claude","typing":false}\n') }
+    const answered = resolveAnswer(e)
+    if (answered) return { value: answered }
     const operation = e.argv[e.argv.indexOf('agent') + 1]
     if (e.argv.includes('agent') && operation && ANSWERS[operation]) return { value: result(0, `${ANSWERS[operation]}\n`) }
     return { value: result(1, '', 'error: unexpected command\n') }
@@ -206,9 +215,11 @@ describe('door tools', () => {
     expect(at.argv).toEqual(['ep0ch', 'act', 'view.scrollTo', 'text=@-', '--as', 'garden-agent'])
     expect(at.init?.stdin).toBe('@request tidy')
 
-    await $.tool.call({ tool: 'mcp__pi-outliner__door_open', id: `((${NOTE}))` })
-    const open = session.runs.findLast(run => run.argv[1] === 'act')!
-    expect(open.argv).toEqual(['ep0ch', 'act', 'open', `id=${NOTE}`, 'from=claude', '--as', 'loki'])
+    // door_open is the same open as a click or `show`: the CLI's door-open from this tile, as the agent.
+    const opened = await $.tool.call({ tool: 'mcp__pi-outliner__door_open', id: `((${NOTE}))` })
+    expect(opened).toMatchObject({ result: "Showing Seed swap plan in the door's middle reader." })
+    const open = session.runs.find(run => run.argv.includes('door-open'))!
+    expect(open.argv.slice(3)).toEqual(['door-open', NOTE, '--control', CONTROL, '--actor', 'loki', '--from', 'claude', '--reader', 'middle'])
   })
 
   test("a door's refusal comes back as the tool's error; a reference is resolved before opening", async ($, on) => {
@@ -222,9 +233,19 @@ describe('door tools', () => {
     expect(bad.deny).toContain('not an argument name')
 
     await $.tool.call({ tool: 'mcp__pi-outliner__door_open', id: '[[Seed Swap]]' })
-    const resolved = session.agentRuns().at(-1)!
-    expect(resolved.argv.slice(3, 6)).toEqual(['agent', 'resolve', '--stdin'])
-    const open = session.runs.findLast(run => run.argv[1] === 'act')!
-    expect(open.argv).toEqual(['ep0ch', 'act', 'open', `id=${NOTE}`, 'from=claude', '--as', 'claude-code'])
+    expect(session.runs.find(run => run.argv.includes('resolve'))?.argv.slice(3)).toEqual(['resolve', 'pi-outliner://page/Seed%20Swap'])
+    const open = session.runs.find(run => run.argv.includes('door-open'))!
+    expect(open.argv.slice(3, 5)).toEqual(['door-open', NOTE])
+    expect(open.argv[open.argv.indexOf('--actor') + 1]).toBe('claude-code')
+  })
+
+  test("door_open passes the door's refusal through, and is never shown anywhere else", async ($, on) => {
+    const session = sessionIn(on, run => run.argv.includes('door-open')
+      ? result(1, '', "error: middle holds an edit; an agent never takes it\nBun v1.3.14 (Linux x64)\n")
+      : resolveAnswer(run), { ...DOOR, HERDR_PANE_ID: 'w:p9', HERDR_WORKSPACE_ID: 'w' })
+    await session.begin(() => $.session.start(START))
+    const refused = await $.tool.call({ tool: 'mcp__pi-outliner__door_open', id: NOTE })
+    expect(refused.deny).toBe(`Could not show ${NOTE}: middle holds an edit; an agent never takes it`)
+    expect(session.runs.some(run => run.argv[0] === 'herdr' && run.argv[1] !== 'plugin')).toBe(false)
   })
 })

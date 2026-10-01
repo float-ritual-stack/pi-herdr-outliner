@@ -1,7 +1,7 @@
 import type { On, ProcessRunInit, ProcessRunResult } from 'claude-code'
 import { describe, expect, mock, test, tier } from 'claude-code/testing'
 
-import { envSummaryOf, HELP_PROBE, knowsWhere, whereSummaryOf } from '../hooks/where'
+import { doorTileOf, envSummaryOf, HELP_PROBE, knowsWhere, whereSummaryOf } from '../hooks/where'
 
 tier('user')
 
@@ -123,5 +123,12 @@ describe('where helpers', () => {
     expect(knowsWhere(HELP)).toBe(true)
     expect(knowsWhere(OLD_HELP)).toBe(false)
     expect(envSummaryOf({ EP0CH_CONTROL: '/c' })).toContain('from a door older than EP0CH_NEST')
+  })
+
+  test('the tile door-open names: EP0CH_TILE, else a desk tile id, else none', () => {
+    expect(doorTileOf({ EP0CH_TILE: 'claude', EP0CH_TILE_ID: 't3' })).toBe('claude')
+    expect(doorTileOf({ EP0CH_TILE: '', EP0CH_TILE_ID: 't21' })).toBe('t21')
+    expect(doorTileOf({ EP0CH_TILE: ' ', EP0CH_TILE_ID: 'dock.agent' })).toBeNull()
+    expect(doorTileOf({})).toBeNull()
   })
 })

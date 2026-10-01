@@ -76,6 +76,14 @@ const PANES = JSON.stringify({
 
 const BLOCK = '11111111-2222-4333-8444-555555555555'
 
+/** A session outside Herdr: a door tile drops Herdr's pane variables, and a plain terminal never had them. */
+const NOT_IN_HERDR = { HERDR_PANE_ID: '', HERDR_TAB_ID: '', HERDR_WORKSPACE_ID: '' }
+
+/** A reply drawn with its references as links. */
+function mountReply($: { ui: { mount: (init: any) => Promise<any> } }, text: string) {
+  return $.ui.mount({ plugin: 'pi-outliner', surface: 'terminal', component: 'AssistantMessage', props: { text, isFirstOfReply: true } })
+}
+
 /** The Detail split the fallback asked Herdr for, if any. */
 function splitOf(runs: readonly Run[]) {
   return runs.find(run => run.argv[0] === 'herdr' && run.argv[2] === 'pane' && run.argv[3] === 'open')
@@ -357,6 +365,23 @@ describe('register', () => {
     expect(empty.deny).toContain('Give a Work ID')
   })
 
+  test('in neither a door nor Herdr, a click and show say so and give the ((id)) to copy, never failing silently', async ($, on) => {
+    const session = sessionIn(on, WORKSPACE, succeeding, `${WORKSPACE}/`, NOT_IN_HERDR)
+    on('tool.register', ($, e) => ({ value: { tool: `mcp__pi-outliner__${e.name}` } }))
+    await session.begin(() => $.session.start(START))
+    const drawn = await mountReply($, 'See [[Daily notes]].')
+
+    await drawn.press({ key: 'outliner-references', link: { href: 'https://pi-outliner.invalid/page/Daily%20notes' } })
+    await session.clock.settle()
+    const message = `Can't open Daily notes here: this session is not in an ep0ch-door tile, nor in Herdr. Copy ((${BLOCK})) to open it in the Outliner.`
+    expect(session.toasts).toEqual([message])
+
+    const shown = await $.tool.call({ tool: 'mcp__pi-outliner__show', reference: '[[Daily notes]]' })
+    expect(shown.deny).toBe(message)
+    expect(session.runs.some(run => run.argv.includes('door-open') || run.argv.includes('link'))).toBe(false)
+    expect(splitOf(session.runs)).toBeUndefined()
+  })
+
   describe('in an ep0ch-door tile', () => {
     const DOOR = { EP0CH_TILE: 'claude', EP0CH_CONTROL: '/state/ep0ch-door/agent-door-claude.sock' }
     const doorOpenOf = (runs: readonly Run[]) => runs.find(run => run.argv.includes('door-open'))
@@ -418,6 +443,55 @@ describe('register', () => {
       expect(shown.deny).toContain("the menu screen can't open blocks")
       expect(splitOf(session.runs)).toBeUndefined()
       expect(session.runs.some(run => run.argv.includes('link'))).toBe(false)
+    })
+
+    test("a click in a terminal tile (^W o s, no Herdr pane) opens in the door, from the tile's id when its name is empty", async ($, on) => {
+      const session = sessionIn(on, WORKSPACE, run =>
+        run.argv.includes('door-open') ? result(0, '{"reader":"right","id":"x"}\n', '') : succeeding(run),
+      `${WORKSPACE}/`, { ...NOT_IN_HERDR, EP0CH_CONTROL: DOOR.EP0CH_CONTROL, EP0CH_TILE: '', EP0CH_TILE_ID: 't21' })
+      await session.begin(() => $.session.start(START))
+      const drawn = await mountReply($, 'See PIE-7.')
+
+      await drawn.press({ key: 'outliner-references', link: { href: 'https://pi-outliner.invalid/work/PIE-7' } })
+      await session.clock.settle()
+
+      const opened = doorOpenOf(session.runs)!
+      expect(opened.argv.slice(-10)).toEqual([
+        'door-open', BLOCK, '--control', DOOR.EP0CH_CONTROL, '--actor', 'claude-code', '--from', 't21', '--reader', 'middle',
+      ])
+      expect(splitOf(session.runs)).toBeUndefined()
+      expect(session.toasts).toEqual([])
+    })
+
+    test("a click the door refuses is a toast with the door's reason", async ($, on) => {
+      const session = sessionIn(on, WORKSPACE, run =>
+        run.argv.includes('door-open')
+          ? result(1, '', 'error: right holds an edit; an agent never takes it\n')
+          : succeeding(run),
+      `${WORKSPACE}/`, { ...NOT_IN_HERDR, ...DOOR })
+      await session.begin(() => $.session.start(START))
+      const drawn = await mountReply($, 'See PIE-7.')
+
+      await drawn.press({ key: 'outliner-references', link: { href: 'https://pi-outliner.invalid/work/PIE-7' } })
+      await session.clock.settle()
+
+      expect(session.toasts).toEqual(['Could not open PIE-7 in the Outliner: right holds an edit; an agent never takes it'])
+      expect(splitOf(session.runs)).toBeUndefined()
+    })
+
+    test('with no door answering and no Herdr, a click says so and gives the ((id)) to copy', async ($, on) => {
+      const session = sessionIn(on, WORKSPACE, run =>
+        run.argv.includes('door-open') ? result(3, '', 'error: no door at /state/x (ECONNREFUSED)\n') : succeeding(run),
+      `${WORKSPACE}/`, { ...NOT_IN_HERDR, ...DOOR })
+      await session.begin(() => $.session.start(START))
+      const drawn = await mountReply($, 'See PIE-7.')
+
+      await drawn.press({ key: 'outliner-references', link: { href: 'https://pi-outliner.invalid/work/PIE-7' } })
+      await session.clock.settle()
+
+      expect(session.toasts).toEqual([
+        `Can't open PIE-7 here: no door answers on ${DOOR.EP0CH_CONTROL} (it quit?), nor in Herdr. Copy ((${BLOCK})) to open it in the Outliner.`,
+      ])
     })
 
     test('a click on a reference opens it in the door too', async ($, on) => {

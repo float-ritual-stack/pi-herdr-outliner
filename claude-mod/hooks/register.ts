@@ -21,6 +21,7 @@ import { actorOf, DOOR_TOOLS, doorActArgv, OUTLINE_TOOLS, peekOf } from './outli
 import { WORK_TOOLS } from './work-tools'
 import {
   type DoorEnv,
+  doorTileOf,
   envSummaryOf,
   HELP_PROBE,
   inDoorEnv,
@@ -70,8 +71,9 @@ let whereLoad: Promise<string | null> | undefined
  * slow or absent service never delays the prompt; a failure is one toast.
  *
  * In the same workspaces, Work IDs, `[[pages]]` and `((block references))` in
- * Claude's replies are drawn as links; a click opens the target through the
- * Outliner Tree in this Herdr tab, as a click inside the Tree would.
+ * Claude's replies are drawn as links; a click opens the target where `show`
+ * and `door_open` do (`openNote`): the door this session runs in, else Claude's
+ * own Detail in Herdr, else a toast with the `((id))` to copy.
  */
 export function register(on: On, options: PluginOptions): void {
   const option = options.workspaces
@@ -183,13 +185,10 @@ export function register(on: On, options: PluginOptions): void {
     const uri = typeof reference === 'string' ? outlinerUriFor(reference) : null
     if (!uri) return { deny: 'Give a Work ID, [[page]], ((block-uuid)) or pi-outliner:// URI to show.' }
     if (!references) await loadReferences($, option)
-    const workspace = references?.workspace
-    if (!workspace) return { deny: 'This session is not in a configured Outliner workspace.' }
     try {
-      const { title, place, reader } = await showInScratchPane($, workspace, uri)
-      return { result: `Showing ${title || reference} ${place === 'door' ? (reader ? `in the door's ${reader} reader` : 'in the door') : "in Claude's Outliner pane"}.` }
+      return { result: shownText(await openNote($, references?.workspace ?? null, uri, await actorFor($, {})), String(reference)) }
     } catch (error) {
-      return { deny: `Could not show ${reference}: ${error instanceof Error ? error.message : String(error)}` }
+      return { deny: deniedText(error, String(reference)) }
     }
   })
 
@@ -372,8 +371,6 @@ async function runOutlinerCli($: EngineInterface, workspace: string, args: strin
   return ran.stdout.trim()
 }
 
-const UUID_REF = /^\(?\(?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)?\)?$/i
-
 /**
  * One door tool through `ep0ch` on this session's door (EP0CH_CONTROL, passed
  * explicitly). Acting and opening are attributed with --as; the door's
@@ -409,17 +406,16 @@ async function runDoorTool(
       return compact(await ep0ch(command.argv, command.stdin))
     }
     case 'door_open': {
+      // The same open as a click or `show`: in this door first (EP0CH_CONTROL is set, or the tool is refused).
       const ref = typeof input.id === 'string' ? input.id.trim() : ''
-      if (!ref) throw Error('Give the note to open: its id, ((id)), [[page]] or Work ID.')
-      let id = UUID_REF.exec(ref)?.[1]?.toLowerCase()
-      if (!id) {
-        if (!references) await loadReferences($, option)
-        const workspace = references?.workspace
-        if (!workspace) throw Error('Give a block id: this session is not in a configured Outliner workspace to resolve a reference in.')
-        id = String(JSON.parse(await runOutlinerCli($, workspace, ['agent', 'resolve', '--stdin'], JSON.stringify({ ref }))).id)
+      const uri = ref ? outlinerUriFor(ref) : null
+      if (!uri) throw Error('Give the note to open: its id, ((id)), [[page]] or Work ID.')
+      if (!references) await loadReferences($, option)
+      try {
+        return shownText(await openNote($, references?.workspace ?? null, uri, await actorFor($, input)), ref)
+      } catch (error) {
+        throw Error(deniedText(error, ref))
       }
-      const tile = await $.env.get('EP0CH_TILE')
-      return compact(await ep0ch(['ep0ch', 'act', 'open', `id=${id}`, ...(tile ? [`from=${tile}`] : []), '--as', await actorFor($, input)]))
     }
     default:
       throw Error(`unknown door tool ${name}`)
@@ -460,72 +456,121 @@ async function loadReferences($: EngineInterface, option: unknown): Promise<void
   }
 }
 
-/** Where a note was shown: the door this session runs in (and the reader tile it landed in), or Claude's own Detail pane in Herdr. */
+/** Where a note was opened: the door this session runs in (and the reader tile it landed in), or Claude's own Detail pane in Herdr. */
 type Shown = { title: string; place: 'door' | 'pane'; reader?: string }
 
 /**
- * Shows an Outliner link where the person reads beside Claude. In an ep0ch-door
- * tile (EP0CH_TILE and EP0CH_CONTROL set): in that door, as an agent's open
- * from its tile, landing where the tile's opens go (the daily layout's middle
- * detail; the door says which). Otherwise, or when no door answers: in
- * Claude's own Detail, the pane this session split below the Claude pane,
- * reused while it lives, else split anew. It never navigates the person's
- * Trees or Details, and never takes focus. Resolves to the shown block's title
- * and where it went; throws with the reason otherwise.
+ * Neither a door nor Herdr took the note: the message says why and gives its
+ * `((id))` to copy. Shown as it is, never prefixed.
  */
-function showInScratchPane($: EngineInterface, workspace: string, uri: string): Promise<Shown> {
-  const shown = showQueue.then(() => showNow($, workspace, uri))
+class NotOpenedHere extends Error {}
+
+/** A tool's denial for a note it couldn't open: NotOpenedHere as it is, any other reason after the reference. */
+function deniedText(error: unknown, reference: string): string {
+  if (error instanceof NotOpenedHere) return error.message
+  return `Could not show ${reference}: ${error instanceof Error ? error.message : String(error)}`
+}
+
+/** How `show` and `door_open` report where a note went. */
+function shownText({ title, place, reader }: Shown, reference: string): string {
+  const where = place === 'door' ? (reader ? `in the door's ${reader} reader` : 'in the door') : "in Claude's Outliner pane"
+  return `Showing ${title || reference} ${where}.`
+}
+
+/**
+ * Opens an Outliner note where the person reads beside Claude: the one open
+ * every path shares (a click on a reference, `show`, `door_open`). In order:
+ *
+ * 1. In an ep0ch-door tile (EP0CH_CONTROL set): in that door, as the agent's
+ *    `open` from this session's tile, landing where the tile's opens go (its
+ *    link; the door says which reader). Attributed to `actor`; the door never
+ *    lets it take the person's focus, and its refusal is the answer, never
+ *    shown somewhere else instead. Only when no door answers on that socket
+ *    (it quit) does it go on.
+ * 2. In Herdr: Claude's own Detail, the pane this session split below the
+ *    Claude pane, reused while it lives, else split anew. It never navigates
+ *    the person's Trees or Details, and never takes focus.
+ * 3. Otherwise a NotOpenedHere saying why, with the note's `((id))` to copy.
+ *
+ * `workspace` is the session's Outliner workspace: needed to resolve a page or
+ * Work ID and for Herdr; a block id opens in a door without one. Opens run one
+ * at a time, so concurrent clicks and tool calls split one pane. Resolves to
+ * the title and where it went; throws with the reason otherwise.
+ */
+function openNote($: EngineInterface, workspace: string | null, uri: string, actor: string): Promise<Shown> {
+  const shown = showQueue.then(() => openNow($, workspace, uri, actor))
   showQueue = shown.catch(() => {})
   return shown
 }
 
-/** The door tile this session runs in, if any: its name and the door's control socket (or a link to it). */
-async function doorOf($: EngineInterface): Promise<{ tile: string; control: string } | null> {
-  const [tile, control] = await Promise.all([$.env.get('EP0CH_TILE'), $.env.get('EP0CH_CONTROL')])
-  return tile && control ? { tile, control } : null
-}
+/** What a `pi-outliner://` URI names, as the person reads it: the Work ID, page name or block id. */
+const labelOf = (uri: string) => decodeURIComponent(uri.slice(uri.indexOf('/', 'pi-outliner://'.length) + 1))
 
-async function showNow($: EngineInterface, workspace: string, uri: string): Promise<Shown> {
-  const root = await outlinerRootOf($)
-  if (!root) throw Error('the Outliner plugin is disabled')
-  const outliner = (args: string[]) => $.process.run(
-    ['/bin/sh', `${root}/scripts/run-bun.sh`, `${root}/src/cli.ts`, ...args],
-    { cwd: workspace, env: envFor(workspace), timeoutMs: 30_000 },
-  )
-  const door = await doorOf($)
-  if (door) {
-    const shown = await showInDoor($, outliner, door, uri)
-    if (shown !== null) return { ...shown, place: 'door' }
+const BLOCK_URI = /^pi-outliner:\/\/block\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
+
+async function openNow($: EngineInterface, workspace: string | null, uri: string, actor: string): Promise<Shown> {
+  const [control, tile, tileId, paneId, herdrWorkspace] = await Promise.all([
+    $.env.get('EP0CH_CONTROL'),
+    $.env.get('EP0CH_TILE'),
+    $.env.get('EP0CH_TILE_ID'),
+    $.env.get('HERDR_PANE_ID'),
+    $.env.get('HERDR_WORKSPACE_ID'),
+  ])
+  // Found on first use: outside a door and Herdr, a block id needs no installed Outliner to be named.
+  let installed: Promise<string | null> | undefined
+  const outliner = async (args: string[]) => {
+    const root = await (installed ??= outlinerRootOf($))
+    if (!root) throw Error('the Outliner plugin is disabled')
+    return $.process.run(
+      ['/bin/sh', `${root}/scripts/run-bun.sh`, `${root}/src/cli.ts`, ...args],
+      { cwd: workspace ?? await $.session.cwd(), ...(workspace ? { env: envFor(workspace) } : {}), timeoutMs: 30_000 },
+    )
   }
-  return { title: await showInHerdrPane($, outliner, workspace, uri), place: 'pane' }
-}
+  let target: { id: string; title?: string } | undefined
+  const resolve = async () => {
+    if (target) return target
+    if (!workspace) {
+      const id = BLOCK_URI.exec(uri)?.[1]?.toLowerCase()
+      if (!id) throw Error('this session is not in a configured Outliner workspace to resolve it in; give a block id')
+      return (target = { id })
+    }
+    const resolved = await outliner(['resolve', uri])
+    if (resolved.exitCode !== 0) throw Error(failureReasonOf(resolved.stderr) || 'the target did not resolve')
+    return (target = JSON.parse(resolved.stdout) as { id: string; title?: string })
+  }
 
-/**
- * Shows the block in the door as an agent's `open` from this session's tile
- * (attributed, never moving the person's focus): the door decides the reader,
- * its tile's link, so no tile name is assumed here. Resolves to its title and
- * the reader it landed in, or null when no door answers on that socket (the
- * door quit): the caller shows it in Herdr instead.
- */
-async function showInDoor(
-  $: EngineInterface,
-  outliner: (args: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>,
-  door: { tile: string; control: string },
-  uri: string,
-): Promise<{ title: string; reader?: string } | null> {
-  const resolved = await outliner(['resolve', uri])
-  if (resolved.exitCode !== 0) throw Error(failureReasonOf(resolved.stderr) || 'the target did not resolve')
-  const { id, title } = JSON.parse(resolved.stdout) as { id: string; title?: string }
-  // The same attribution as every other write from this session (actorFor).
-  const actor = await actorFor($, {})
-  // `--reader middle` only for a door older than `open from=` (ep0ch-door #61), which lands it where this mod
-  // always did; a door that knows `from=` never reads it. Drop it once every door has `from=`.
-  const opened = await outliner(['door-open', id, '--control', door.control, '--actor', actor, '--from', door.tile, '--reader', 'middle'])
-  if (opened.exitCode === 3) return null
-  if (opened.exitCode !== 0) throw Error(failureReasonOf(opened.stderr) || 'the door did not open it')
-  let reader: unknown
-  try { reader = JSON.parse(opened.stdout)?.reader } catch { reader = undefined }
-  return { title: title ?? '', ...(typeof reader === 'string' && reader ? { reader } : {}) }
+  let why: string
+  if (control) {
+    const { id, title } = await resolve()
+    const from = doorTileOf({ ...(tile ? { EP0CH_TILE: tile } : {}), ...(tileId ? { EP0CH_TILE_ID: tileId } : {}) })
+    // `--reader middle` only for a door older than `open from=` (ep0ch-door #61), which lands it where this mod
+    // always did; a door that knows `from=` never reads it. Drop it once every door has `from=`.
+    const opened = await outliner(['door-open', id, '--control', control, '--actor', actor, ...(from ? ['--from', from] : []), '--reader', 'middle'])
+    if (opened.exitCode === 0) {
+      let reader: unknown
+      try { reader = JSON.parse(opened.stdout)?.reader } catch { reader = undefined }
+      return { title: title ?? '', place: 'door', ...(typeof reader === 'string' && reader ? { reader } : {}) }
+    }
+    // The door's refusal (it is on its menu, the reader holds an edit) is the answer.
+    if (opened.exitCode !== 3) throw Error(failureReasonOf(opened.stderr) || 'the door did not open it')
+    why = `no door answers on ${control} (it quit?)`
+  } else {
+    why = 'this session is not in an ep0ch-door tile'
+  }
+  if (paneId && herdrWorkspace && workspace) {
+    return { title: await showInHerdrPane($, outliner, workspace, uri), place: 'pane' }
+  }
+  why += paneId && herdrWorkspace ? ', and not in a configured Outliner workspace for a Herdr pane' : ', nor in Herdr'
+  const label = labelOf(uri)
+  let ref: string
+  try {
+    ref = `((${(await resolve()).id}))`
+  } catch {
+    // Unresolved here: the reference as the outline writes it.
+    const block = BLOCK_URI.exec(uri)?.[1]?.toLowerCase()
+    ref = block ? `((${block}))` : uri.startsWith('pi-outliner://page/') ? `[[${label}]]` : label
+  }
+  throw new NotOpenedHere(`Can't open ${label} here: ${why}. Copy ${ref} to open it in the Outliner.`)
 }
 
 async function showInHerdrPane(
@@ -588,15 +633,15 @@ async function showInHerdrPane(
   return title ?? ''
 }
 
-/** A click on a reference: shown in Claude's pane, or a toast saying why not. */
+/** A click on a reference: opened by `openNote`, or a toast saying why not. */
 async function openReference($: EngineInterface, workspace: string, href: string): Promise<void> {
   const uri = outlinerUriOf(href)
   if (!uri) return
   try {
-    await showInScratchPane($, workspace, uri)
+    await openNote($, workspace, uri, await actorFor($, {}))
   } catch (error) {
-    const target = decodeURIComponent(uri.slice(uri.indexOf('/', 'pi-outliner://'.length) + 1))
+    if (error instanceof NotOpenedHere) return $.ui.toast(error.message, { timeoutMs: 12_000 })
     const reason = error instanceof Error ? error.message : String(error)
-    $.ui.toast(`Could not open ${target} in the Outliner: ${reason}`, { timeoutMs: 6000 })
+    $.ui.toast(`Could not open ${labelOf(uri)} in the Outliner: ${reason}`, { timeoutMs: 6000 })
   }
 }

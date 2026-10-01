@@ -72,3 +72,18 @@ export function whereText(summary: string): string {
     'To see or act in this door (what the person sees, opening a note in front of them, marks, tiles), use the ep0ch skill: `ep0ch peek` and `ep0ch actions` read; `ep0ch act <action> … --as <your name>` acts, attributed, and never takes the person\'s keys. EP0CH_CONTROL already points at this door.',
   ].join('\n')
 }
+
+/**
+ * The tile `door-open --from` names: EP0CH_TILE, the name the door's links and
+ * the daily layout use (it survives a door restart for an agent kept in its
+ * Herdr pane), else the tile's id (`t<n>`) when the name is empty. The door
+ * takes either; one it doesn't know falls back to `--reader middle`, then to
+ * where its own open puts notes (src/door-control.ts).
+ */
+export function doorTileOf(env: { EP0CH_TILE?: string; EP0CH_TILE_ID?: string }): string | null {
+  const name = env.EP0CH_TILE?.trim()
+  if (name) return name
+  const id = env.EP0CH_TILE_ID?.trim()
+  return id && /^t\d+$/.test(id) ? id : null
+}
+
