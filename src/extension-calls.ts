@@ -49,6 +49,15 @@ export interface ExtensionCallsOptions {
 
 export type CallReason = "save" | "open" | "refresh";
 
+interface PassOptions {
+  /** The save was a person's own. */
+  readonly byPerson?: boolean;
+  /** The save created the block. */
+  readonly created?: boolean;
+  /** Only the line on this index (a refresh of one line). */
+  readonly line?: number;
+}
+
 /** What an action may return: writes inside the block it acts on, checked and attributed by the service. */
 export type ExtensionWrite =
   | { readonly op: "create"; readonly parentId: string; readonly text: string }
@@ -91,6 +100,7 @@ const MAX_MARKDOWN = 64 * 1024;
 const MAX_WRITES = 20;
 const MAX_WRITE_TEXT = 64 * 1024;
 const RETRY_FAILED_MS = 60_000;
+const MAX_SPEND_MEMORY = 5_000;
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message.replace(/^Resource extension: /, "") : String(error);
@@ -154,7 +164,11 @@ function validateAct(value: unknown): { message?: string; writes: ExtensionWrite
 export class ExtensionCalls {
   private readonly state = new Map<string, CallState>();
   private readonly passes = new Map<string, Promise<void>>();
+  private readonly queued = new Map<string, { next: { reason: CallReason; options: PassOptions }; promise: Promise<void> }>();
   private readonly scheduled = new Set<string>();
+  private readonly saves = new Map<string, { byPerson: boolean; created: boolean }>();
+  /** Spend lines each block had at its last pass (most recent blocks only). */
+  private readonly spendSeen = new Map<string, Set<string>>();
   private stopped = false;
 
   constructor(
@@ -172,15 +186,25 @@ export class ExtensionCalls {
     this.stopped = true;
   }
 
-  /** A block was saved (not by an extension): run what its lines ask for, in the background. */
-  blockChanged(blockId: string, actor: MutationProvenance | undefined): void {
-    if (this.stopped || this.scheduled.has(blockId)) return;
+  /**
+   * A block was saved (not by an extension): run what its lines ask for, in
+   * the background. `created`: the save made the block, so every line in it is new.
+   */
+  blockChanged(blockId: string, actor: MutationProvenance | undefined, created = false): void {
+    if (this.stopped) return;
     const block = this.store.get(blockId);
     if (!block || (!mayHaveHandlerLines(block.text) && !this.store.asksExtension(blockId) && !this.store.extensionOutputs(blockId).length)) return;
+    // Only a person's own save may spend: not an agent's, not a system or unattributed one (an import).
+    const byPerson = actor?.author === "user";
+    const pending = this.saves.get(blockId);
+    this.saves.set(blockId, { byPerson: (pending?.byPerson ?? false) || byPerson, created: (pending?.created ?? false) || created });
+    if (this.scheduled.has(blockId)) return;
     this.scheduled.add(blockId);
     setTimeout(() => {
       this.scheduled.delete(blockId);
-      void this.materialize(blockId, "save", { byPerson: actor?.author !== "agent" }).catch(() => {});
+      const save = this.saves.get(blockId);
+      this.saves.delete(blockId);
+      void this.materialize(blockId, "save", { byPerson: save?.byPerson ?? false, created: save?.created ?? false }).catch(() => {});
     }, 0);
   }
 
@@ -194,25 +218,56 @@ export class ExtensionCalls {
   /**
    * Runs what a block's lines ask for and keeps the results. `open` and
    * `save` follow each handler's `effects`; `refresh` runs every line (or the
-   * one on `line`) now. Concurrent passes over one block share a pass, except
-   * a refresh.
+   * one on `line`) now. A pass asked for while one runs on that block runs
+   * after it (a save during a slow call is never lost); a refresh runs at once.
    */
-  materialize(blockId: string, reason: CallReason, options: { byPerson?: boolean; line?: number } = {}): Promise<void> {
+  materialize(blockId: string, reason: CallReason, options: PassOptions = {}): Promise<void> {
     const running = this.passes.get(blockId);
-    if (running && reason !== "refresh") return running;
+    if (running && reason !== "refresh") {
+      const queued = this.queued.get(blockId);
+      // One pass waits behind the running one; a save's options win over an open's.
+      if (queued) {
+        if (reason === "save") queued.next = { reason, options: { byPerson: (queued.next.options.byPerson ?? false) || (options.byPerson ?? false),
+          created: (queued.next.options.created ?? false) || (options.created ?? false) } };
+        return queued.promise;
+      }
+      const entry: { next: { reason: CallReason; options: PassOptions }; promise: Promise<void> } = { next: { reason, options }, promise: Promise.resolve() };
+      entry.promise = running.catch(() => {}).then(() => {
+        this.queued.delete(blockId);
+        return this.materialize(blockId, entry.next.reason, entry.next.options);
+      });
+      this.queued.set(blockId, entry);
+      return entry.promise;
+    }
     const pass = this.materializeNow(blockId, reason, options)
       .finally(() => { if (this.passes.get(blockId) === pass) this.passes.delete(blockId); });
     this.passes.set(blockId, pass);
     return pass;
   }
 
-  private async materializeNow(blockId: string, reason: CallReason, options: { byPerson?: boolean; line?: number }): Promise<void> {
+  /**
+   * The spend lines a block had at its last pass, so a save can tell which of its spend lines are new
+   * (a person just wrote them) from ones that were already there (edited, or written by an agent).
+   */
+  private spendLinesSeen(blockId: string, calls: readonly HandlerCall[], reason: CallReason, created: boolean): Set<string> {
+    const current = calls.filter((call) => call.effects === "spend").map((call) => call.callKey);
+    const before = this.spendSeen.get(blockId);
+    this.spendSeen.delete(blockId);
+    this.spendSeen.set(blockId, new Set(current));
+    if (this.spendSeen.size > MAX_SPEND_MEMORY) this.spendSeen.delete(this.spendSeen.keys().next().value!);
+    if (reason !== "save") return new Set(current);
+    // A block this service hasn't seen since it started: only a new block's lines are new.
+    return before ?? (created ? new Set() : new Set(current));
+  }
+
+  private async materializeNow(blockId: string, reason: CallReason, options: PassOptions): Promise<void> {
     const found = this.calls(blockId);
     if (!found) return;
     const { block, calls } = found;
-    // A spend handler runs by itself once per block: editing its line afterwards waits for r, so a line
-    // saved while it is still being typed doesn't spend again on every save.
-    const ranBefore = new Set(this.store.extensionOutputs(blockId).map((row) => row.handlerKey));
+    const seen = this.spendLinesSeen(blockId, calls, reason, options.created ?? false);
+    // A spend line edited into another one (still being typed, or changed) replaces a result: it waits for r.
+    const current = new Set(calls.map((call) => call.callKey));
+    const replaced = new Set(this.store.extensionOutputs(blockId).filter((row) => !current.has(row.callKey)).map((row) => row.handlerKey));
     // Outputs of lines the block no longer has go; the records it no longer asks for settle.
     this.store.pruneExtensionOutputs(blockId, calls.filter((call) => call.kind !== "data").map((call) => call.callKey));
     this.settleAsks(blockId, calls);
@@ -222,20 +277,32 @@ export class ExtensionCalls {
       if (call.problems.length) return;
       const extension = this.registry.extension(call.extensionId);
       if (!extension) return;
+      // A spend line runs by itself only when a person has just written it.
+      const fresh = call.effects !== "spend" ||
+        (reason === "save" && (options.byPerson ?? false) && !seen.has(call.callKey) && !replaced.has(call.handlerKey));
       if (call.kind === "data") {
-        if (this.dataDue(call, extension, reason, options.byPerson ?? false)) await this.fetchRecord(block, call, extension);
+        if (this.dataDue(call, extension, reason, fresh)) await this.fetchRecord(block, call, extension);
         return;
       }
-      if (call.effects === "spend" && reason !== "refresh" && ranBefore.has(call.handlerKey) && !rows.has(call.callKey)) return;
-      if (this.outputDue(call, extension, rows.get(call.callKey), reason, options.byPerson ?? false)) await this.run(block, call, extension);
+      if (this.outputDue(call, extension, rows.get(call.callKey), reason, fresh)) await this.run(block, call, extension);
     }));
   }
 
-  /** Records the keys a block asks each extension for; a key nobody asks for any more moves or goes to Trash. */
+  /**
+   * Records the keys a block asks each extension for; a key nobody asks for
+   * any more moves or goes to Trash (`store.settleExtensionRecord`, as Jira's
+   * sync does). A line whose key is being typed (it doesn't parse yet) holds
+   * that extension's asks as they were, so a record doesn't flicker to Trash.
+   */
   private settleAsks(blockId: string, calls: readonly HandlerCall[]): void {
     const wanted = new Map<string, Map<string, number>>();
+    const typing = new Set<string>();
     for (const call of calls) {
-      if (call.kind !== "data" || call.problems.length || call.argument === null) continue;
+      if (call.kind !== "data") continue;
+      if (!call.argumentOk || call.argument === null) {
+        typing.add(call.extensionId);
+        continue;
+      }
       const keys = wanted.get(call.extensionId) ?? new Map<string, number>();
       keys.set(call.argument, 0);
       wanted.set(call.extensionId, keys);
@@ -244,20 +311,15 @@ export class ExtensionCalls {
     for (const extensionId of new Set([...before, ...wanted.keys()])) {
       // Jira's asks are its own sync's (src/extension-sync.ts). An extension that is gone (its folder
       // removed or broken beyond its last good copy) leaves its records and asks as they are: data stays.
-      if (extensionId === "jira" || !this.registry.extension(extensionId)) continue;
+      if (extensionId === "jira" || !this.registry.extension(extensionId) || typing.has(extensionId)) continue;
       const released = this.store.setExtensionAsks(blockId, extensionId, wanted.get(extensionId) ?? new Map());
-      for (const key of [...released, ...(wanted.get(extensionId)?.keys() ?? [])]) this.settle(extensionId, key);
-    }
-  }
-
-  /** A key's record where it belongs: under its home, or in Trash when nothing asks. */
-  private settle(extensionId: string, key: string): void {
-    try {
-      const home = this.store.extensionRecordHome(extensionId, key);
-      if (!home) this.store.dropExtensionRecord(extensionId, key);
-      else this.store.moveExtensionRecord(extensionId, key, home);
-    } catch (error) {
-      this.state.set(this.dataKey(extensionId, key), { running: false, error: message(error) });
+      for (const key of [...released, ...(wanted.get(extensionId)?.keys() ?? [])]) {
+        try {
+          this.store.settleExtensionRecord(extensionId, key);
+        } catch (error) {
+          this.state.set(this.dataKey(extensionId, key), { running: false, error: message(error) });
+        }
+      }
     }
   }
 
@@ -269,16 +331,17 @@ export class ExtensionCalls {
     return `${blockId}\0${callKey}`;
   }
 
-  private automatic(call: HandlerCall, reason: CallReason, byPerson: boolean, firstRun: boolean): boolean {
+  /** Whether `effects` lets a line run now; `fresh`: a spend line a person has just written. */
+  private automatic(call: HandlerCall, reason: CallReason, fresh: boolean, firstRun: boolean): boolean {
     if (reason === "refresh") return true;
     if (call.effects === "write") return false;
-    if (call.effects === "spend") return firstRun && reason === "save" && byPerson;
+    if (call.effects === "spend") return firstRun && fresh;
     return true;
   }
 
-  private dataDue(call: HandlerCall, extension: LoadedExtension, reason: CallReason, byPerson: boolean): boolean {
+  private dataDue(call: HandlerCall, extension: LoadedExtension, reason: CallReason, fresh: boolean): boolean {
     const record = this.store.extensionRecords({ extensionId: extension.id, role: "record", itemKey: call.argument! })[0];
-    if (!this.automatic(call, reason, byPerson, !record)) return false;
+    if (!this.automatic(call, reason, fresh, !record)) return false;
     if (reason === "refresh") return true;
     const key = this.dataKey(extension.id, call.argument!);
     if (!record) return !this.state.get(key)?.error || this.retryable(key);
@@ -292,8 +355,8 @@ export class ExtensionCalls {
     return this.now - (this.failedAt.get(key) ?? 0) > RETRY_FAILED_MS;
   }
 
-  private outputDue(call: HandlerCall, extension: LoadedExtension, row: ExtensionOutputRow | undefined, reason: CallReason, byPerson: boolean): boolean {
-    if (!this.automatic(call, reason, byPerson, !row)) return false;
+  private outputDue(call: HandlerCall, extension: LoadedExtension, row: ExtensionOutputRow | undefined, reason: CallReason, fresh: boolean): boolean {
+    if (!this.automatic(call, reason, fresh, !row)) return false;
     if (reason === "refresh" || !row) return true;
     if (row.result === null) return row.error !== null && this.now - Date.parse(row.attemptedAt) > RETRY_FAILED_MS && call.effects === "read";
     if (call.effects !== "read") return false;
@@ -383,6 +446,25 @@ export class ExtensionCalls {
       this.failedAt.set(key, this.now);
     }
     this.options.changed?.(block.id);
+  }
+
+  /**
+   * `r` on a data record: fetch that one key again, from a block that asks
+   * for it, without running anything else those blocks have.
+   */
+  async refreshRecord(extensionId: string, itemKey: string): Promise<boolean> {
+    const extension = this.registry.extension(extensionId);
+    if (!extension) return false;
+    for (const asker of this.store.extensionAskers(extensionId, itemKey)) {
+      const found = this.calls(asker.blockId);
+      const call = found?.calls.find((candidate) => candidate.kind === "data" && candidate.extensionId === extensionId &&
+        candidate.argument === itemKey && candidate.argumentOk);
+      if (found && call) {
+        await this.fetchRecord(found.block, call, extension);
+        return true;
+      }
+    }
+    return false;
   }
 
   // ── What readers show ────────────────────────────────────────────────
@@ -529,8 +611,10 @@ export class ExtensionCalls {
     }
     if (parsed.writes.length && action.effects !== "write") throw new Error(`${action.name} is declared read-only (effects: read) but returned writes`);
     const written = parsed.writes.length ? this.apply(extension, action, block, parsed.writes) : [];
-    // An action on a handler's line changed what that line reads: run it again before answering.
-    if (written.length && call) await this.materialize(block!.id, "refresh", { line: call.line });
+    // An action's writes change what a read handler's line reads: run that line again (found again by its
+    // call, in case the writes moved it) before answering. A spend or write line waits for r.
+    const again = written.length && call?.effects === "read" ? this.calls(block!.id)?.calls.find((candidate) => candidate.callKey === call.callKey) : undefined;
+    if (again) await this.materialize(block!.id, "refresh", { line: again.line });
     else if (written.length) this.options.changed?.(block!.id);
     return { extension: extension.id, action: action.id, ...(parsed.message ? { message: parsed.message } : {}), written };
   }

@@ -1,7 +1,8 @@
 # Extensions: the four kinds
 
 An extension is a folder. Put one in a watched folder and the outline service loads it, with no
-restart. Delete the folder and everything it added goes away. The service runs the extension's
+restart. Delete the folder and everything it added goes away (its handlers, actions, tiles and kept
+line results); records it wrote stay, because they are data. The service runs the extension's
 code; clients (Detail, the door, the publisher, agents) only draw what the service returns.
 
 There are four kinds. One extension may provide several of them.
@@ -32,8 +33,8 @@ which checks revisions, keeps it inside the block it acts on, and attributes it
 | `<outline root>/extensions/<id>/` | That outline only. It travels with the outline. |
 | `~/.config/pi-herdr-outliner/extensions/<id>/` (or `OUTLINER_EXTENSIONS_DIR`) | Every outline the service serves. |
 
-- When both have the same id, the outline's copy wins; `outliner ext ls` lists the other as
-  `shadowed`.
+- When both have the same id, the outline's copy wins; `extensions.list` (and `outliner ext ls`
+  while the service runs) lists the other as `shadowed`.
 - The repo's own `extensions/` folder is never loaded in place, even when an outline's root is the
   repo.
 - **Watched.** The service watches both folders (recursively, 300 ms of quiet) and rebuilds its
@@ -185,12 +186,14 @@ key:: [argument] [--option[=value]]…
 
 | `effects` | Runs by itself | Otherwise |
 |---|---|---|
-| `read` | When the line is saved or the note is opened, if it has no result, the result is older than `staleAfter`, or the extension's `version` changed | `r` |
-| `spend` (costs money or model time) | Once, when a person writes the line. A line an agent wrote waits. | `r` |
+| `read` | When the line is saved or the note is opened, if it has no result, the result is older than `staleAfter`, or (an output or component) the extension's `version` changed | `r` |
+| `spend` (costs money or model time) | Once, when a person's own save adds the line. Editing it afterwards, a line an agent wrote, and a line from before the service started wait. | `r` |
 | `write` | Never | `r` |
 
 `r` is `resources.projection.refresh` (the door's `projection.refresh`; Detail's `r` on a note).
-Lines written by an extension never trigger anything, so extensions can't loop.
+`r` on a data record refetches that one key. Saves an extension makes never trigger a run, so
+extensions can't loop; the one exception is deliberate: after an action writes, its own `read` line
+runs once so the view shows the change.
 
 ### What readers get
 
@@ -405,9 +408,10 @@ component never breaks a reader: it degrades to its data.
 
 ## Actions
 
-An action is one thing an extension can do, declared once and reachable every way: a key and a
-click in the door (its `ActionDef` is `ext.<id>.<action>`), `outliner ext act`, and
-`extensions.act` for agents.
+An action is one thing an extension can do, declared once, so every client binds the same thing:
+the door as an `ActionDef` named `ext.<id>.<action>` with its key and click (with the tile-kind
+registry work), `outliner ext act` from a shell, and `extensions.act` for agents. Detail doesn't
+bind extension actions yet; `r` is its path today.
 
 ```json
 { "id": "ward", "label": "Ward off the next omen", "on": "handler:fancy-horror", "key": "w", "effects": "write" }
@@ -420,8 +424,8 @@ click in the door (its `ActionDef` is `ext.<id>.<action>`), `outliner ext act`, 
   `{ "op": "create", "parentId", "text" }` or `{ "op": "update", "blockId", "expectedRevision", "text" }`,
   at most 20. They must stay inside the block the action acts on; they apply together or not at
   all; an update is revision-checked; each is `author: agent`, `actorId: ext:<id>`, under
-  `ext.<id>.<action>` in the change feed. After an action on a handler's line writes, that line runs
-  again before the answer comes back.
+  `ext.<id>.<action>` in the change feed. After an action on a `read` handler's line writes, that
+  line runs again before the answer comes back.
 - `keep` is built in for every output and component handler.
 
 ```json
@@ -549,6 +553,10 @@ Use made-up data. The runtime is the same one the live service uses.
   reader host's registry; they move to `extensions.list` with the door's renderer work.
 - **The door** draws handler lines generically until it reads `kind` and `output` (its projection
   filter knows only `jira` today). Detail draws them now.
+- **Actions in Detail and the door.** The service lists them with keys and labels; neither client
+  binds them yet. Until then: `outliner ext act` and `extensions.act`.
+- **Who asked for an action.** Its writes are attributed to the extension (`ext:<id>`); the agent
+  or person who called `extensions.act` isn't recorded with them yet.
 - **The publisher** shows data records (they are blocks) but not yet handler outputs; it will ask
   `extensions.render` for `html`.
 - **Generic Resource providers.** `kind: "resource"` is Jira's path; others use `data`.

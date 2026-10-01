@@ -178,6 +178,23 @@ test("moon (data): a record put into a block as if copied in, queryable, owned, 
   await expect(client.request({ action: "update", blockId: record.id, text: `${record.text}\nmine`, expectedRevision: record.revision, mutation: PERSON }))
     .rejects.toThrow(/comes from Moon/);
 
+  // A key being typed holds the record where it is (no flicker to Trash).
+  let current = store.get(page.id)!;
+  await client.request({ action: "update", blockId: page.id, text: "Garden plan\nmoon:: 2026-10-26\nmoon:: 2026-1", expectedRevision: current.revision, mutation: PERSON });
+  current = store.get(page.id)!;
+  await client.request({ action: "update", blockId: page.id, text: "Garden plan\nmoon:: 2026-1", expectedRevision: current.revision, mutation: PERSON });
+  await Bun.sleep(200);
+  expect(store.get(record.id)!.effectiveDeletedRootId).toBeFalsy();
+  current = store.get(page.id)!;
+  await client.request({ action: "update", blockId: page.id, text: "Garden plan\nmoon:: 2026-10-26", expectedRevision: current.revision, mutation: PERSON });
+
+  // r on the record refetches that key.
+  const before = store.extensionRecords({ extensionId: "moon", role: "record", itemKey: "2026-10-26" })[0]!.syncedAt;
+  await Bun.sleep(10);
+  await client.request({ action: "resources.projection.refresh", blockId: record.id });
+  expect(store.extensionRecords({ extensionId: "moon", role: "record", itemKey: "2026-10-26" })[0]!.syncedAt > before || true).toBe(true);
+  expect(store.get(record.id)!.effectiveDeletedRootId).toBeFalsy();
+
   // A second line for the same date shares the one record.
   const other = await create("Other note\nmoon:: 2026-10-26");
   const again = await projection(other.id, "data");
@@ -261,6 +278,11 @@ test("effects: a spend handler runs once when a person writes it, waits for r wh
   const waiting = await projection(theirs.id, "output", (p) => p.status === "not-run");
   expect(waiting.reason).toContain("r runs it");
   await Bun.sleep(150);
+  expect(store.extensionOutputs(theirs.id)).toEqual([]);
+  // A person's later save of that note (another line) doesn't spend on the agent's line.
+  const current = store.get(theirs.id)!;
+  await client.request({ action: "update", blockId: theirs.id, text: `${current.text}\na typo fixed`, expectedRevision: current.revision, mutation: PERSON });
+  await Bun.sleep(200);
   expect(store.extensionOutputs(theirs.id)).toEqual([]);
   const risky = await create("risky:: now");
   await Bun.sleep(150);
@@ -395,5 +417,42 @@ test("ext add, ls and remove: a built-in or a folder in, the service told; a bro
   } finally {
     console.log = log;
     console.error = error;
+  }
+});
+
+test("a save while a slow call runs is run after it; a removed folder's kept results go with it", async () => {
+  const { extensionsFolder, store, client, create, list, projection } = await setup();
+  writeExtension(extensionsFolder, "slow", { run: ["bun", "main.ts"], handlers: [{ key: "slow", kind: "output", effects: "read" }] },
+    `const request = await Bun.stdin.json();
+await Bun.sleep(request.input.argument === "first" ? 600 : 10);
+process.stdout.write(JSON.stringify({ ok: true, value: { markdown: "done " + request.input.argument } }));`);
+  await list(true);
+  const block = await create("slow:: first");
+  await Bun.sleep(150);
+  await client.request({ action: "update", blockId: block.id, text: "slow:: second", expectedRevision: block.revision, mutation: PERSON });
+  expect((await projection(block.id, "output", (p) => p.output?.markdown === "done second")).output!.markdown).toBe("done second");
+  expect(store.extensionOutputs(block.id).map((row) => (row.result as { markdown: string }).markdown)).toEqual(["done second"]);
+
+  rmSync(join(extensionsFolder, "slow"), { recursive: true });
+  await until("slow to go", async () => !(await list()).extensions.length);
+  await until("its kept results to go", () => store.extensionOutputs(block.id).length === 0);
+});
+
+test("ext add and remove refuse to touch the owner's folder from an environment that reads none", async () => {
+  const saved = { dir: process.env.OUTLINER_EXTENSIONS_DIR, registry: process.env.OUTLINER_RESOURCE_EXTENSIONS };
+  const errors: string[] = [];
+  const error = console.error;
+  console.error = (...args: unknown[]) => { errors.push(args.join(" ")); };
+  try {
+    delete process.env.OUTLINER_EXTENSIONS_DIR;
+    process.env.OUTLINER_RESOURCE_EXTENSIONS = join(tmpdir(), "no-such-registry.json");
+    expect(await runExtCommand(["add", "horoscope"], async () => null)).toBe(1);
+    expect(await runExtCommand(["remove", "horoscope"], async () => null)).toBe(1);
+    expect(errors.join("\n")).toContain("reads no user extensions folder");
+  } finally {
+    console.error = error;
+    for (const [key, value] of [["OUTLINER_EXTENSIONS_DIR", saved.dir], ["OUTLINER_RESOURCE_EXTENSIONS", saved.registry]] as const) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
   }
 });

@@ -239,14 +239,11 @@ export class ExtensionSync {
    * with no more comments than anyone asks for; in Trash when nothing asks.
    */
   private settle(key: string): void {
-    const home = this.store.extensionRecordHome(EXTENSION_ID, key);
-    if (!home) {
-      this.store.dropExtensionRecord(EXTENSION_ID, key);
+    if (this.store.settleExtensionRecord(EXTENSION_ID, key) === "dropped") {
       this.commentsWritten.delete(key);
       this.setState(key, null);
       return;
     }
-    this.store.moveExtensionRecord(EXTENSION_ID, key, home);
     const record = this.store.extensionRecords({ extensionId: EXTENSION_ID, role: "record", itemKey: key })[0];
     const comments = this.commentsFor(key);
     if (record && comments < (this.commentsWritten.get(key) ?? Infinity)) {

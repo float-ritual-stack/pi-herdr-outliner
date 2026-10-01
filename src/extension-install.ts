@@ -1,11 +1,11 @@
 import { chmod, cp, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { ExtensionLoadError, readExtensionFolder } from "./extension-manifest";
 import { BUILT_IN_EXTENSIONS, extensionRoots, type ExtensionsListResult } from "./extension-registry";
-import { userExtensionsDirectory } from "./resource-extensions";
+import { userExtensionsDirectory, userExtensionsFolderInUse } from "./resource-extensions";
 
 /**
  * `outliner ext ls|add|remove|act`: extension folders from a shell. They are
@@ -66,7 +66,13 @@ function credentialReferences(credentials: Record<string, unknown>): Record<stri
 
 /** Where `add` and `remove` work: the user folder, or the outline's own `extensions/`. */
 function targetRoot(outlineFolder: string | undefined): string {
-  return outlineFolder ? join(outlineFolder, "extensions") : userExtensionsDirectory();
+  if (outlineFolder) return join(outlineFolder, "extensions");
+  // A scratch or test environment (pointed at another legacy registry, with no folder of its own) never
+  // installs into or deletes from the owner's real folder.
+  if (!userExtensionsFolderInUse()) {
+    throw new Error("This environment reads no user extensions folder (OUTLINER_RESOURCE_EXTENSIONS is set without OUTLINER_EXTENSIONS_DIR): set OUTLINER_EXTENSIONS_DIR or pass --outline-folder");
+  }
+  return userExtensionsDirectory();
 }
 
 function looksLikePath(value: string): boolean {
@@ -103,8 +109,14 @@ export async function addExtension(nameOrPath: string, options: { from?: string;
   const lines: string[] = [];
   const updating = existsSync(join(target, "extension.json"));
   await mkdir(target, { recursive: true });
-  for (const entry of await readdir(source)) {
-    if (entry === "config.json" || entry === "node_modules") continue;
+  const entries = (await readdir(source)).filter((entry) => entry !== "config.json" && entry !== "node_modules");
+  // An update matches the source: a file the new version no longer has goes (config.json stays).
+  if (updating) {
+    for (const entry of await readdir(target)) {
+      if (entry !== "config.json" && entry !== "node_modules" && !entries.includes(entry)) await rm(join(target, entry), { recursive: true, force: true });
+    }
+  }
+  for (const entry of entries) {
     const staged = join(target, `.${entry}.new`);
     // A stale staged copy from an interrupted run, and a folder in the way of the rename, go first.
     await rm(staged, { recursive: true, force: true });
@@ -142,7 +154,7 @@ export async function removeExtension(id: string, options: { outlineFolder?: str
   if (!existsSync(join(target, "extension.json"))) {
     throw new Error(`No extension ${id} in ${root}${options.outlineFolder ? "" : " (an outline's own: --outline-folder <root>)"}`);
   }
-  if (resolve(target).startsWith(`${resolve(BUILT_INS)}/`)) throw new Error("That is the repo's built-in source, not an install");
+  if (realpathSync(target).startsWith(`${realpathSync(BUILT_INS)}/`)) throw new Error("That is the repo's built-in source, not an install");
   await rm(target, { recursive: true, force: true });
   return [
     `removed ${target}`,

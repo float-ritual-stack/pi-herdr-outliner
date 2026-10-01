@@ -234,6 +234,8 @@ export class OutlinerServer {
   readonly extensionRegistry: ExtensionRegistry;
   /** Handler lines, their results, and actions (src/extension-calls.ts). */
   readonly extensionCalls: ExtensionCalls;
+  /** The extension ids the registry had at its last change. */
+  private knownExtensions = new Set<string>();
 
   constructor(
     readonly store: OutlinerStore,
@@ -277,8 +279,13 @@ export class OutlinerServer {
       outlineName: () => this.outline?.name,
       socketPath: () => this.socketPath,
       onChange: () => {
+        // A folder that is gone takes its kept line results with it (its records stay: they are data).
+        const present = new Set(this.extensionRegistry.list().extensions.map((entry) => entry.id));
+        for (const id of [...this.knownExtensions]) {
+          if (!present.has(id)) this.store.forgetExtensionOutputs(id);
+        }
+        this.knownExtensions = present;
         this.broadcast({ id: crypto.randomUUID(), domain: "extensions", action: "extensions.changed", sequence: this.store.sequence });
-        // Lines a new handler serves run now, as if just opened, once a reader asks; nothing runs unasked.
       },
     });
     // Jira's Resource path reads the same folders, so a jira folder in the outline works like the user's.
@@ -1561,14 +1568,16 @@ export class OutlinerServer {
         const normalized = normalizeResourceProjectionRequest(request);
         const owner = this.store.extensionOwner(normalized.blockId);
         const record = owner?.role === "comment" ? this.store.extensionOwner(owner.parentBlockId) : owner;
-        // An extension's handler lines (or the one on `line`) run now; a data record refreshes from its asker.
-        const handlerLines = (this.extensionCalls.calls(record && !record.resourceId ? record.parentBlockId : normalized.blockId)?.calls ?? [])
-          .filter((call) => normalized.line === undefined || record || call.line === normalized.line);
+        // A data handler's record (no Resource) refetches its one key; an extension's handler lines (or the one
+        // on `line`) run now.
+        const dataRecord = record !== null && !record.resourceId && record.extensionId !== "jira";
+        if (dataRecord) await this.extensionCalls.refreshRecord(record.extensionId, record.itemKey);
+        const handlerLines = dataRecord || record ? [] : (this.extensionCalls.calls(normalized.blockId)?.calls ?? [])
+          .filter((call) => normalized.line === undefined || call.line === normalized.line);
         if (handlerLines.length) {
-          await this.extensionCalls.materialize(record && !record.resourceId ? record.parentBlockId : normalized.blockId, "refresh",
-            normalized.line !== undefined && !record ? { line: normalized.line } : {});
+          await this.extensionCalls.materialize(normalized.blockId, "refresh", normalized.line !== undefined ? { line: normalized.line } : {});
         }
-        const onlyHandlers = handlerLines.length > 0 && (normalized.line !== undefined || (record !== null && !record.resourceId));
+        const onlyHandlers = dataRecord || (handlerLines.length > 0 && normalized.line !== undefined);
         // One line's ticket (a click on its age), the ticket block's own, or every ticket the block shows.
         const one = !onlyHandlers && normalized.line !== undefined && !record
           ? readResourceProjections(this.store, normalized).projections.find((projection) => projection.resourceId)
@@ -2932,7 +2941,7 @@ export class OutlinerServer {
       if (event.domain === "content" && event.blockId && (event.change?.kind === "create" || event.change?.kind === "edit") &&
         !isExtensionActor(event.change.actor?.actorId)) {
         this.extensionSync.blockChanged(event.blockId);
-        this.extensionCalls.blockChanged(event.blockId, event.change.actor);
+        this.extensionCalls.blockChanged(event.blockId, event.change.actor, event.change.kind === "create");
       }
     }
     if (events.some(event => event.domain === "content")) this.inbox?.wake();

@@ -30,6 +30,8 @@ export interface HandlerCall {
   readonly unknown: readonly string[];
   /** Why the line can't run as written; empty when it can. */
   readonly problems: readonly string[];
+  /** Whether the argument (a data handler's key) is well formed, whatever the options say. */
+  readonly argumentOk: boolean;
   /** Identifies the call within its block: handler, argument and fetch options. */
   readonly callKey: string;
   readonly line: number;
@@ -103,10 +105,12 @@ export function handlerCalls(text: string, table: HandlerTable): HandlerCall[] {
     }
     const argument = positional.length ? positional.join(" ") : null;
     const name = handler.argument?.name ?? "an argument";
-    if (argument === null && (handler.argument?.required || handler.kind === "data")) problems.push(`${handler.key}:: needs ${name}`);
+    const argumentProblems: string[] = [];
+    if (argument === null && (handler.argument?.required || handler.kind === "data")) argumentProblems.push(`${handler.key}:: needs ${name}`);
     const pattern = handler.kind === "data" ? handler.keyPattern ?? handler.argument?.pattern : handler.argument?.pattern;
-    if (argument !== null && pattern && !new RegExp(pattern, "u").test(argument)) problems.push(`${argument} isn't ${handler.argument?.description ?? `a ${name} ${handler.key}:: knows`}`);
-    if (argument !== null && argument.length > 500) problems.push(`${name} is longer than 500 characters`);
+    if (argument !== null && pattern && !new RegExp(pattern, "u").test(argument)) argumentProblems.push(`${argument} isn't ${handler.argument?.description ?? `a ${name} ${handler.key}:: knows`}`);
+    if (argument !== null && argument.length > 500) argumentProblems.push(`${name} is longer than 500 characters`);
+    problems.push(...argumentProblems);
     const sorted = Object.fromEntries(Object.entries(options).sort(([left], [right]) => left.localeCompare(right)));
     calls.push({
       extensionId: extension.id,
@@ -118,6 +122,7 @@ export function handlerCalls(text: string, table: HandlerTable): HandlerCall[] {
       display,
       unknown,
       problems,
+      argumentOk: argumentProblems.length === 0,
       callKey: createHash("sha256").update(JSON.stringify([handler.key, argument, sorted])).digest("hex").slice(0, 32),
       line: line.line,
       start: line.start,

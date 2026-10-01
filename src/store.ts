@@ -1852,6 +1852,27 @@ export class OutlinerStore {
   }
 
   /**
+   * Puts a key's one record where it belongs now, without a fetch: under its
+   * home (`extensionRecordHome`), or in Trash when nothing asks for it. Every
+   * extension's sync settles a key through this (Jira's, and the data
+   * handlers'), after its asks change.
+   */
+  settleExtensionRecord(extensionId: string, itemKey: string): "home" | "dropped" {
+    const home = this.extensionRecordHome(extensionId, itemKey);
+    if (!home) {
+      this.dropExtensionRecord(extensionId, itemKey);
+      return "dropped";
+    }
+    this.moveExtensionRecord(extensionId, itemKey, home);
+    return "home";
+  }
+
+  /** Forgets every stored result of an extension's handler lines (its folder is gone). */
+  forgetExtensionOutputs(extensionId: string): number {
+    return this.database.query("DELETE FROM extension_outputs WHERE extension_id = ?").run(extensionId).changes;
+  }
+
+  /**
    * Moves a key's record to `parentBlockId` (its new home) without a fetch.
    * Returns whether it moved; false when there is no active record, it is
    * already there, or the home is inside the record.
