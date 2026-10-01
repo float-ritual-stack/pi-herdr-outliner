@@ -87,7 +87,18 @@ export interface ResourceProjection {
    * absent for a Jira projection; `data`, `output` or `component` for a
    * handler an extension folder serves.
    */
-  readonly kind?: "data" | "output" | "component";
+  readonly kind?: "data" | "output" | "component" | "agent";
+  /** An `@name` request line (kind `agent`, capability `extensions.agents`): what the agent did about it. */
+  readonly agent?: {
+    readonly name: string;
+    /** `queued` (waiting for the line to be quiet), `not-asked`, `waiting`, `running`, `applied`, `proposed`, `replied`, `nothing`, `failed`. */
+    readonly status: string;
+    readonly message?: string;
+    /** The proposal block when the edit became a proposal. */
+    readonly proposalId?: string;
+    /** `user`, or `agent:<actor>` for a line an agent wrote. */
+    readonly requestedBy?: string;
+  };
   readonly extension?: {
     readonly id: string;
     readonly handler: string;

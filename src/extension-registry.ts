@@ -6,6 +6,7 @@ import {
   ExtensionLoadError,
   readExtensionFolder,
   type ExtensionAction,
+  type ExtensionAgent,
   type ExtensionHandler,
   type ExtensionOrigin,
   type ExtensionTile,
@@ -108,6 +109,13 @@ export interface ExtensionTileKind {
   readonly save: "args";
 }
 
+/** An agent addressed in a note as `@name` (PIE-501). */
+export interface ExtensionAgentEntry {
+  readonly name: string;
+  readonly description?: string;
+  readonly effects: "read" | "spend";
+}
+
 export interface ExtensionEntry {
   readonly id: string;
   readonly name?: string;
@@ -124,6 +132,7 @@ export interface ExtensionEntry {
   readonly handlers: readonly ExtensionHandlerEntry[];
   readonly actions: readonly ExtensionActionEntry[];
   readonly tiles: readonly ExtensionTileKind[];
+  readonly agents: readonly ExtensionAgentEntry[];
 }
 
 export interface ExtensionsListResult {
@@ -139,6 +148,12 @@ export interface ExtensionsListResult {
   readonly targets: readonly string[];
   /** "Trusted code, not a sandbox": extensions run as the service user. */
   readonly trust: string;
+}
+
+/** An `@name` bound to the extension that answers it. */
+export interface BoundAgent {
+  readonly extension: LoadedExtension;
+  readonly agent: ExtensionAgent;
 }
 
 /** A handler key bound to the extension that serves it. */
@@ -188,6 +203,7 @@ export class ExtensionRegistry {
   private slots: Slot[] = [];
   private lastGood = new Map<string, { extension: LoadedExtension; loadedAt: string }>();
   private bound = new Map<string, BoundHandler>();
+  private boundAgents = new Map<string, BoundAgent>();
   private watchers: FSWatcher[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
   private loading: Promise<void> | null = null;
@@ -278,6 +294,21 @@ export class ExtensionRegistry {
         bound.set(handler.key, { extension, handler });
       }
     }
+    // `@names`: the same rule as handler keys.
+    const agents = new Map<string, BoundAgent>();
+    for (const slot of slots) {
+      const extension = slot.serving;
+      if (!extension || (slot.state !== "active" && slot.state !== "failed")) continue;
+      for (const agent of extension.manifest.agents ?? []) {
+        const taken = agents.get(agent.name);
+        if (taken) {
+          const conflict = `agent @${agent.name} is already answered by ${taken.extension.id} (${taken.extension.directory})`;
+          conflicts.set(slot.id, conflicts.has(slot.id) ? `${conflicts.get(slot.id)}; ${conflict}` : conflict);
+          continue;
+        }
+        agents.set(agent.name, { extension, agent });
+      }
+    }
     const resolved = slots.map((slot) => {
       const conflict = conflicts.get(slot.id);
       return conflict ? { ...slot, error: slot.error ? `${slot.error}; ${conflict}` : conflict } : slot;
@@ -285,6 +316,7 @@ export class ExtensionRegistry {
     const signature = JSON.stringify(resolved.map((slot) => [slot.id, slot.directory, slot.state, slot.error ?? "", slot.serving?.stamp ?? ""]));
     this.slots = resolved;
     this.bound = bound;
+    this.boundAgents = agents;
     if (signature !== this.signature) {
       this.signature = signature;
       this.generation += 1;
@@ -296,6 +328,16 @@ export class ExtensionRegistry {
   /** The handler a `key::` line names, when an active extension serves it (resource handlers excepted: Jira's own path). */
   handler(key: string): BoundHandler | undefined {
     return this.bound.get(key);
+  }
+
+  /** The agent `@name` addresses, when an active extension answers it. */
+  agent(name: string): BoundAgent | undefined {
+    return this.boundAgents.get(name);
+  }
+
+  /** Every bound agent name. */
+  agentNames(): ReadonlySet<string> {
+    return new Set(this.boundAgents.keys());
   }
 
   /** Every bound handler key. */
@@ -372,6 +414,9 @@ export class ExtensionRegistry {
           })) : [],
         actions: serving ? this.actionsOf(extension) : [],
         tiles: serving ? this.tilesOf(extension) : [],
+        agents: serving ? (extension.manifest.agents ?? [])
+          .filter((agent) => this.boundAgents.get(agent.name)?.extension === extension)
+          .map((agent) => ({ name: agent.name, ...(agent.description ? { description: agent.description } : {}), effects: agent.effects ?? "read" })) : [],
       };
     });
     return {

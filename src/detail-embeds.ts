@@ -519,7 +519,7 @@ export function resourceProjectionLayout(projection: ResourceProjection): Resour
     while (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
     if (projection.status === "stale" && reason) lines.push(`  ${reason}`);
   } else if ((projection.status === "ready" || projection.status === "stale") && projection.summary !== undefined) {
-    const fetched = projection.fetchedAt ? `fetched ${localTime(projection.fetchedAt)}` : "";
+    const fetched = projection.fetchedAt ? `${projection.kind === "agent" ? "answered" : "fetched"} ${localTime(projection.fetchedAt)}` : "";
     lines.push(`- ${title} · ${generatedInline(projection.summary)}${projection.options.compact && fetched ? ` · ${fetched}` : ""}`);
     if (projection.options.compact && fetched) fetchedLine = 0;
     if (!projection.options.compact) {

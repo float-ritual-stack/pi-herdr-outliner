@@ -1,0 +1,11 @@
+{
+  "contract": 2,
+  "id": "tidy",
+  "version": 1,
+  "name": "Tidy",
+  "description": "An agent you address while you write: @tidy tidies the paragraph above the line.",
+  "run": ["bun", "tidy.ts"],
+  "agents": [
+    { "name": "tidy", "description": "Tidies the markdown of the paragraph above (or, with \"all\", everything above)", "effects": "read" }
+  ]
+}

@@ -2833,7 +2833,9 @@ The service watches both and loads a folder as soon as it appears, with no resta
 removes everything it added. There are four kinds: **data** put into a block as if copied in
 (`moon:: 2026-10-26`, `jira:: PC-12`), **inline output** shown under a line (`horoscope:: virgo`), a
 **rich component** composed from shared primitives with its own actions (`fancy-horror:: virgo`), and
-a **whole tile** for the door (`tarot.reading`). `outliner ext ls|add|remove|act` manages them. See
+a **whole tile** for the door (`tarot.reading`). An extension can also declare agents you address
+while you write: `@tidy` on a line tidies the paragraph above it, as an attributed edit.
+`outliner ext ls|add|remove|act` manages them. See
 [Extensions: the four kinds](docs/extensions/README.md); Jira's Resource process contract is in
 [resource-process.md](docs/extensions/resource-process.md).
 

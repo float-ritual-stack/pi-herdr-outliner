@@ -420,6 +420,37 @@ function extensionRecordRow(row: ExtensionRecordDbRow): ExtensionRecordRow {
   };
 }
 
+/** One `@name` request line and what its agent did (`agent_requests`). */
+export interface AgentRequestRow {
+  readonly blockId: string;
+  readonly requestKey: string;
+  readonly agent: string;
+  readonly extensionId: string;
+  readonly request: string;
+  /** `waiting`: written by an agent, so it waits for r. */
+  readonly status: "waiting" | "running" | "applied" | "proposed" | "replied" | "nothing" | "failed";
+  readonly message?: string | null;
+  readonly reply?: string | null;
+  readonly proposalId?: string | null;
+  /** `user` or `agent:<actor>`: who wrote the line. */
+  readonly requestedBy: string;
+  readonly requestedAt: string;
+  readonly answeredAt?: string | null;
+}
+
+interface AgentRequestDbRow {
+  block_id: string; request_key: string; agent: string; extension_id: string; request: string; status: AgentRequestRow["status"];
+  message: string | null; reply: string | null; proposal_id: string | null; requested_by: string; requested_at: string; answered_at: string | null;
+}
+
+function agentRequestRow(row: AgentRequestDbRow): AgentRequestRow {
+  return {
+    blockId: row.block_id, requestKey: row.request_key, agent: row.agent, extensionId: row.extension_id, request: row.request,
+    status: row.status, message: row.message, reply: row.reply, proposalId: row.proposal_id, requestedBy: row.requested_by,
+    requestedAt: row.requested_at, answeredAt: row.answered_at,
+  };
+}
+
 /** One handler line's stored result (`extension_outputs`). */
 export interface ExtensionOutputRow {
   readonly blockId: string;
@@ -1732,6 +1763,33 @@ export class OutlinerStore {
   extensionAsksOf(blockId: string): Array<{ extensionId: string; itemKey: string }> {
     return (this.database.query("SELECT extension_id AS extensionId, item_key AS itemKey FROM extension_askers WHERE block_id = ?")
       .all(blockId) as Array<{ extensionId: string; itemKey: string }>);
+  }
+
+  // ── Agent requests (src/agent-requests.ts) ─────────────────────────────
+  // One row per `@name …` line a block has had: who wrote it, and what the
+  // agent did about it. A request runs once; `r` runs it again.
+
+  agentRequests(blockId: string): AgentRequestRow[] {
+    return (this.database.query("SELECT * FROM agent_requests WHERE block_id = ?").all(blockId) as AgentRequestDbRow[]).map(agentRequestRow);
+  }
+
+  /** Records a request, or its answer. */
+  putAgentRequest(row: AgentRequestRow): void {
+    this.database.query(`
+      INSERT INTO agent_requests (block_id, request_key, agent, extension_id, request, status, message, reply, proposal_id, requested_by, requested_at, answered_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (block_id, request_key) DO UPDATE SET agent = excluded.agent, extension_id = excluded.extension_id, request = excluded.request,
+        status = excluded.status, message = excluded.message, reply = excluded.reply, proposal_id = excluded.proposal_id,
+        requested_by = excluded.requested_by, requested_at = excluded.requested_at, answered_at = excluded.answered_at
+    `).run(row.blockId, row.requestKey, row.agent, row.extensionId, row.request, row.status, row.message ?? null, row.reply ?? null,
+      row.proposalId ?? null, row.requestedBy, row.requestedAt, row.answeredAt ?? null);
+  }
+
+  /** Forgets requests whose lines a block no longer has. */
+  pruneAgentRequests(blockId: string, keep: readonly string[]): void {
+    const rows = this.database.query("SELECT request_key FROM agent_requests WHERE block_id = ?").all(blockId) as Array<{ request_key: string }>;
+    const remove = this.database.query("DELETE FROM agent_requests WHERE block_id = ? AND request_key = ?");
+    for (const row of rows) if (!keep.includes(row.request_key)) remove.run(blockId, row.request_key);
   }
 
   // ── Extension outputs (src/extension-calls.ts) ──────────────────────────
@@ -3877,6 +3935,21 @@ export class OutlinerStore {
         PRIMARY KEY (block_id, extension_id, item_key)
       );
       CREATE INDEX IF NOT EXISTS extension_askers_key ON extension_askers(extension_id, item_key);
+      CREATE TABLE IF NOT EXISTS agent_requests (
+        block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+        request_key TEXT NOT NULL,
+        agent TEXT NOT NULL,
+        extension_id TEXT NOT NULL,
+        request TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('waiting', 'running', 'applied', 'proposed', 'replied', 'nothing', 'failed')),
+        message TEXT,
+        reply TEXT,
+        proposal_id TEXT,
+        requested_by TEXT NOT NULL,
+        requested_at TEXT NOT NULL,
+        answered_at TEXT,
+        PRIMARY KEY (block_id, request_key)
+      );
       CREATE TABLE IF NOT EXISTS extension_outputs (
         block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
         call_key TEXT NOT NULL,

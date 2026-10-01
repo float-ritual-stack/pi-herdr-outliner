@@ -12,7 +12,7 @@ const result = await runHerdrScenario({
   async prepare(root) {
     projectRoot = root;
     await mkdir(join(root, "extensions"), { recursive: true });
-    for (const name of ["horoscope", "fancy-horror", "moon"]) {
+    for (const name of ["horoscope", "fancy-horror", "moon", "tidy"]) {
       await cp(join(import.meta.dir, "../../extensions", name), join(root, "extensions", name), { recursive: true });
     }
   },
@@ -36,6 +36,22 @@ const result = await runHerdrScenario({
     await s.waitVisible(s.panes.detail, "Fancy Horror virgo · ran");
     await s.waitVisible(s.panes.detail, "Moon on 2026-10-26: Full Moon");
     await s.checkpoint("extension-kinds-drawn");
+
+    // An agent addressed while you write (PIE-501): @tidy edits the passage above, attributed, and says so.
+    const request: any = await s.client.request({ action: "create", author: "user", text: "Morning plan\n*  call the  printer\n@tidy" });
+    await s.client.request({
+      action: "navigation.dispatch", sourceClientId: tree.clientId, destination: { clientId: detail.clientId, region: "detail" },
+      intent: "open", target: { kind: "block", blockId: request.id },
+    });
+    await s.waitVisible(s.panes.detail, "tidied 1 line above");
+    await s.waitVisible(s.panes.detail, "call the printer");
+    assert.equal((await s.client.request<any>({ action: "get", blockId: request.id })).text, "Morning plan\n- call the printer\n@tidy");
+    await s.checkpoint("agent-request-applied");
+    await s.client.request({
+      action: "navigation.dispatch", sourceClientId: tree.clientId, destination: { clientId: detail.clientId, region: "detail" },
+      intent: "open", target: { kind: "block", blockId: note.id },
+    });
+    await s.waitVisible(s.panes.detail, "Extension kinds tour");
 
     // r on the note runs its extension lines again (keyboard path; outputs have no click target yet).
     await s.focus(s.panes.detail);

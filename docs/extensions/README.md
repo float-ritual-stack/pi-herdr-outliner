@@ -113,6 +113,7 @@ extensions/horoscope/
 | `handlers[]` | The `key::` lines it serves (kinds 1–3). |
 | `actions[]` | What it can do: one action is a key, a click and an agent call alike. |
 | `tiles[]` | Tile kinds (kind 4). |
+| `agents[]` | Agents a person addresses while they write (`@tidy …`); see [Agents in the note](#agents-in-the-note). |
 
 ### `config.json`
 
@@ -148,6 +149,7 @@ The answer is `{"ok": true, "value": …}` or `{"ok": false, "code": "not-found"
 |---|---|---|---|
 | `read` | a data handler | `{ handler, key, options, context }` | `{ record: { title, fields: [{ key, value }], body } }` |
 | `run` | an output or component handler | `{ handler, argument, options, context }` | output: `{ markdown, title? }`; component: `{ data, view, targets?, title? }` |
+| `respond` | an `@name` request | `{ agent, request, mark, note: { id, revision, text }, context }` | `{ message?, reply?, patches?: [{ observed, replacement, before?, after? }] }` |
 | `act` | an action | `{ action, args?, target?: { blockId, revision, line?, argument?, options? }, context?, output? }` | `{ message?, writes?: [...] }` |
 | `resolve`, `read`, `changed` | Jira's Resource path | see [resource-process.md](resource-process.md) | |
 
@@ -431,6 +433,43 @@ bind extension actions yet; `r` is its path today.
 ```json
 { "action": "extensions.act", "extension": "fancy-horror", "extensionAction": "ward", "blockId": "…", "line": 1 }
 ```
+
+## Agents in the note
+
+Not a fifth kind: an extension can also declare **agents** a person addresses from inside their own
+writing (PIE-501). Evan writes `@tidy can you fix the formatting above` and keeps typing; the result
+lands in the note while he goes on.
+
+```json
+"agents": [{ "name": "tidy", "description": "Tidies the paragraph above", "effects": "read", "deadline": "30s" }]
+```
+
+- **Addressing.** A line that starts with `@name` (after an optional bullet), outside code, whose
+  name an active extension answers. Any other `@word` is prose. Two extensions can't answer one
+  name.
+- **When it runs.** Once the line has been quiet for a moment (1.5 s), so a request still being
+  typed doesn't run half-written. Each wording runs once per note: changing the line is a new
+  request, and `r` on the line asks again. A line an agent (or an import) wrote waits for `r`, so
+  agents can't set each other off.
+- **`respond`** gets the note as the person sees it (their live draft when a door holds one), the
+  request (the words after the name) and the mark (the request line), plus bounded context. It
+  answers any of:
+  - `patches`: spans of the text above the mark (`observed` → `replacement`, with `before`/`after`
+    context). The service applies them through `draft.patch` with the default `edit` policy: an
+    ordinary edit, attributed `author: agent`, `actorId: ext:<id>`, under `ext.<id>.agent.<name>` in
+    the change feed. A note held by a door gets the patch in its live draft. Only a failed compare
+    (the person was typing in that passage) becomes a proposal, embedded under the line, to apply or
+    dismiss.
+  - `reply`: markdown shown under the line (inert, like an output). The note's text is untouched.
+  - `message`: what it did, in a few words (`tidied 2 lines above`).
+- **What readers get.** A projection of `kind: "agent"` on the request line, with
+  `agent: { name, status, message?, proposalId?, requestedBy }`. `status` is `queued`, `not-asked`,
+  `waiting` (an agent wrote it), `running`, `applied`, `proposed`, `replied`, `nothing` or `failed`.
+
+[tidy](../../extensions/tidy) is the example: it tidies the paragraph above the line (or, with
+`@tidy all`, everything above it) and never runs a model. A model-backed agent is the same folder
+with `respond` calling one: `"effects": "spend"`, a `"deadline"` up to `"5m"`, and its key as a
+secret reference.
 
 ## Kind 4: a whole tile
 

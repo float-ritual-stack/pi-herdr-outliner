@@ -126,6 +126,10 @@ source evidence or distinguish authored glyphs from controls.
   kept inside the block, attributed `ext:<id>`). `src/component-primitives.ts`
   owns the shared primitive catalogue and the render targets with their
   fallback chain; a client draws those primitives, never a component by name.
+  `src/agent-requests.ts` owns `@name` request lines (PIE-501): which lines
+  are requests, who wrote them (a person's run once quiet, an agent's wait for
+  `r`), the `respond` call, and applying its patches through `draft.patch`
+  (never its own write path); results show in the same projection slot.
   `src/extension-install.ts` is `outliner ext ls|add|remove|act`. The four kinds
   and their contracts: [docs/extensions/README.md](docs/extensions/README.md).
 - `src/door-control.ts` is a client of ep0ch-door's control socket (the door's

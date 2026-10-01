@@ -4,6 +4,16 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+### Agents addressed while you write (PIE-501)
+
+- An extension can declare `agents[]`. A person's `@name …` line (quiet for a
+  moment, outside code) runs that agent's `respond` with the note as the person
+  sees it. Its patches apply as an attributed edit through `draft.patch` with the
+  `edit` policy, landing in a door's live draft when one holds the note; only a
+  failed compare becomes a proposal under the line. A reply shows under the
+  line. Each request runs once; `r` asks again; a line an agent wrote waits for
+  `r`. Example: `extensions/tidy` (`@tidy`, `@tidy all`).
+
 ### Extensions wave B: watched folders and the four kinds (PIE-507)
 
 - Extension folders are watched: `<outline root>/extensions/<id>/` and

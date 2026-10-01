@@ -136,6 +136,24 @@ const Tile = Type.Object(
 );
 export type ExtensionTile = Static<typeof Tile>;
 
+/**
+ * An agent addressed from inside a note (`@tidy …`, PIE-501): a person writes
+ * the request line and keeps typing; the service runs `respond` and applies
+ * its patches as an attributed edit (`draft.patch`, the `edit` policy), or
+ * shows its reply under the line.
+ */
+const Agent = Type.Object(
+  {
+    name: ID,
+    description: Type.Optional(Type.String({ maxLength: 300 })),
+    /** `spend`: it costs money or model time (said in listings; a request line is the consent either way). */
+    effects: Type.Optional(Type.Union([Type.Literal("read"), Type.Literal("spend")])),
+    deadline: Type.Optional(Duration),
+  },
+  { additionalProperties: false },
+);
+export type ExtensionAgent = Static<typeof Agent>;
+
 const ManifestV2 = Type.Object(
   {
     contract: Type.Literal(2),
@@ -152,6 +170,7 @@ const ManifestV2 = Type.Object(
     handlers: Type.Optional(Type.Array(Handler, { maxItems: 16 })),
     actions: Type.Optional(Type.Array(Action, { maxItems: 32 })),
     tiles: Type.Optional(Type.Array(Tile, { maxItems: 8 })),
+    agents: Type.Optional(Type.Array(Agent, { maxItems: 8 })),
   },
   { additionalProperties: false },
 );
@@ -309,9 +328,16 @@ function checkManifest(manifest: ExtensionManifest): void {
       throw new ExtensionLoadError(`extension.json: actions/${index}/on names tile ${action.on.slice(5)}, which this extension doesn't declare`);
     }
   }
-  const needsRun = (manifest.handlers ?? []).length > 0 || (manifest.actions ?? []).length > 0;
-  if (needsRun && !manifest.run) throw new ExtensionLoadError("extension.json: handlers and actions need run (the program each call starts)");
-  if (!needsRun && !(manifest.tiles ?? []).length) throw new ExtensionLoadError("extension.json declares nothing: add handlers, actions or tiles");
+  const agentNames = new Set<string>();
+  for (const [index, agent] of (manifest.agents ?? []).entries()) {
+    if (agentNames.has(agent.name)) throw new ExtensionLoadError(`extension.json: agents/${index}/name ${agent.name} is declared twice`);
+    agentNames.add(agent.name);
+    const agentDeadline = durationMs(agent.deadline);
+    if (agentDeadline !== undefined && agentDeadline > MAX_DEADLINE_MS) throw new ExtensionLoadError(`extension.json: agents/${index}/deadline is longer than 5m`);
+  }
+  const needsRun = (manifest.handlers ?? []).length > 0 || (manifest.actions ?? []).length > 0 || agentNames.size > 0;
+  if (needsRun && !manifest.run) throw new ExtensionLoadError("extension.json: handlers, actions and agents need run (the program each call starts)");
+  if (!needsRun && !(manifest.tiles ?? []).length) throw new ExtensionLoadError("extension.json declares nothing: add handlers, actions, agents or tiles");
 }
 
 /** `bun` in an argv means the service's own Bun, so a folder works wherever the service runs. */

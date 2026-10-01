@@ -134,7 +134,11 @@ export function handlerCalls(text: string, table: HandlerTable): HandlerCall[] {
   return calls;
 }
 
-/** Cheap guard for readers: could this text hold a handler line (any `key::` line)? The service decides. */
+/**
+ * Cheap guard for readers: could this text hold a handler line (any `key::`
+ * line) or an agent request (an `@name` line)? The service decides.
+ */
 export function mayHaveHandlerLines(text: string): boolean {
-  return text.includes("::") && /^[ \t]*(?:[-*+][ \t]+)?[A-Za-z][A-Za-z0-9_.-]*::/m.test(text);
+  return (text.includes("::") && /^[ \t]*(?:[-*+][ \t]+)?[A-Za-z][A-Za-z0-9_.-]*::/m.test(text)) ||
+    (text.includes("@") && /^[ \t]*(?:[-*+][ \t]+)?@[a-z]/m.test(text));
 }

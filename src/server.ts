@@ -33,6 +33,7 @@ import { readAuthoredLinks } from "./authored-links";
 import { normalizeResourceProjectionRequest, readResourceProjections, type ResourceProjectionReadResult } from "./resource-projection";
 import { ExtensionSync } from "./extension-sync";
 import { ExtensionCalls } from "./extension-calls";
+import { AgentRequests } from "./agent-requests";
 import { ExtensionRegistry, extensionRoots } from "./extension-registry";
 import { ResourceExtensionRuntime } from "./resource-extensions";
 import { InstalledResourceProviderClient } from "./installed-resource-provider";
@@ -234,6 +235,8 @@ export class OutlinerServer {
   readonly extensionRegistry: ExtensionRegistry;
   /** Handler lines, their results, and actions (src/extension-calls.ts). */
   readonly extensionCalls: ExtensionCalls;
+  /** `@name` request lines and what their agents did (src/agent-requests.ts). */
+  readonly agentRequests: AgentRequests;
   /** The extension ids the registry had at its last change. */
   private knownExtensions = new Set<string>();
 
@@ -242,7 +245,7 @@ export class OutlinerServer {
     readonly socketPath: string,
     readonly herdrRegistry?: HerdrRuntimeRegistry,
     private readonly promptDirectory?: string,
-    options: { stateDirectory?: string; extensionPollMs?: number } = {},
+    options: { stateDirectory?: string; extensionPollMs?: number; agentRequestQuietMs?: number } = {},
   ) {
     this.stateDirectory = options.stateDirectory ?? dirname(socketPath);
     this.workflows = new WorkflowManager(store);
@@ -291,7 +294,16 @@ export class OutlinerServer {
     // Jira's Resource path reads the same folders, so a jira folder in the outline works like the user's.
     const catalogClient = store.resources.remoteEntityProviderClient;
     if (catalogClient instanceof InstalledResourceProviderClient) catalogClient.runtime.useFolders(roots.map((root) => root.path));
-    this.extensionCalls = new ExtensionCalls(store, this.extensionRegistry, new ResourceExtensionRuntime(undefined, 15_000, roots.map((root) => root.path)), {
+    const extensionRuntime = new ResourceExtensionRuntime(undefined, 15_000, roots.map((root) => root.path));
+    this.agentRequests = new AgentRequests(store, this.extensionRegistry, extensionRuntime, {
+      readDraft: (blockId) => this.draftPatches.read(blockId),
+      patch: (input) => this.draftPatches.patch(input),
+      changed: (blockId) => this.broadcast({
+        id: crypto.randomUUID(), domain: "resource-catalog", action: "extensions.agent", sequence: this.store.sequence, blockId,
+      }),
+      ...(options.agentRequestQuietMs !== undefined ? { quietMs: options.agentRequestQuietMs } : {}),
+    });
+    this.extensionCalls = new ExtensionCalls(store, this.extensionRegistry, extensionRuntime, {
       changed: (blockId) => this.broadcast({
         id: crypto.randomUUID(), domain: "resource-catalog", action: "extensions.output", sequence: this.store.sequence, blockId,
       }),
@@ -371,6 +383,7 @@ export class OutlinerServer {
     this.extensionSync.stop();
     this.extensionRegistry.stop();
     this.extensionCalls.stop();
+    this.agentRequests.stop();
     await this.inbox?.stop();
     const server = this.server;
     if (!server && !this.hosted) return;
@@ -824,7 +837,7 @@ export class OutlinerServer {
 
   /** Jira's projections and the extension handler lines' (`extensions.outputs`), in line order. */
   private withExtensionProjections(read: ResourceProjectionReadResult, line?: number): ResourceProjectionReadResult {
-    const handlers = this.extensionCalls.projections(read.blockId, line);
+    const handlers = [...this.extensionCalls.projections(read.blockId, line), ...this.agentRequests.projections(read.blockId, line)];
     if (!handlers.length) return read;
     // A requested line that is a handler line shows that handler, not a ticket resolved from its context.
     const handlerLines = new Set(handlers.map((projection) => projection.anchor.line));
@@ -1579,7 +1592,9 @@ export class OutlinerServer {
         if (handlerLines.length) {
           await this.extensionCalls.materialize(normalized.blockId, "refresh", normalized.line !== undefined ? { line: normalized.line } : {});
         }
-        const onlyHandlers = dataRecord || (handlerLines.length > 0 && normalized.line !== undefined);
+        // `r` on an `@name` line (or on the note) asks its agent again.
+        const asked = !dataRecord && !record && await this.agentRequests.refresh(normalized.blockId, normalized.line);
+        const onlyHandlers = dataRecord || ((handlerLines.length > 0 || asked) && normalized.line !== undefined);
         // One line's ticket (a click on its age), the ticket block's own, or every ticket the block shows.
         const one = !onlyHandlers && normalized.line !== undefined && !record
           ? readResourceProjections(this.store, normalized).projections.find((projection) => projection.resourceId)
@@ -2944,6 +2959,7 @@ export class OutlinerServer {
         !isExtensionActor(event.change.actor?.actorId)) {
         this.extensionSync.blockChanged(event.blockId);
         this.extensionCalls.blockChanged(event.blockId, event.change.actor, event.change.kind === "create");
+        this.agentRequests.blockChanged(event.blockId, event.change.actor);
       }
     }
     if (events.some(event => event.domain === "content")) this.inbox?.wake();

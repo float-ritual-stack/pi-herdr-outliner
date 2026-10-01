@@ -1743,6 +1743,12 @@ export const OUTLINER_CAPABILITIES = [
   "extensions.render",
   /** `extensions.act`: run an extension's action (or the built-in `keep`); its writes are attributed `ext:<id>`. */
   "extensions.act",
+  /**
+   * Agents addressed while you write (PIE-501): a person's `@name …` line runs the agent an extension declares;
+   * its edit applies through `draft.patch` (`edit` policy), or its reply shows under the line. Projections of
+   * kind `agent`; `resources.projection.refresh` on the line asks again.
+   */
+  "extensions.agents",
 ] as const;
 
 /**
