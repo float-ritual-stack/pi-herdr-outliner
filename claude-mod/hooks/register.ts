@@ -13,6 +13,9 @@ import {
   isProtectedDestination,
   linkifyReferences,
   type OutlinerClient,
+  outlinerBlockIdOf,
+  outlinerLabelOf,
+  outlinerReferenceOf,
   outlinerUriFor,
   outlinerUriOf,
   scratchPaneOf,
@@ -503,11 +506,6 @@ function openNote($: EngineInterface, workspace: string | null, uri: string, act
   return shown
 }
 
-/** What a `pi-outliner://` URI names, as the person reads it: the Work ID, page name or block id. */
-const labelOf = (uri: string) => decodeURIComponent(uri.slice(uri.indexOf('/', 'pi-outliner://'.length) + 1))
-
-const BLOCK_URI = /^pi-outliner:\/\/block\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
-
 async function openNow($: EngineInterface, workspace: string | null, uri: string, actor: string): Promise<Shown> {
   const [control, tile, tileId, paneId, herdrWorkspace] = await Promise.all([
     $.env.get('EP0CH_CONTROL'),
@@ -530,7 +528,7 @@ async function openNow($: EngineInterface, workspace: string | null, uri: string
   const resolve = async () => {
     if (target) return target
     if (!workspace) {
-      const id = BLOCK_URI.exec(uri)?.[1]?.toLowerCase()
+      const id = outlinerBlockIdOf(uri)
       if (!id) throw Error('this session is not in a configured Outliner workspace to resolve it in; give a block id')
       return (target = { id })
     }
@@ -561,14 +559,13 @@ async function openNow($: EngineInterface, workspace: string | null, uri: string
     return { title: await showInHerdrPane($, outliner, workspace, uri), place: 'pane' }
   }
   why += paneId && herdrWorkspace ? ', and not in a configured Outliner workspace for a Herdr pane' : ', nor in Herdr'
-  const label = labelOf(uri)
+  const label = outlinerLabelOf(uri)
   let ref: string
   try {
     ref = `((${(await resolve()).id}))`
   } catch {
     // Unresolved here: the reference as the outline writes it.
-    const block = BLOCK_URI.exec(uri)?.[1]?.toLowerCase()
-    ref = block ? `((${block}))` : uri.startsWith('pi-outliner://page/') ? `[[${label}]]` : label
+    ref = outlinerReferenceOf(uri)
   }
   throw new NotOpenedHere(`Can't open ${label} here: ${why}. Copy ${ref} to open it in the Outliner.`)
 }
@@ -642,6 +639,6 @@ async function openReference($: EngineInterface, workspace: string, href: string
   } catch (error) {
     if (error instanceof NotOpenedHere) return $.ui.toast(error.message, { timeoutMs: 12_000 })
     const reason = error instanceof Error ? error.message : String(error)
-    $.ui.toast(`Could not open ${labelOf(uri)} in the Outliner: ${reason}`, { timeoutMs: 6000 })
+    $.ui.toast(`Could not open ${outlinerLabelOf(uri)} in the Outliner: ${reason}`, { timeoutMs: 6000 })
   }
 }

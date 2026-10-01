@@ -1,6 +1,6 @@
 import { describe, expect, test, tier } from 'claude-code/testing'
 
-import { detailSplitArgv, linkifyReferences, outlinerUriFor, outlinerUriOf, scratchPaneOf } from '../hooks/references'
+import { detailSplitArgv, linkifyReferences, outlinerReferenceOf, outlinerUriFor, outlinerUriOf, scratchPaneOf } from '../hooks/references'
 
 tier('user')
 
@@ -93,5 +93,12 @@ describe('references', () => {
     expect(outlinerUriFor('pi-outliner://work/PIE-1')).toBe('pi-outliner://work/PIE-1')
     expect(outlinerUriFor('Daily notes')).toBe('pi-outliner://page/Daily%20notes')
     expect(outlinerUriFor('  ')).toBeNull()
+  })
+
+  test('a URI goes back to the reference the outline writes: ((id)), [[page]], the Work ID', () => {
+    for (const reference of [`((${UUID}))`, '[[Daily notes]]', 'PIE-7']) {
+      expect(outlinerReferenceOf(outlinerUriFor(reference)!)).toBe(reference)
+    }
+    expect(outlinerReferenceOf(`pi-outliner://block/${UUID.toUpperCase()}`)).toBe(`((${UUID}))`)
   })
 })

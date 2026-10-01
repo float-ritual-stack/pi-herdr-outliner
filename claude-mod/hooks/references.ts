@@ -107,6 +107,26 @@ export function outlinerUriFor(reference: string): string | null {
   return `pi-outliner://page/${encodeURIComponent(text)}`
 }
 
+/** What a `pi-outliner://` URI names, as the person reads it: the Work ID, page name or block id. */
+export function outlinerLabelOf(uri: string): string {
+  return decodeURIComponent(uri.slice(uri.indexOf('/', 'pi-outliner://'.length) + 1))
+}
+
+/** The block id a `pi-outliner://block/…` URI names, lowercased; null for a page, Work ID or anything else. */
+export function outlinerBlockIdOf(uri: string): string | null {
+  return new RegExp(`^pi-outliner://block/(${UUID})$`).exec(uri)?.[1]?.toLowerCase() ?? null
+}
+
+/**
+ * The reference the outline writes for a URI, the reverse of `outlinerUriFor`:
+ * `((id))` for a block, `[[page]]` for a page, the Work ID itself.
+ */
+export function outlinerReferenceOf(uri: string): string {
+  const block = outlinerBlockIdOf(uri)
+  if (block) return `((${block}))`
+  return uri.startsWith('pi-outliner://page/') ? `[[${outlinerLabelOf(uri)}]]` : outlinerLabelOf(uri)
+}
+
 /**
  * Whether a navigation failed only because its destination is mid-edit (or
  * holding a source selection): the Outliner protects it, and a new Detail is
