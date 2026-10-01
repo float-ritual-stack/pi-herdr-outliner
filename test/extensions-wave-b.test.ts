@@ -226,7 +226,8 @@ test("moon (data): a record put into a block as if copied in, queryable, owned, 
 test("horoscope (inline output): runs on save, is shown under its line, kept as a block on keep, and refreshed on r", async () => {
   const { store, client, create, projection, events } = await setup({ install: ["horoscope"] });
   const block = await create("Morning\nhoroscope:: virgo\nhoroscope:: virgo --short\nhoroscope:: leo --day=tomorrow");
-  const first = await projection(block.id, "output");
+  // The first line's: under load the leo line can be ready first (PIE-509 saw it).
+  const first = await projection(block.id, "output", (p) => p.status === "ready" && p.anchor?.line === 1);
   expect(first).toMatchObject({ provider: "horoscope", propertyKey: "horoscope", key: "virgo", anchor: { line: 1 },
     extension: { id: "horoscope", handler: "horoscope", effects: "read" } });
   expect(first.output!.markdown).toMatch(/^\*\*Virgo, \d{4}-\d{2}-\d{2}\.\*\* /);
@@ -378,6 +379,19 @@ test("tarot (a tile kind): listed for the door's registry; its program keeps a r
   program.stdin.write("q");
   await program.stdin.flush();
   expect(await program.exited).toBe(0);
+});
+
+test.skipIf(process.platform !== "linux" || !Bun.which("script"))("tarot's tile fits a narrow tile: no line is wider than the tile, so nothing wraps (PIE-509)", async () => {
+  const dir = join(import.meta.dir, "../extensions/tarot");
+  // A real terminal 20 columns wide (util-linux script), as a door's narrow tile is.
+  const program = Bun.spawn(["script", "-qec", `stty cols 20 rows 12; exec ${process.execPath} tile.ts`, "/dev/null"], { cwd: dir, env: { ...process.env, OUTLINER_SOCKET_PATH: "" }, stdin: "pipe", stdout: "pipe" });
+  await Bun.sleep(800);
+  program.stdin.write("q");
+  await program.stdin.flush();
+  await program.exited;
+  const screen = (await new Response(program.stdout).text()).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").split(/\r?\n/).filter((line) => line.trim());
+  expect(screen.some((line) => line.startsWith("┌") && line.endsWith("┐"))).toBe(true);
+  for (const line of screen) expect([...line.replace(/\r/g, "")].length).toBeLessThanOrEqual(20);
 });
 
 // ── The CLI ──────────────────────────────────────────────────────────────

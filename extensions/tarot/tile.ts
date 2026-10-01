@@ -39,19 +39,23 @@ let status = args.block ? "d draws again · k keeps it · q closes" : "d draws a
 let card: Card = draw(`${new Date().toISOString().slice(0, 10)} 0`);
 
 function paint(): void {
-  const width = Math.max(30, Math.min(process.stdout.columns ?? 60, 60));
+  // As wide as the tile, at most 60: a box wider than the tile would wrap into a mess (PIE-509 saw one at 20).
+  const cols = process.stdout.columns ?? 60;
+  const width = Math.max(8, Math.min(cols, 60));
+  const fit = (text: string, n: number) => (text.length > n ? `${text.slice(0, Math.max(0, n - 1))}…` : text);
   const line = (text = "") => `│ ${text.padEnd(width - 4)} │`;
-  const meaning = card.meaning.length > width - 4 ? `${card.meaning.slice(0, width - 5)}…` : card.meaning;
+  const meaning = fit(card.meaning, width - 4);
+  const name = fit(`${card.name}${card.upright ? "" : " (reversed)"}`, width - 4);
   process.stdout.write("\x1b[2J\x1b[H");
   process.stdout.write([
     `┌${"─".repeat(width - 2)}┐`,
-    line(`\x1b[1m${card.name}\x1b[0m${card.upright ? "" : " (reversed)"}`.padEnd(width - 4 + 8)),
+    `│ \x1b[1m${name}\x1b[0m${" ".repeat(Math.max(0, width - 4 - name.length))} │`,
     line(),
     line(meaning),
     line(),
     `└${"─".repeat(width - 2)}┘`,
     "",
-    status,
+    fit(status, cols),
   ].join("\n"));
 }
 

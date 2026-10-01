@@ -227,6 +227,9 @@ describe("draft.patch over the protocol", () => {
     expect(store.require(note.id).text).toContain("The beans go along the fence.");
     expect(store.require(result.proposalId).properties).toEqual(expect.arrayContaining([{ key: "proposal-status", value: "applied" }]));
     expect(store.require(result.proposalId).text).toStartWith("Applied anyway: 1 edit from @tidy, which didn't apply at first because the note was saved since it was read");
+    // Its body says what was done, not what A would do (PIE-509).
+    expect(store.require(result.proposalId).text).toContain(". Applied as an ordinary edit.");
+    expect(store.require(result.proposalId).text).not.toContain("A applies it anyway");
     await expect(client.request({ action: "draft.proposal.apply", proposalId: result.proposalId, mutation: { author: "user" } })).rejects.toThrow("already applied");
   });
 
@@ -560,5 +563,7 @@ describe("the edit policy (the default)", () => {
     await client.request({ action: "draft.proposal.apply", proposalId: proposal.id, mutation: { author: "user" } });
     expect(store.require(page.id).text.split("\n!((")[0]).toBe(UPDATED);
     expect(store.require(proposal.id).text.split("\n")[0]).toBe("Applied anyway: 1 edit (6 changes) from @claude-code, which didn't apply at first because change 1 would drop [[Seed Swap]]; a prose edit keeps them [type::draft-proposal] [proposal-status::applied]");
+    expect(store.require(proposal.id).text).toContain(": one edit, its 6 changes applied together as one ordinary edit.");
+    expect(store.require(proposal.id).text).not.toContain("A applies all of them anyway");
   });
 });

@@ -396,6 +396,9 @@ export function withProposalApplied(text: string): string {
     ? text
       .replace(/^1 proposed edit( \(\d+ changes\))? from (.*?): not applied, because /, "Applied anyway: 1 edit$1 from $2, which didn't apply at first because ")
       .replace(/ · A applies (?:all|it)(?= \[type::)/, "")
+      // Its body said what A would do; now it says what was done.
+      .replace(/^(To .*?)\. A applies it anyway, as an ordinary edit\.$/m, "$1. Applied as an ordinary edit.")
+      .replace(/^(To .*?): one edit, its (\d+) changes applied together or not at all\. A applies all of them anyway, as one ordinary edit\.$/m, "$1: one edit, its $2 changes applied together as one ordinary edit.")
     // A proposal from before the header named one edit and its changes.
     : text.replace(/^Proposed edit from (.*?): not applied, /, "Applied anyway: edit from $1, which didn't apply at first: ");
   return title.replace(/\[proposal-status::[a-z-]+\]/, "[proposal-status::applied]");
