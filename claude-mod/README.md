@@ -120,7 +120,7 @@ comes back as the tool's error with the reason.
 | `outline_reply` | `thread`, `body` | the `reply` id |
 | `outline_resolve_thread` | `thread`, `resolved` | the thread's `lifecycle` |
 | `outline_changes` | `since` (an ISO time or a returned `cursor`), `author?`, `actor?`, `limit?`, `before?` | each changed block once, newest first, with who changed it; `complete`, with `before` for the older page when it is false; the next `cursor` |
-| `outline_patch` | `ref`, `revision`, `patches: [{observed, replacement}]`, `mark?` | `draft.patch`'s outcome: `applied`, or `proposed` with the reason |
+| `outline_patch` | `ref`, `revision`, `patches: [{observed, replacement}]`, `mark?`, `policy?` (`edit`, the default, or `prose`), `allowStructural?` | `draft.patch`'s outcome: `applied`, or `proposed` with the reason |
 
 A `ref` is a block id, `((id))`, `[[page]]` or a Work ID. A title is refused:
 find it with `outline_find` first.
@@ -129,13 +129,17 @@ find it with `outline_find` first.
   an empty or whitespace-only result, a revision that isn't the block's (read it
   again), and an edit that drops a `[page::…]` or an `^anchor` another note
   links to, unless `allowStructural: true` (the check is `refuseDroppedStructure`
-  in `src/work-tools.ts`, over `droppedStructure` in `src/draft-patch.ts`). An
+  in `src/work-tools.ts`, over `droppedLinkedStructure` and `droppedStructure`). An
   agent's `note_section` and `work_body` get the same check, with no way past it:
   removing them is an `outline_edit` with `allowStructural`.
-- For a small prose fix in a note the person may be typing in, `outline_patch`
-  sends `draft.patch`: the door holding the live draft applies it in place, and
-  a patch that would change links, anchors or properties becomes a proposal
-  the person can apply.
+- Rewriting your own pages, such as a status page, is `outline_edit`. For small
+  edits to a note the person may be typing in, `outline_patch` sends
+  `draft.patch`: the door holding the live draft applies it in place, and with
+  none it is an ordinary edit of the saved note. Its default policy, `edit`, is
+  `outline_edit`'s guard (`allowStructural` likewise), refused as an error;
+  `policy: "prose"` keeps every link, anchor and property. A patch whose text
+  changed under it, or that `prose` refuses, becomes one proposal the person
+  can apply.
 - Every write is `author: agent`, with the session id as provenance, and an
   actor id: the call's `actor`, else `OUTLINER_ACTOR`, else `EP0CH_AGENT` (the
   name the door shows for the agent), else `claude-code`. The workboard tools

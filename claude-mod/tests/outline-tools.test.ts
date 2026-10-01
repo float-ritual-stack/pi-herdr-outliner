@@ -86,7 +86,7 @@ const CALLS: Array<{ tool: string; input: Record<string, unknown>; operation: st
   { tool: 'outline_changes', input: { since: '2026-03-01T00:00:00Z', actor: 'garden-agent' }, operation: 'changes',
     json: { since: '2026-03-01T00:00:00Z', actor: 'garden-agent' } },
   { tool: 'outline_patch', input: { ref: NOTE, revision: 3, patches: [{ observed: 'runner  beans', replacement: 'runner beans' }] }, operation: 'patch',
-    json: { ref: NOTE, revision: 3, patches: [{ observed: 'runner  beans', replacement: 'runner beans' }] } },
+    json: { policy: 'edit', ref: NOTE, revision: 3, patches: [{ observed: 'runner  beans', replacement: 'runner beans' }] } },
 ]
 
 describe('outline tools', () => {
@@ -104,6 +104,22 @@ describe('outline tools', () => {
       expect(run.init?.cwd).toBe(WORKSPACE)
       expect(run.init?.env).toEqual({ OUTLINER_WORKSPACE_ROOT: WORKSPACE })
     }
+  })
+
+  test('a patch is an edit unless it asks for prose; allowStructural passes through; another policy never runs', async ($, on) => {
+    const session = sessionIn(on, () => undefined)
+    await session.begin(() => $.session.start(START))
+    const patches = [{ observed: 'see [[Seed Swap]]', replacement: 'see the swap' }]
+    await $.tool.call({ tool: 'mcp__pi-outliner__outline_patch', ref: NOTE, revision: 3, patches })
+    expect(JSON.parse(session.agentRuns().at(-1)!.init!.stdin!)).toEqual({ policy: 'edit', ref: NOTE, revision: 3, patches })
+    await $.tool.call({ tool: 'mcp__pi-outliner__outline_patch', ref: NOTE, revision: 3, patches, policy: 'prose' })
+    expect(JSON.parse(session.agentRuns().at(-1)!.init!.stdin!)).toMatchObject({ policy: 'prose' })
+    await $.tool.call({ tool: 'mcp__pi-outliner__outline_patch', ref: NOTE, revision: 3, patches, allowStructural: true })
+    expect(JSON.parse(session.agentRuns().at(-1)!.init!.stdin!)).toMatchObject({ policy: 'edit', allowStructural: true })
+    const runs = session.agentRuns().length
+    const odd = await $.tool.call({ tool: 'mcp__pi-outliner__outline_patch', ref: NOTE, revision: 3, patches, policy: 'tidy' })
+    expect(odd.deny).toContain('edit (the default) or prose')
+    expect(session.agentRuns().length).toBe(runs)
   })
 
   test('a read comes back with the full text, not the title', async ($, on) => {

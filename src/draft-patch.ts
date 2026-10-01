@@ -5,8 +5,12 @@
  * - compare: the observed text and the revision it was read at (the range is a
  *   hint; `src/draft-patch-compare.ts`, which the door copies, finds it);
  * - swap: the replacement, attributed to the agent;
- * - policy: when a compare that succeeds may apply (`draftPatchPolicy`): prose
- *   only, every structural token in the span kept, the span above the mark;
+ * - policy: when a compare that succeeds may apply. `edit` (the default) is the
+ *   guard every agent edit has (`droppedLinkedStructure` in `src/work-tools.ts`):
+ *   no dropped `[page::…]`, no dropped `^anchor` another note links to, unless
+ *   `allowStructural`. `prose` (opt-in, for tidying text the person is typing)
+ *   keeps every structural token (`draftPatchPolicy`, `draftPatchTextPolicy`).
+ *   Either way the spans end above the mark;
  * - failure: the proposal lands as a reply block embedded under the mark or the
  *   note (`proposalText`), and "apply anyway" applies it as an ordinary edit.
  *
@@ -29,6 +33,14 @@ export const DRAFT_HOLD_MAX_LEASE_MS = 120_000;
 /** How long the service waits for a holding door to answer before it counts the hold as gone. */
 export const DRAFT_HOLDER_TIMEOUT_MS = 2_500;
 
+/**
+ * Which rule a patch that matches is held to. `edit`: the guard every agent edit has, so a dropped
+ * `[[link]]` or `((ref))` is the edit's business, but a dropped `[page::…]` or a linked `^anchor` is
+ * refused (unless `allowStructural`). `prose`: a tidy of the person's words keeps every structural token.
+ */
+export type DraftPatchPolicyName = "edit" | "prose";
+export const DRAFT_PATCH_POLICIES: readonly DraftPatchPolicyName[] = ["edit", "prose"];
+
 /** One note's part of a patch. */
 export interface DraftPatchEdit {
   blockId: string;
@@ -50,10 +62,15 @@ export interface DraftPatchInput {
   mutation: MutationProvenance;
   /**
    * The mark: the `@request` line a span must end above (its text, as a line of
-   * the note), and the note it is in (default the first edit's). Without one, a
-   * live draft uses the start of the person's cursor's block.
+   * the note), and the note it is in (default the first edit's). Without one,
+   * nothing limits where a span may be but the person's cursor: a live draft
+   * refuses a span around it.
    */
   mark?: { text: string; blockId?: string };
+  /** The rule a matching patch is held to; default `edit`. */
+  policy?: DraftPatchPolicyName;
+  /** Under the `edit` policy: dropping a `[page::…]` or a linked `^anchor` is the point. */
+  allowStructural?: boolean;
 }
 
 export type DraftPatchRoute = "draft" | "saved";
@@ -281,6 +298,14 @@ export interface DraftProposal {
   mark?: { text: string; blockId?: string };
   reason: string;
   actor: { author: MutationProvenance["author"]; actorId?: string };
+  /** The rule the patch was sent under; a proposal without one predates `edit` and was `prose`. */
+  policy?: DraftPatchPolicyName;
+  allowStructural?: boolean;
+}
+
+/** How many changes (spans) a proposal holds, across its notes. */
+export function proposalChanges(proposal: Pick<DraftProposal, "edits">): number {
+  return proposal.edits.reduce((count, edit) => count + edit.patches.length, 0);
 }
 
 /** A code fence that no run of backticks in `text` can close. */
@@ -299,7 +324,9 @@ function labelOf(title: string): string {
  * The reply block's text: who proposed what, why it didn't apply, what it
  * would change (fenced, so its links stay text), and the patch itself as a
  * metadata property (`[draft-patch::…]`, base64url JSON: inert, and hidden by
- * readers like any metadata line).
+ * readers like any metadata line). A patch is one proposal however many
+ * changes it holds, applied whole or not at all, and its header says so:
+ * `1 proposed edit (6 changes) from @agent: not applied, because change 1 would … · A applies all`.
  */
 export function proposalText(proposal: DraftProposal, names: (blockId: string) => string = id => id): string {
   const payload = Buffer.from(JSON.stringify(proposal), "utf8").toString("base64url");
@@ -308,14 +335,20 @@ export function proposalText(proposal: DraftProposal, names: (blockId: string) =
   }
   const who = proposal.actor.actorId ? `@${proposal.actor.actorId}` : proposal.actor.author === "agent" ? "an agent" : "someone";
   const targets = [...new Set(proposal.edits.map(edit => edit.blockId))].map(id => `((${id}|${labelOf(names(id))}))`).join(", ");
+  const changes = proposalChanges(proposal);
+  const many = changes > 1;
   const lines = [
-    `Proposed edit from ${who}: not applied, ${proposal.reason} [type::${DRAFT_PROPOSAL_TYPE}] [proposal-status::open]`,
+    `1 proposed edit${many ? ` (${changes} changes)` : ""} from ${who}: not applied, because ${proposal.reason} · A applies ${many ? "all" : "it"} [type::${DRAFT_PROPOSAL_TYPE}] [proposal-status::open]`,
     `[draft-patch::${payload}]`,
-    `To ${targets}. A applies it anyway, as an ordinary edit.`,
+    many
+      ? `To ${targets}: one edit, its ${changes} changes applied together or not at all. A applies all of them anyway, as one ordinary edit.`
+      : `To ${targets}. A applies it anyway, as an ordinary edit.`,
   ];
+  let change = 0;
   for (const edit of proposal.edits) {
-    for (const [index, span] of edit.patches.entries()) {
-      lines.push("", `In ${labelOf(names(edit.blockId))}${edit.patches.length > 1 ? ` (${index + 1} of ${edit.patches.length})` : ""}, this:`,
+    for (const span of edit.patches) {
+      change += 1;
+      lines.push("", many ? `Change ${change} of ${changes}, in ${labelOf(names(edit.blockId))}: this` : `In ${labelOf(names(edit.blockId))}, this:`,
         ...shownSpan(span));
     }
   }
@@ -350,12 +383,15 @@ export function parseProposal(text: string): DraftProposal | null {
   }
 }
 
-/** The proposal's status token, after "apply anyway" or a refusal. */
-export function withProposalStatus(text: string, status: "open" | "applied"): string {
-  const title = status === "applied"
-    ? text.replace(/^Proposed edit from (.*?): not applied, /, "Applied anyway: edit from $1, which didn't apply at first: ")
-    : text.replace(/^Applied anyway: edit from (.*?), which didn't apply at first: /, "Proposed edit from $1: not applied, ");
-  return title.replace(/\[proposal-status::[a-z-]+\]/, `[proposal-status::${status}]`);
+/** A proposal's text once "apply anyway" applied it: its header says so, and its status token. */
+export function withProposalApplied(text: string): string {
+  const title = /^1 proposed edit/.test(text)
+    ? text
+      .replace(/^1 proposed edit( \(\d+ changes\))? from (.*?): not applied, because /, "Applied anyway: 1 edit$1 from $2, which didn't apply at first because ")
+      .replace(/ · A applies (?:all|it)(?= \[type::)/, "")
+    // A proposal from before the header named one edit and its changes.
+    : text.replace(/^Proposed edit from (.*?): not applied, /, "Applied anyway: edit from $1, which didn't apply at first: ");
+  return title.replace(/\[proposal-status::[a-z-]+\]/, "[proposal-status::applied]");
 }
 
 /** The embed line a proposal gets under the mark or at the end of the note. */

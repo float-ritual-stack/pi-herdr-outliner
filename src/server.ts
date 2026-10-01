@@ -1,4 +1,5 @@
 import { queryRequestProblem } from "./block-query";
+import type { RequestInput } from "./client";
 import { DRAFT_PATCH_COMPARE_VERSION } from "./draft-patch-compare";
 import { DRAFT_HOLDER_TIMEOUT_MS, DraftHolds, type DraftHold, type DraftHolderAnswer } from "./draft-patch";
 import { DraftPatchRouter, type DraftHolderAsk } from "./draft-patch-router";
@@ -243,6 +244,14 @@ export class OutlinerServer {
       holds: this.draftHolds,
       isLive: clientId => this.hasClient(clientId),
       ask: (hold, request) => this.askHolder(hold, request),
+      // The edit policy's guard reads backlinks and block text through the service's own handler.
+      client: {
+        request: async <T>(input: RequestInput): Promise<T> => {
+          const response = this.handle({ id: crypto.randomUUID(), ...input } as OutlinerRequest);
+          if (!response.ok) throw new Error(response.error);
+          return response.result as T;
+        },
+      },
     });
     // Baseline before accepting edits or awaiting provider configuration.
     this.noteRepository.initialize();

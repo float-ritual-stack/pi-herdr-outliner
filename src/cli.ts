@@ -518,7 +518,7 @@ switch (command) {
       read: read.route,
       ...(await client.request<object>({
         action: "draft.patch", blockId: values.block, revision: read.revision, patches: [span],
-        mark: { text: values["tidy-above"] },
+        mark: { text: values["tidy-above"] }, policy: "prose",
         mutation: { author: "agent", actorId: values.actor!, ...(values.session ? { sessionId: values.session } : {}) },
       }, 15_000)),
     };

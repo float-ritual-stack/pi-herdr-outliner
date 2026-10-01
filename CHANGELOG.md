@@ -66,6 +66,18 @@ These shipped with README or PR notes but no changelog line. Newest first.
 
 ### Recorded with their PRs
 
+- `draft.patch` has two policies. `edit`, the default, is the guard every agent
+  edit has (`droppedLinkedStructure`, shared with `outline_edit`): only a
+  dropped `[page::…]` or a dropped `^anchor` another note links to is refused,
+  as an error with nothing written, unless `allowStructural`. A dropped
+  `[[link]]` or `((ref))` applies, as an ordinary attributed edit when no door
+  holds a draft of the note, or into the draft when one does. `prose` (opt-in,
+  for tidying the person's words; `outliner patch-demo` uses it) keeps every
+  structural token, and what it refuses becomes a proposal as before. Only a
+  compare that fails or a prose refusal parks a proposal, and a proposal reads
+  as one: `1 proposed edit (6 changes) from @agent: not applied, because change
+  1 would … · A applies all`. `outline_patch` takes `policy` (default `edit`) and
+  `allowStructural`.
 - Outline tools for agents in the Claude mod (PIE-504): `outline_read` (full
   text, properties, revision, bounded children, completeness), `outline_find`,
   `outline_resolve`, `outline_edit` (revision-checked; refuses an empty write

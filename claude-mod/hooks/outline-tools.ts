@@ -110,8 +110,8 @@ export const OUTLINE_TOOLS: readonly OutlineToolDefinition[] = [
       '`replaceSection` (the text under a heading, subheadings included, as Detail folds it), or an `append` at the end. Give exactly one. ' +
       'Refused before anything is written: an empty or whitespace-only result, a stale revision (read again, then ' +
       'edit), and dropping a [page::…] property or an ^anchor other notes link to (pass allowStructural: true only ' +
-      'when removing them is the point). Returns the new revision and a short diff. For a small change in a note ' +
-      'the person may be typing in, use outline_patch.',
+      'when removing them is the point). Returns the new revision and a short diff. Use it for rewriting your own ' +
+      'pages, such as a status page; for small edits to a note the person may be typing in, use outline_patch.',
     inputSchema: schema({
       ref: REF,
       expectedRevision: EXPECTED,
@@ -215,12 +215,12 @@ export const OUTLINE_TOOLS: readonly OutlineToolDefinition[] = [
   {
     name: 'outline_patch',
     description:
-      "Change spans of a note's text while the person may be typing in it (draft.patch): each patch names the exact " +
-      '`observed` text (never empty; for an insertion, the text it goes beside) and its `replacement`, against the ' +
-      '`revision` outline_read returned. A door holding a live draft of the note gets it in place; otherwise the ' +
-      'saved note is patched. A patch that would change links, anchors or properties, or no longer matches, is not ' +
-      'applied: it lands as a proposal the person can apply (outcome: proposed, with the reason). Use it for prose ' +
-      'fixes; outline_edit for rewrites.',
+      'Small edits to a note the person may be typing in, without waiting for their save (draft.patch); for ' +
+      'rewriting your own pages, such as a status page, use outline_edit. Each patch names the exact `observed` text ' +
+      '(never empty) and its `replacement`, against the `revision` outline_read returned; all apply as one edit or ' +
+      'none. A live draft gets it in place; otherwise it is an ordinary edit of the saved note. policy `edit` (the ' +
+      'default) has outline_edit\'s guard (allowStructural likewise); `prose` keeps every link, anchor and property. ' +
+      'If the text changed under it, or prose refuses, it becomes one proposal for the person (outcome: proposed).',
     inputSchema: schema({
       ref: REF,
       revision: EXPECTED,
@@ -243,11 +243,14 @@ export const OUTLINE_TOOLS: readonly OutlineToolDefinition[] = [
         },
       },
       mark: { type: 'string', description: 'The @request line the patch answers: spans must end above it' },
+      policy: { type: 'string', enum: ['edit', 'prose'], default: 'edit' },
+      allowStructural: { type: 'boolean' },
     }, ['ref', 'revision', 'patches']),
     command(input) {
       if (!nonEmpty(input.ref) || typeof input.revision !== 'number') return 'Give the ref and the revision you read.'
       if (!Array.isArray(input.patches) || input.patches.length === 0) return 'Give at least one patch: {observed, replacement}.'
-      return { operation: 'patch', input: inputOf(input, ['ref', 'revision', 'patches', 'mark']) }
+      if (input.policy !== undefined && input.policy !== 'edit' && input.policy !== 'prose') return 'policy is edit (the default) or prose.'
+      return { operation: 'patch', input: { policy: 'edit', ...inputOf(input, ['ref', 'revision', 'patches', 'mark', 'policy', 'allowStructural']) } }
     },
   },
 ]

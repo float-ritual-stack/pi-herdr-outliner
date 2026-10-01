@@ -16,7 +16,7 @@
 import { randomUUID } from "node:crypto";
 import { createBlockComment } from "./block-comments";
 import { parsePropertyFilterClause } from "./block-query";
-import { droppedStructure, type DraftPatchResult } from "./draft-patch";
+import { DRAFT_PATCH_POLICIES, droppedStructure, type DraftPatchPolicyName, type DraftPatchResult } from "./draft-patch";
 import type { DraftPatchSpan } from "./draft-patch-compare";
 import { parseOutlinerLinkUri, resolveOutlinerLinkTarget, type OutlinerLinkTarget } from "./outliner-links";
 import { pageAddressReferences } from "./page-addresses";
@@ -656,16 +656,20 @@ export async function changesSince(
 /**
  * `draft.patch` as the agent: compare-and-swap on spans of a note's text, safe
  * while the person types in it. The door holding a live draft gets it; with
- * none, the saved note is patched under the revision. A span that would change
- * links, anchors or properties, or that no longer matches, lands as a proposal
- * the person can apply instead (`outcome: proposed`, with the reason).
+ * none, the saved note is patched under the revision, as an ordinary edit.
+ * `policy` is `edit` unless the caller says `prose`: the same guard as
+ * outline_edit (a dropped `[page::…]` or linked `^anchor` is refused, unless
+ * `allowStructural`). A patch that no longer matches, or that `prose` refuses,
+ * lands as one proposal the person can apply (`outcome: proposed`, with the reason).
  */
 export async function patchDraft(
   client: AgentToolsClient,
-  input: { ref: string; revision: number; patches: DraftPatchSpan[]; mark?: string },
+  input: { ref: string; revision: number; patches: DraftPatchSpan[]; mark?: string; policy?: DraftPatchPolicyName; allowStructural?: boolean },
   actor: AgentActor,
 ): Promise<DraftPatchResult> {
   const revision = requireRevision(input.revision);
+  const policy = input.policy ?? "edit";
+  if (!DRAFT_PATCH_POLICIES.includes(policy)) throw new WorkToolRefusal(`policy is ${DRAFT_PATCH_POLICIES.join(" or ")}`);
   if (!Array.isArray(input.patches) || input.patches.length === 0) throw new WorkToolRefusal("Give at least one patch: {observed, replacement}");
   for (const patch of input.patches) {
     if (!patch || typeof patch.observed !== "string" || !patch.observed || typeof patch.replacement !== "string") {
@@ -680,6 +684,8 @@ export async function patchDraft(
     revision,
     patches: input.patches,
     mutation: mutationOf(actor),
+    policy,
+    ...(input.allowStructural === true ? { allowStructural: true } : {}),
     ...(typeof input.mark === "string" && input.mark.trim() ? { mark: { text: input.mark } } : {}),
   }, 15_000);
 }

@@ -6,6 +6,15 @@
  * part is checked, the drafts are patched, then the saved notes are written in
  * one transaction; a failure anywhere reverts the drafts already patched and
  * the whole patch lands as a proposal instead.
+ *
+ * The rule a matching patch is held to (`policy`) is the patch's: `edit`, the
+ * default, is the guard every agent edit has (`droppedLinkedStructure`, shared
+ * with outline_edit), and a patch it refuses is an error, nothing written, as
+ * outline_edit's is: it never parks as a proposal. `prose` (a tidy of the
+ * person's words) keeps every structural token, and what it refuses becomes a
+ * proposal for the person. Only a compare that fails (the note changed since
+ * it was read, the passage isn't there, the cursor is in it) or a prose refusal
+ * becomes a proposal.
  */
 import {
   applyLocated,
@@ -16,15 +25,18 @@ import {
   type DraftPatchSpan,
 } from "./draft-patch-compare";
 import {
+  DRAFT_PATCH_POLICIES,
   DRAFT_PROPOSAL_TYPE,
   draftPatchPolicy,
+  droppedStructure,
   draftPatchTextPolicy,
   proposalShowsPatch,
   embedLine,
   insertAfterMark,
   parseProposal,
+  proposalChanges,
   proposalText,
-  withProposalStatus,
+  withProposalApplied,
   type DraftHold,
   type DraftHolderAnswer,
   type DraftHolderRequest,
@@ -32,6 +44,7 @@ import {
   type DraftPatchApplied,
   type DraftPatchEdit,
   type DraftPatchInput,
+  type DraftPatchPolicyName,
   type DraftPatchProposed,
   type DraftPatchResult,
   type DraftPatchRoute,
@@ -40,6 +53,7 @@ import {
 import { blockDisplayTitle } from "./references";
 import type { OutlinerStore } from "./store";
 import type { MutationProvenance } from "./types";
+import { droppedLinkedStructure, type WorkToolsClient } from "./work-tools";
 
 /** What a request to a holding door carries besides its ids, which the server fills in. */
 export type DraftHolderAsk =
@@ -55,6 +69,8 @@ export interface DraftPatchRouterDeps {
   isLive(clientId: string): boolean;
   /** Ask the door holding a draft; rejects when it doesn't answer in time (the hold is then let go). */
   ask(hold: DraftHold, request: DraftHolderAsk): Promise<DraftHolderAnswer>;
+  /** Reads for the `edit` policy's guard (backlinks, block text), in process. */
+  client: WorkToolsClient;
 }
 
 interface RunOptions {
@@ -64,9 +80,21 @@ interface RunOptions {
   force?: boolean;
   /** Compare against the text as it is now rather than the revision the patch was read at (an agent's apply). */
   current?: boolean;
+  /** The rule a matching patch is held to (not checked when forced). */
+  policy: DraftPatchPolicyName;
+  allowStructural?: boolean;
 }
 
-type Outcome = { ok: true; applied: DraftPatchApplied["edits"] } | { ok: false; reason: string };
+/** `refused`: the `edit` policy's guard said no; the patch is an error, never a proposal. */
+type Outcome = { ok: true; applied: DraftPatchApplied["edits"] } | { ok: false; reason: string; refused?: boolean };
+
+/** A refusal by the `edit` policy: nothing was written, and the agent hears why. */
+export class DraftPatchRefusal extends Error {
+  constructor(reason: string) {
+    super(`Not applied, nothing was written: ${reason}`);
+    this.name = "DraftPatchRefusal";
+  }
+}
 
 const MAX_EDITS = 50;
 const MAX_SPANS = 200;
@@ -114,6 +142,36 @@ export function normalizeDraftPatchEdits(input: Pick<DraftPatchInput, "blockId" 
   });
 }
 
+function normalizePolicy(policy: unknown): DraftPatchPolicyName {
+  if (policy === undefined || policy === null) return "edit";
+  if (!DRAFT_PATCH_POLICIES.includes(policy as DraftPatchPolicyName)) throw new Error(`A patch's policy is ${DRAFT_PATCH_POLICIES.join(" or ")}`);
+  return policy as DraftPatchPolicyName;
+}
+
+/**
+ * Which change of a patch (1-based, counted across all its notes, in the order given) is the first whose
+ * application makes `fails` true of the note's text, or null when none alone does. A refusal's reason names it,
+ * so a patch of six changes reads as one edit with one change at fault.
+ */
+function blame(edits: readonly DraftPatchEdit[], edit: DraftPatchEdit, text: string, fails: (after: string) => boolean): number | null {
+  let offset = 0;
+  for (const other of edits) {
+    if (other === edit) break;
+    offset += other.patches.length;
+  }
+  for (let count = 1; count <= edit.patches.length; count += 1) {
+    const located = locateSpans(text, edit.patches.slice(0, count));
+    if (!located.ok) return null;
+    if (fails(applyLocated(text, located.spans))) return offset + count;
+  }
+  return null;
+}
+
+/** A reason that says "it would …" said of one change, when the patch has more than one. */
+function blamed(reason: string, change: number | null, total: number): string {
+  return change !== null && total > 1 ? reason.replace(/^it would /, `change ${change} would `) : reason;
+}
+
 function normalizeMutation(mutation: MutationProvenance | undefined): MutationProvenance {
   if (!mutation || (mutation.author !== "agent" && mutation.author !== "user")) {
     throw new Error("A patch names who proposes it: mutation { author: agent, actorId }");
@@ -158,18 +216,27 @@ export class DraftPatchRouter {
   async patch(input: DraftPatchInput): Promise<DraftPatchResult> {
     const edits = normalizeDraftPatchEdits(input);
     const mutation = normalizeMutation(input.mutation);
+    const policy = normalizePolicy(input.policy);
+    const allowStructural = input.allowStructural === true;
     const mark = input.mark?.text?.trim() ? { text: input.mark.text, blockId: input.mark.blockId?.trim() || edits[0]!.blockId } : undefined;
     for (const edit of edits) this.deps.store.requireActive(edit.blockId);
     if (mark) this.deps.store.requireActive(mark.blockId);
-    for (const edit of edits) {
-      for (const span of edit.patches) {
-        const reason = draftPatchPolicy(span, anchor => this.inboundLinks(edit.blockId, anchor));
-        if (reason) return this.propose(reason, edits, mutation, mark);
+    const sent = { policy, ...(allowStructural ? { allowStructural } : {}) };
+    if (policy === "prose") {
+      const total = proposalChanges({ edits });
+      let change = 0;
+      for (const edit of edits) {
+        for (const span of edit.patches) {
+          change += 1;
+          const reason = draftPatchPolicy(span, anchor => this.inboundLinks(edit.blockId, anchor));
+          if (reason) return this.propose(blamed(reason, change, total), edits, mutation, mark, sent);
+        }
       }
     }
-    const outcome = await this.run(edits, { mutation, mark });
+    const outcome = await this.run(edits, { mutation, mark, ...sent });
     if (outcome.ok) return { outcome: "applied", edits: outcome.applied };
-    return this.propose(outcome.reason, edits, mutation, mark);
+    if (outcome.refused) throw new DraftPatchRefusal(outcome.reason);
+    return this.propose(outcome.reason, edits, mutation, mark, sent);
   }
 
   /** "Apply anyway": the proposal's patch, placed as well as it can be, as an ordinary edit by `mutation`. */
@@ -187,15 +254,20 @@ export class DraftPatchRouter {
     }
     const who = normalizeMutation(mutation);
     const edits = normalizeDraftPatchEdits({ edits: proposal.edits });
-    // "Apply anyway" is the person's choice. An agent's is held to the same compare as a patch: prose only,
-    // above the mark and the person's cursor, against the text as it is now (it can't force its own proposal).
+    // "Apply anyway" is the person's choice. An agent's is held to the same compare as a patch, under the
+    // patch's own policy (a proposal from before policies was prose), above the mark and the person's cursor,
+    // against the text as it is now (it can't force its own proposal).
     const forced = who.author !== "agent";
+    const policy: DraftPatchPolicyName = proposal.policy === "edit" ? "edit" : "prose";
+    const allowStructural = policy === "edit" && proposal.allowStructural === true;
     let mark: { text: string; blockId: string } | undefined;
     if (!forced) {
-      for (const edit of edits) {
-        for (const span of edit.patches) {
-          const reason = draftPatchPolicy(span);
-          if (reason) throw new Error(`Couldn't apply it: ${reason}; only the person applies that anyway`);
+      if (policy === "prose") {
+        for (const edit of edits) {
+          for (const span of edit.patches) {
+            const reason = draftPatchPolicy(span);
+            if (reason) throw new Error(`Couldn't apply it: ${reason}; only the person applies that anyway`);
+          }
         }
       }
       const kept = proposal.mark;
@@ -203,11 +275,13 @@ export class DraftPatchRouter {
         mark = { text: kept.text, blockId: typeof kept.blockId === "string" && kept.blockId.trim() ? kept.blockId.trim() : edits[0]!.blockId };
       }
     }
-    const outcome = await this.run(edits, forced ? { mutation: who, force: true } : { mutation: who, current: true, ...(mark ? { mark } : {}) });
-    if (!outcome.ok) throw new Error(`Couldn't apply it: ${outcome.reason}`);
+    const outcome = await this.run(edits, forced
+      ? { mutation: who, force: true, policy }
+      : { mutation: who, current: true, policy, ...(allowStructural ? { allowStructural } : {}), ...(mark ? { mark } : {}) });
+    if (!outcome.ok) throw new Error(`Couldn't apply it: ${outcome.reason}${outcome.refused ? "; only the person applies that anyway" : ""}`);
     const current = this.deps.store.require(proposalId);
     try {
-      this.deps.store.update(proposalId, withProposalStatus(current.text, "applied"), current.revision, who);
+      this.deps.store.update(proposalId, withProposalApplied(current.text), current.revision, who);
     } catch {
       // The edit landed; the proposal's status is only a note about it.
     }
@@ -233,13 +307,20 @@ export class DraftPatchRouter {
     const plan = edits.map(edit => ({ edit, ...this.routeOf(edit.blockId) }));
     const crowded = plan.find(part => part.many);
     if (crowded) return { ok: false, reason: "more than one door holds a live draft of the note; which one is being typed in isn't clear" };
-    // Saved notes first: nothing is written until every part has passed.
+    // Saved notes first: nothing is written until every part has passed. The text the policy passed is the
+    // text the write below must still find.
+    const checked = new Map<string, string>();
     for (const { edit, hold } of plan) {
       if (hold) continue;
       const failure = this.checkSaved(edit, options);
       if (failure) return { ok: false, reason: failure };
+      if (options.force) continue;
+      const text = this.deps.store.requireActive(edit.blockId).text;
+      const refusal = await this.policyFailure(edits, edit, text, options);
+      if (refusal) return refusal;
+      checked.set(edit.blockId, text);
     }
-    // Drafts next, read but not yet touched: the structural policy is checked over the whole note as typed.
+    // Drafts next, read but not yet touched: the policy is checked over the whole note as typed.
     if (!options.force) {
       for (const { edit, hold } of plan) {
         if (!hold) continue;
@@ -252,8 +333,8 @@ export class DraftPatchRouter {
         if (!("text" in answer) || typeof answer.text !== "string") return { ok: false, reason: "the door holding its draft didn't say what it holds" };
         const located = locateSpans(answer.text, edit.patches);
         if (!located.ok) return { ok: false, reason: located.reason };
-        const failure = draftPatchTextPolicy(answer.text, applyLocated(answer.text, located.spans));
-        if (failure) return { ok: false, reason: failure };
+        const refusal = await this.policyFailure(edits, edit, answer.text, options);
+        if (refusal) return refusal;
       }
     }
     const patched: Array<{ hold: DraftHold; patchId: string }> = [];
@@ -293,6 +374,7 @@ export class DraftPatchRouter {
         const failure = this.checkSaved(edit, options);
         if (failure) throw new Error(failure);
         const block = store.requireActive(edit.blockId);
+        if (!options.force && block.text !== checked.get(edit.blockId)) throw new Error("the note changed while the patch was being checked");
         const located = locateSpans(block.text, edit.patches, options.force);
         if (!located.ok) throw new Error(located.reason);
         return store.update(edit.blockId, applyLocated(block.text, located.spans), block.revision, options.mutation);
@@ -321,12 +403,47 @@ export class DraftPatchRouter {
       if (at < 0) return "the mark isn't in the note";
       if (located.spans.some(span => span.end > at)) return "it reaches the mark or below it; a patch changes only text above the mark";
     }
-    if (!options.force) return draftPatchTextPolicy(block.text, applyLocated(block.text, located.spans));
     return null;
   }
 
+  /**
+   * Whether the patch's part for one note, applied to `text` (the note as saved, or the draft as typed), passes
+   * the patch's policy. `edit`: the guard every agent edit has, `droppedLinkedStructure` (unless
+   * `allowStructural`), and a refusal is final, never a proposal. `prose`: every structural token kept, and a
+   * refusal becomes a proposal. Null when it passes.
+   */
+  private async policyFailure(edits: DraftPatchEdit[], edit: DraftPatchEdit, text: string, options: RunOptions): Promise<Extract<Outcome, { ok: false }> | null> {
+    if (options.force) return null;
+    const located = locateSpans(text, edit.patches);
+    if (!located.ok) return { ok: false, reason: located.reason };
+    const after = applyLocated(text, located.spans);
+    const total = proposalChanges({ edits });
+    if (options.policy === "prose") {
+      const reason = draftPatchTextPolicy(text, after);
+      if (!reason) return null;
+      return { ok: false, reason: blamed(reason, blame(edits, edit, text, next => draftPatchTextPolicy(text, next) !== null), total) };
+    }
+    if (options.allowStructural) return null;
+    const lost = await droppedLinkedStructure(this.deps.client, edit.blockId, text, after);
+    if (!lost.length) return null;
+    // Which change drops one of them: the first whose application loses a page or an anchor named here.
+    const named = (token: string) => lost.some(entry => entry === token || entry.startsWith(`${token} (`));
+    const change = blame(edits, edit, text, next => {
+      const dropped = droppedStructure(text, next);
+      return dropped.pages.some(named) || dropped.anchors.some(anchor => named(`^${anchor}`));
+    });
+    return {
+      ok: false,
+      refused: true,
+      reason: blamed(`it would drop ${lost.join(", ")}; keep ${lost.length === 1 ? "it" : "them"}, or pass allowStructural: true if removing ${lost.length === 1 ? "it" : "them"} is the point`, change, total),
+    };
+  }
+
   /** The patch as a reply block, embedded under the mark (or at the note's end), attributed to its proposer. */
-  private async propose(reason: string, edits: DraftPatchEdit[], mutation: MutationProvenance, mark?: { text: string; blockId: string }): Promise<DraftPatchProposed> {
+  private async propose(
+    reason: string, edits: DraftPatchEdit[], mutation: MutationProvenance, mark: { text: string; blockId: string } | undefined,
+    sent: { policy: DraftPatchPolicyName; allowStructural?: boolean },
+  ): Promise<DraftPatchProposed> {
     const { store } = this.deps;
     const hostId = mark?.blockId ?? edits[0]!.blockId;
     const kept: DraftPatchEdit[] = [];
@@ -343,7 +460,7 @@ export class DraftPatchRouter {
       });
     }
     const proposal: DraftProposal = {
-      version: 1, edits: kept, reason,
+      version: 1, edits: kept, reason, ...sent,
       ...(mark ? { mark } : {}),
       actor: { author: mutation.author, ...(mutation.actorId ? { actorId: mutation.actorId } : {}) },
     };

@@ -293,19 +293,26 @@ test("changes since a time or cursor, narrowed by author or actor", async () => 
   expect((await agent("changes", { since: "last tuesday" })).exitCode).toBe(1);
 });
 
-test("patch swaps a span of the saved note as the agent, and a structural change becomes a proposal", async () => {
+test("patch is an edit by default: a dropped [[link]] applies, a linked ^anchor is refused; prose makes it a proposal", async () => {
   const { store, agent } = await setup();
-  const note = store.create("Beds: two  raised beds by the fence. ^beds");
-  const applied = await agent("patch", { ref: note.id, revision: note.revision, patches: [{ observed: "two  raised", replacement: "two raised" }] });
+  const note = store.create("Beds: two  raised beds by the fence, see [[Seed Swap]]. ^beds");
+  store.create(`Plan\nsee ((${note.id}^beds))`);
+  const applied = await agent("patch", { ref: note.id, revision: note.revision, patches: [{ observed: "two  raised", replacement: "two raised" }, { observed: ", see [[Seed Swap]]", replacement: "" }] });
   expect(applied.exitCode).toBe(0);
   expect(applied.json.outcome).toBe("applied");
   expect(store.get(note.id)!.text).toBe("Beds: two raised beds by the fence. ^beds");
   const current = store.get(note.id)!;
-  const proposed = await agent("patch", { ref: note.id, revision: current.revision, patches: [{ observed: "fence. ^beds", replacement: "fence." }] });
+  const refused = await agent("patch", { ref: note.id, revision: current.revision, patches: [{ observed: "fence. ^beds", replacement: "fence." }] });
+  expect(refused.exitCode).toBe(1);
+  expect(refused.stderr).toContain("^beds (1 note links to it)");
+  expect(store.get(note.id)!.text).toBe(current.text);
+  const proposed = await agent("patch", { ref: note.id, revision: current.revision, policy: "prose", patches: [{ observed: "fence. ^beds", replacement: "fence." }] });
   // Not applied: the proposal is a reply block, embedded under the note for the person to apply or not.
   expect(proposed.json.outcome).toBe("proposed");
   expect(proposed.json.reason).toContain("^beds");
   expect(store.get(note.id)!.text).toBe(`${current.text}\n!((${proposed.json.proposalId}))`);
+  const allowed = await agent("patch", { ref: note.id, revision: store.get(note.id)!.revision, allowStructural: true, patches: [{ observed: "fence. ^beds", replacement: "fence." }] });
+  expect(allowed.json.outcome).toBe("applied");
 });
 
 test("writes without an actor are refused; reads need none", async () => {

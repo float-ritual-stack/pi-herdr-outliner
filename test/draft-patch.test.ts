@@ -226,16 +226,16 @@ describe("draft.patch over the protocol", () => {
     expect(applied).toMatchObject({ outcome: "applied", edits: [{ route: "saved" }] });
     expect(store.require(note.id).text).toContain("The beans go along the fence.");
     expect(store.require(result.proposalId).properties).toEqual(expect.arrayContaining([{ key: "proposal-status", value: "applied" }]));
-    expect(store.require(result.proposalId).text).toStartWith("Applied anyway: edit from @tidy, which didn't apply at first: the note was saved since it was read");
+    expect(store.require(result.proposalId).text).toStartWith("Applied anyway: 1 edit from @tidy, which didn't apply at first because the note was saved since it was read");
     await expect(client.request({ action: "draft.proposal.apply", proposalId: result.proposalId, mutation: { author: "user" } })).rejects.toThrow("already applied");
   });
 
-  test("the structural guard refuses a patch that drops a deep-linked anchor, into a proposal", async () => {
+  test("the prose policy refuses a patch that drops a deep-linked anchor, into a proposal", async () => {
     const { store, client } = await service();
     const b = store.create("Note B [page::note b]\nThe fence  bed holds the beans. ^deep-link\n\n@tidy tidy this");
     const a = store.create(`Note A\nsee [[note b]] and ((${b.id}^deep-link))`);
     const span: DraftPatchSpan = { ...spanOf(b.text, "The fence  bed holds the beans. ^deep-link", "The fence bed holds the beans.") };
-    const refused = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: b.id, revision: b.revision, patches: [span], mark: { text: "@tidy tidy this" }, mutation: TIDY });
+    const refused = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: b.id, revision: b.revision, patches: [span], mark: { text: "@tidy tidy this" }, mutation: TIDY, policy: "prose" });
     expect(refused.outcome).toBe("proposed");
     if (refused.outcome === "proposed") expect(refused.reason).toBe("it would drop ^deep-link (1 note links to ^deep-link); a prose edit keeps them");
     // The proposal quotes the passage in fences: it holds no anchor, property or page link of its own.
@@ -247,7 +247,7 @@ describe("draft.patch over the protocol", () => {
     // A tidy that keeps the anchor applies, and note A's deep links still resolve to the same block.
     const now = store.require(b.id);
     const tidy = tidyAboveMark(now.text.split(`\n!((`)[0]! + "\n\n@tidy tidy this", "@tidy tidy this")!;
-    const applied = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: b.id, revision: now.revision, patches: [{ ...tidy, range: undefined }], mutation: TIDY });
+    const applied = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: b.id, revision: now.revision, patches: [{ ...tidy, range: undefined }], mutation: TIDY, policy: "prose" });
     expect(applied.outcome).toBe("applied");
     expect(store.require(b.id).text).toContain("The fence bed holds the beans. ^deep-link");
     const page = await client.request<{ block?: Block }>({ action: "pages.resolve", address: "note b" });
@@ -351,7 +351,7 @@ describe("draft.patch over the protocol", () => {
     const saved = store.create("Beds\nsee [[Seed list]] and the anchor ^beds\nthen `code` [kind::plan]");
     for (const [observed, replacement] of [["Seed", "Weed"], ["bed", "bad"], ["then", "then`"]] as const) {
       const now = store.require(saved.id);
-      const result = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: saved.id, revision: now.revision, patches: [spanOf(now.text, observed, replacement)], mutation: TIDY });
+      const result = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: saved.id, revision: now.revision, patches: [spanOf(now.text, observed, replacement)], mutation: TIDY, policy: "prose" });
       expect(result.outcome).toBe("proposed");
     }
     expect(store.require(saved.id).text.split("\n!((")[0]).toBe(saved.text);
@@ -359,7 +359,7 @@ describe("draft.patch over the protocol", () => {
     const held = store.create("Held");
     const live = "Held\nsee [[Seed list]] here";
     const door = await fakeDoor(client, "door-guard", held.id, live, held.revision);
-    const refused = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: held.id, revision: held.revision, patches: [spanOf(live, "Seed", "Weed")], mutation: TIDY });
+    const refused = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: held.id, revision: held.revision, patches: [spanOf(live, "Seed", "Weed")], mutation: TIDY, policy: "prose" });
     expect(refused.outcome).toBe("proposed");
     expect(door.requests.filter(request => request.kind === "patch")).toEqual([]);
     expect(door.text.startsWith(live)).toBe(true);
@@ -368,7 +368,7 @@ describe("draft.patch over the protocol", () => {
   test("an agent can't force its own proposal; the person can, and only what the proposal shows", async () => {
     const { store, client } = await service();
     const note = store.create("Beds\nThe fence  bed. ^fence\n\n@tidy go");
-    const refused = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: note.id, revision: note.revision, patches: [spanOf(note.text, "The fence  bed. ^fence", "The fence bed.")], mark: { text: "@tidy go" }, mutation: TIDY });
+    const refused = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: note.id, revision: note.revision, patches: [spanOf(note.text, "The fence  bed. ^fence", "The fence bed.")], mark: { text: "@tidy go" }, mutation: TIDY, policy: "prose" });
     expect(refused.outcome).toBe("proposed");
     if (refused.outcome !== "proposed") return;
     await expect(client.request({ action: "draft.proposal.apply", proposalId: refused.proposalId, mutation: TIDY })).rejects.toThrow("only the person applies that anyway");
@@ -450,5 +450,115 @@ describe("draft.patch over the protocol", () => {
     const note = store.create("Note");
     await expect(client.request({ action: "drafts.hold", blockId: note.id, clientId: "nobody", revision: 1 })).rejects.toThrow("connected client");
     await expect(client.request({ action: "drafts.answer", requestId: "r-1", clientId: "nobody", answer: { applied: true } })).rejects.toThrow("No draft request waits");
+  });
+});
+
+describe("the edit policy (the default)", () => {
+  const AGENT = { author: "agent" as const, actorId: "claude-code" };
+  const STATUS = [
+    "Claude · now",
+    "Working on the seed swap, see [[Seed Swap]]",
+    "Next: label the trays",
+    "Then: water the leeks",
+    "Waiting on: compost delivery",
+    "Blocked: nothing",
+    "Mood: steady",
+  ].join("\n");
+  /** An agent's update of its own status page: six changes, the first of which drops an outbound link. */
+  const sixChanges = (text: string) => [
+    spanOf(text, "Working on the seed swap, see [[Seed Swap]]", "Seed swap sorted"),
+    spanOf(text, "label the trays", "sow the peas"),
+    spanOf(text, "water the leeks", "thin the carrots"),
+    spanOf(text, "compost delivery", "nothing"),
+    spanOf(text, "Blocked: nothing", "Blocked: rain"),
+    spanOf(text, "Mood: steady", "Mood: busy"),
+  ];
+  const UPDATED = "Claude · now\nSeed swap sorted\nNext: sow the peas\nThen: thin the carrots\nWaiting on: nothing\nBlocked: rain\nMood: busy";
+
+  test("a note the person is only viewing: six changes that drop a [[link]] apply as one attributed edit, no proposal", async () => {
+    const { store, client } = await service();
+    store.create("Seed Swap [page::seed swap]");
+    const page = store.create(STATUS);
+    const result = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: page.id, revision: page.revision, patches: sixChanges(STATUS), mutation: AGENT });
+    expect(result).toEqual({ outcome: "applied", edits: [{ blockId: page.id, route: "saved", revision: page.revision + 1 }] });
+    expect(store.require(page.id).text).toBe(UPDATED);
+    const feed = await client.request<{ changes: Array<{ blockId?: string; kind: string; actor?: { author: string; actorId?: string } }> }>({ action: "changes.since", sequence: 0 });
+    expect(feed.changes.filter(change => change.blockId === page.id && change.kind === "edit").map(change => change.actor)).toEqual([{ author: "agent", actorId: "claude-code" }]);
+    expect(store.children(page.id)).toEqual([]);
+  });
+
+  test("the same edit while the person holds a draft goes into the draft; a compare that fails is one proposal", async () => {
+    const { store, client } = await service();
+    const page = store.create(STATUS);
+    const door = await fakeDoor(client, "door-status", page.id, STATUS, page.revision);
+    const result = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: page.id, revision: page.revision, patches: sixChanges(STATUS), mutation: AGENT });
+    expect(result).toEqual({ outcome: "applied", edits: [{ blockId: page.id, route: "draft", holder: "door-status" }] });
+    expect(door.text).toBe(UPDATED);
+    expect(store.require(page.id).text).toBe(STATUS);
+
+    // The person rewrote a line the patch reads: the compare fails, and the whole patch is one proposal.
+    const other = store.create(STATUS);
+    const typed = STATUS.replace("Mood: steady", "Mood: sleepy");
+    const busy = await fakeDoor(client, "door-busy", other.id, typed, other.revision);
+    const proposed = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: other.id, revision: other.revision, patches: sixChanges(STATUS), mutation: AGENT });
+    expect(proposed.outcome).toBe("proposed");
+    if (proposed.outcome !== "proposed") return;
+    expect(busy.text.split("\n!((")[0]).toBe(typed);
+    const text = store.require(proposed.proposalId).text;
+    expect(text).toStartWith("1 proposed edit (6 changes) from @claude-code: not applied, because ");
+    expect(text.split("\n")[0]).toContain(" · A applies all [type::draft-proposal]");
+    expect(text).toContain("its 6 changes applied together or not at all");
+    expect(text).toContain("Change 1 of 6, in Claude · now: this");
+    expect(text).toContain("Change 6 of 6, in Claude · now: this");
+    expect(text).not.toMatch(/Proposed edit from/);
+  });
+
+  test("dropping a linked ^anchor or a [page::] is refused outright, nothing written, unless allowStructural", async () => {
+    const { store, client } = await service();
+    const page = store.create("Beds [page::beds]\nThe fence bed holds the beans. ^fence\nThe pond bed is empty.");
+    store.create(`Plan\nsee ((${page.id}^fence))`);
+    const patches = [spanOf(page.text, "pond bed is empty", "pond bed holds mint"), spanOf(page.text, "beans. ^fence", "beans.")];
+    await expect(client.request({ action: "draft.patch", blockId: page.id, revision: page.revision, patches, mutation: AGENT }))
+      .rejects.toThrow("Not applied, nothing was written: change 2 would drop ^fence (1 note links to it); keep it, or pass allowStructural: true");
+    const pageLine = [spanOf(page.text, "Beds [page::beds]", "Beds")];
+    await expect(client.request({ action: "draft.patch", blockId: page.id, revision: page.revision, patches: pageLine, mutation: AGENT }))
+      .rejects.toThrow("it would drop [page::beds]");
+    expect(store.require(page.id)).toMatchObject({ text: page.text, revision: page.revision });
+    expect(store.children(page.id)).toEqual([]);
+
+    // In a live draft the same: the door is never asked to patch, and no proposal is embedded.
+    const door = await fakeDoor(client, "door-beds", page.id, page.text, page.revision);
+    await expect(client.request({ action: "draft.patch", blockId: page.id, revision: page.revision, patches, mutation: AGENT })).rejects.toThrow("^fence");
+    expect(door.requests.filter(request => request.kind === "patch" || request.kind === "embed")).toEqual([]);
+
+    const allowed = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: page.id, revision: page.revision, patches, mutation: AGENT, allowStructural: true });
+    expect(allowed.outcome).toBe("applied");
+    expect(door.text).toBe("Beds [page::beds]\nThe fence bed holds the beans.\nThe pond bed holds mint.");
+  });
+
+  test("an ^anchor nobody links to may go; a policy that isn't edit or prose is refused", async () => {
+    const { store, client } = await service();
+    const page = store.create("Beds\nThe fence bed. ^fence");
+    const result = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: page.id, revision: page.revision, patches: [spanOf(page.text, "bed. ^fence", "bed.")], mutation: AGENT });
+    expect(result.outcome).toBe("applied");
+    await expect(client.request({ action: "draft.patch", blockId: page.id, revision: page.revision + 1, patches: [spanOf("Beds\nThe fence bed.", "fence", "pond")], mutation: AGENT, policy: "tidy" as never }))
+      .rejects.toThrow("policy is edit or prose");
+  });
+
+  test("the prose policy still refuses dropping a link: one proposal, naming the change at fault", async () => {
+    const { store, client } = await service();
+    const page = store.create(STATUS);
+    const result = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: page.id, revision: page.revision, patches: sixChanges(STATUS), mutation: AGENT, policy: "prose" });
+    expect(result.outcome).toBe("proposed");
+    if (result.outcome !== "proposed") return;
+    expect(result.reason).toBe("change 1 would drop [[Seed Swap]]; a prose edit keeps them");
+    expect(store.require(page.id).text).toBe(`${STATUS}\n!((${result.proposalId}))`);
+    const proposal = store.require(result.proposalId);
+    expect(proposal.text.split("\n")[0]).toBe("1 proposed edit (6 changes) from @claude-code: not applied, because change 1 would drop [[Seed Swap]]; a prose edit keeps them · A applies all [type::draft-proposal] [proposal-status::open]");
+    expect(parseProposal(proposal.text)).toMatchObject({ policy: "prose" });
+    // The person applies all of it anyway, as one edit.
+    await client.request({ action: "draft.proposal.apply", proposalId: proposal.id, mutation: { author: "user" } });
+    expect(store.require(page.id).text.split("\n!((")[0]).toBe(UPDATED);
+    expect(store.require(proposal.id).text.split("\n")[0]).toBe("Applied anyway: 1 edit (6 changes) from @claude-code, which didn't apply at first because change 1 would drop [[Seed Swap]]; a prose edit keeps them [type::draft-proposal] [proposal-status::applied]");
   });
 });
