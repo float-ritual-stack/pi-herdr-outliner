@@ -450,10 +450,10 @@ lands in the note while he goes on.
 - **When it runs.** A request line that a person's save adds runs once the note has been quiet
   for a moment (1.5 s; every save restarts the wait), so a pause mid-sentence rarely sends half a
   request. It runs once: rewording the line is a new request, and `r` on the line asks again
-  (`r` on the note doesn't ask agents). Lines that were already there (written before the
-  extension was installed, or before the service started and nobody opened the note since) wait
-  for `r`, as does a line an agent or an import wrote, so agents can't set each other off. An
-  agent's own patch may not write a request line.
+  (`r` on the note doesn't ask agents). Lines that were already there wait for `r`: the service
+  keeps, per note, the `@name` lines it last saw (any name, across restarts), so installing an
+  extension doesn't wake old lines. A line an agent or an import wrote waits for `r` too, so agents
+  can't set each other off, and an agent's own patch may not write or reword a request line.
 - **`respond`** gets the note as the person sees it (their live draft when a door holds one), the
   request (the words after the name) and the mark (the request line), plus bounded context. It
   answers any of:

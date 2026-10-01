@@ -49,7 +49,6 @@ const MAX_NOTE_TEXT = 64 * 1024;
 const MAX_REPLY = 64 * 1024;
 const MAX_PATCHES = 20;
 const DEFAULT_QUIET_MS = 1_500;
-const MAX_SEEN = 5_000;
 
 /**
  * The `@name …` lines in a block's text whose names an extension answers
@@ -162,15 +161,15 @@ export class AgentRequests {
     return `${blockId}\0${requestKey}`;
   }
 
-  /** The request lines a block had when this service last looked (its saves and reads), most recent blocks only. */
-  private readonly seen = new Map<string, Set<string>>();
   /** `r` pressed while that request was running: one more run after it. */
   private readonly again = new Set<string>();
 
+  /** The `@name` lines a block holds now become what its next save is compared with (kept in the store). */
   private remember(blockId: string, keys: readonly string[]): void {
-    this.seen.delete(blockId);
-    this.seen.set(blockId, new Set(keys));
-    if (this.seen.size > MAX_SEEN) this.seen.delete(this.seen.keys().next().value!);
+    const before = this.store.agentRequestBaseline(blockId);
+    if (before === null && !keys.length) return;
+    if (before && before.length === keys.length && before.every((key, index) => key === keys[index])) return;
+    this.store.setAgentRequestBaseline(blockId, keys);
   }
 
   private schedule(blockId: string, requestKey: string): void {
@@ -202,7 +201,9 @@ export class AgentRequests {
     // The baseline is every `@name` line, answered or not: a line written before its extension was
     // installed is an old line once it is, not a new request.
     const shapes = this.shapes(block);
-    const before = this.seen.get(blockId) ?? (created ? new Set<string>() : new Set(shapes));
+    // Never seen with an `@name` line: none was there before this save (the baseline is kept from every
+    // save and read since this feature shipped, across restarts).
+    const before = new Set(created ? [] : this.store.agentRequestBaseline(blockId) ?? []);
     this.remember(blockId, shapes);
     const rows = this.store.agentRequests(blockId);
     const waitingTimers = [...this.timers.keys()].some((key) => key.startsWith(`${blockId}\0`));
@@ -295,9 +296,11 @@ export class AgentRequests {
       } catch (error) {
         throw new Error(`@${line.agent} answered something the service can't apply: ${message(error)}`);
       }
-      // An agent never writes a request line: its edit can't set off another agent.
-      const names = this.registry.agentNames();
-      if (respond.patches.some((patch) => requestLines(patch.replacement, names).length > requestLines(patch.observed, names).length)) {
+      // An agent never writes a request line (new or reworded, any name): its edit can't set off another agent.
+      const beforeKeys = new Set(requestLines(draft.text, null).map((candidate) => candidate.requestKey));
+      let after = draft.text;
+      for (const patch of respond.patches) after = after.replace(patch.observed, () => patch.replacement);
+      if (requestLines(after, null).some((candidate) => !beforeKeys.has(candidate.requestKey))) {
         throw new Error(`@${line.agent} tried to write an @request line; agents can't ask agents`);
       }
       // Reworded while it ran: the answer was to a request that isn't there any more.
@@ -339,7 +342,7 @@ export class AgentRequests {
     const rows = new Map(this.store.agentRequests(blockId).map((row) => [row.requestKey, row]));
     const lines = this.lines(block);
     // A note a reader opens: what it holds now is the baseline a later save is compared with.
-    if (!this.seen.has(blockId)) this.remember(blockId, this.shapes(block));
+    if (this.store.agentRequestBaseline(blockId) === null) this.remember(blockId, this.shapes(block));
     return lines
       .filter((candidate) => line === undefined || candidate.line === line)
       .map((candidate) => {

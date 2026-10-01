@@ -1785,6 +1785,25 @@ export class OutlinerStore {
       row.proposalId ?? null, row.requestedBy, row.requestedAt, row.answeredAt ?? null);
   }
 
+  /**
+   * The `@name` lines a block had when the service last looked (any name), so
+   * a save can tell a request it adds from one already there, across restarts.
+   * Null when the service never saw one in it.
+   */
+  agentRequestBaseline(blockId: string): string[] | null {
+    const row = this.database.query("SELECT request_keys FROM agent_request_baseline WHERE block_id = ?").get(blockId) as { request_keys: string } | null;
+    return row ? JSON.parse(row.request_keys) as string[] : null;
+  }
+
+  setAgentRequestBaseline(blockId: string, keys: readonly string[]): void {
+    if (!keys.length) {
+      this.database.query("DELETE FROM agent_request_baseline WHERE block_id = ?").run(blockId);
+      return;
+    }
+    this.database.query(`INSERT INTO agent_request_baseline (block_id, request_keys) VALUES (?, ?)
+      ON CONFLICT (block_id) DO UPDATE SET request_keys = excluded.request_keys`).run(blockId, JSON.stringify(keys));
+  }
+
   /** Forgets requests whose lines a block no longer has. */
   pruneAgentRequests(blockId: string, keep: readonly string[]): void {
     const rows = this.database.query("SELECT request_key FROM agent_requests WHERE block_id = ?").all(blockId) as Array<{ request_key: string }>;
@@ -3949,6 +3968,10 @@ export class OutlinerStore {
         requested_at TEXT NOT NULL,
         answered_at TEXT,
         PRIMARY KEY (block_id, request_key)
+      );
+      CREATE TABLE IF NOT EXISTS agent_request_baseline (
+        block_id TEXT PRIMARY KEY REFERENCES blocks(id) ON DELETE CASCADE,
+        request_keys TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS extension_outputs (
         block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,

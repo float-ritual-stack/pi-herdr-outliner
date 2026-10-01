@@ -153,6 +153,11 @@ process.stdout.write(JSON.stringify({ ok: true, value: { message: "done", patche
   expect(store.agentRequests(old.id)).toEqual([]);
   expect((await agentOf(old.id, (p) => p.status === "not-run")).reason).toBe("r asks @slow");
 
+  // A note with no @ lines yet, never read: the person's first request in it is new, and runs.
+  const plain = await create("Plain note\nsome  words");
+  await client.request({ action: "update", blockId: plain.id, text: "Plain note\nsome  words\n@slow", expectedRevision: plain.revision, mutation: PERSON });
+  await until("the first request answered", () => store.agentRequests(plain.id)[0]?.status === "applied");
+
   // A new request; the person types below it while the agent works: the edit still applies.
   const note = await create("Plan\nfirst line\n@slow\n");
   await until("running", () => store.agentRequests(note.id)[0]?.status === "running");
