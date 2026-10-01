@@ -411,9 +411,10 @@ component never breaks a reader: it degrades to its data.
 ## Actions
 
 An action is one thing an extension can do, declared once, so every client binds the same thing:
-the door as an `ActionDef` named `ext.<id>.<action>` with its key and click (with the tile-kind
-registry work), `outliner ext act` from a shell, and `extensions.act` for agents. Detail doesn't
-bind extension actions yet; `r` is its path today.
+the door as an `ActionDef` named `ext.<id>.<action>` with its key and click (ep0ch-door PIE-512: a
+handler line's actions as keys and `[w ward]` controls under the line, a tile's in its tile kind),
+`outliner ext act` from a shell, and `extensions.act` for agents. Detail doesn't bind extension
+actions yet; `r` is its path today.
 
 ```json
 { "id": "ward", "label": "Ward off the next omen", "on": "handler:fancy-horror", "key": "w", "effects": "write" }
@@ -589,16 +590,17 @@ Use made-up data. The runtime is the same one the live service uses.
 
 - **The door's `::graph-*` figures** (`graph-check`, `graph-stat`, `graph-table`, `graph-rank`) stay
   in ep0ch-door for now. They are a rich component in shape, but they live in the door's core and
-  read the outline through queries on every paint; moving them needs the door to draw components
-  from the service (with the tile-kind registry, PIE-505) and a query input in the `run` contract
-  (a handler that declares the query it reads, evaluated by the service). The primitives here are
+  read the outline through queries on every paint. The door draws components from the service now
+  (ep0ch-door PIE-512); moving them still needs a query input in the `run` contract (a handler that
+  declares the query it reads, evaluated by the service). The primitives here are
   the target they move to.
 - **Renderers for `component:` fences** (status-summary, `document-renderers.json`) still use the
   reader host's registry; they move to `extensions.list` with the door's renderer work.
-- **The door** draws handler lines generically until it reads `kind` and `output` (its projection
-  filter knows only `jira` today). Detail draws them now.
-- **Actions in Detail and the door.** The service lists them with keys and labels; neither client
-  binds them yet. Until then: `outliner ext act` and `extensions.act`.
+- **Actions in Detail.** The service lists them with keys and labels; the door binds them
+  (ep0ch-door PIE-512), Detail doesn't yet. Until then in Detail: `outliner ext act` and `extensions.act`.
+- **The same request twice in one note.** Requests are known by their words: a second `@tidy` line
+  that says exactly what an earlier one in the note says shows that one's answer and isn't asked
+  until `r` on it (or it's worded differently).
 - **Who asked for an action.** Its writes are attributed to the extension (`ext:<id>`); the agent
   or person who called `extensions.act` isn't recorded with them yet.
 - **The publisher** shows data records (they are blocks) but not yet handler outputs; it will ask
