@@ -2645,6 +2645,10 @@ Existing threads and an agent reply are seeded through public APIs.
 - Hiding query truncation or persistence failures behind silent fallbacks.
 - Creating symbolic page stubs merely because unresolved `[[text]]` was typed; accepted design creates a stub only when that link is followed.
 
+## More capabilities
+
+These shipped features sit apart from the main sections above. None of them is a non-goal.
+
 ### Linked explicit opens
 
 Each live Tree or Detail region can link to one Detail destination. Several sources may share a destination; receiving a document does not follow the receiver's own link. Moving panes leaves these links unchanged. New Tree/Detail pairs start linked; independent Trees use **Alt+L**, **Shift+L**, or the clickable **Opens in / Change** header. Detail uses the same shortcut. The menu marks the current link and previews the selected reader’s document. Destinations show document titles and Herdr workspace/tab locations; nearby readers come first. Readers on other hosts or without a known pane location are behind **Show other connected views**. Local panes proven absent by a ready Herdr snapshot are excluded. Connected readers without location evidence are retained, not assumed dead.

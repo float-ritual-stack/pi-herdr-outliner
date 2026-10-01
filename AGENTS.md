@@ -27,6 +27,13 @@ When a live Outliner request fails, follow the
 [service connection diagnostics](CONTRIBUTING.md#connecting-to-the-running-service)
 before declaring the service unavailable or leaving workboard updates pending.
 
+## Skills for agents
+
+ep0ch-door ships the skills agents load for this stack (`ep0ch --skill` lists them, with this repo's
+`pi-extension/skills/`): `ep0ch-core` for changing this repo or the door (the architecture and reuse maps,
+scratch-only testing, the real-pane recipe, review and deploy), `ep0ch-outline` for working in an outline
+for someone, and `ep0ch` for driving a door.
+
 ## Two clients, one outline
 
 The service has two clients with different jobs, and both are maintained. Tree, Detail and Preview in

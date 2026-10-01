@@ -181,7 +181,7 @@ The installer sets up everything below: `install.sh --claude-workspace /absolute
 or, from a checkout, `bun scripts/install-claude-mod.ts /absolute/project`.
 
 ```sh
-PI_OUTLINER_MENTIONS_WORKSPACES=/home/evan/test \
+PI_OUTLINER_MENTIONS_WORKSPACES=/absolute/project \
   claude --plugin-dir /path/to/checkout/claude-mod
 ```
 
