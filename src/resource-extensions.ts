@@ -208,7 +208,8 @@ function scrubCredentials(
   return value;
 }
 
-function defaultRegistryPath(): string {
+/** The old single-file registry (`resource-extensions.json`); `OUTLINER_RESOURCE_EXTENSIONS` moves it. */
+export function defaultRegistryPath(): string {
   return process.env.OUTLINER_RESOURCE_EXTENSIONS ??
     join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "pi-herdr-outliner", "resource-extensions.json");
 }

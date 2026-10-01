@@ -479,7 +479,7 @@ secret reference.
 
 ## Kind 4: a whole tile
 
-**What it is.** A program that is a tile: like nvim or the daily agent in a pane, but registered as a
+**What it is.** A program that is a tile: like nvim or the daily agent in a terminal tile, but registered as a
 tile kind of its own (`tarot.reading`). The door's open tile-kind registry (PIE-505) makes, binds and
 saves it like any built-in kind; the engine never switches on its name.
 

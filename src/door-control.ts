@@ -3,9 +3,9 @@ import { connect } from "node:net";
 /**
  * A client for ep0ch-door's control socket (the door's docs/AGENT-INTERFACE.md):
  * one JSON request per line, one `{"ok":…}` answer per line. The door owns
- * what an action does; this only asks. Used when an agent runs in a door's
- * terminal tile (EP0CH_TILE set), where the door is the place to show a note,
- * not a Herdr split.
+ * what an action does; this only asks. Used (through the CLI's `door-open`)
+ * when an agent runs in a door's tile (EP0CH_CONTROL set), where the door is
+ * the place to show a note, not a Herdr split.
  */
 
 /** No door is listening at that path (none started, or it quit). */

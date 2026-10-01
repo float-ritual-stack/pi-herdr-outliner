@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { ExtensionLoadError, readExtensionFolder } from "./extension-manifest";
 import { BUILT_IN_EXTENSIONS, extensionRoots, type ExtensionsListResult } from "./extension-registry";
-import { userExtensionsDirectory, userExtensionsFolderInUse } from "./resource-extensions";
+import { defaultRegistryPath, userExtensionsDirectory, userExtensionsFolderInUse } from "./resource-extensions";
 
 /**
  * `outliner ext ls|add|remove|act`: extension folders from a shell. They are
@@ -29,14 +29,9 @@ import { userExtensionsDirectory, userExtensionsFolderInUse } from "./resource-e
 
 const BUILT_INS = BUILT_IN_EXTENSIONS;
 
-function legacyRegistryPath(): string {
-  return process.env.OUTLINER_RESOURCE_EXTENSIONS ??
-    join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "pi-herdr-outliner", "resource-extensions.json");
-}
-
 async function legacyEntry(id: string): Promise<{ config: Record<string, unknown>; credentials: Record<string, unknown> } | null> {
   try {
-    const registry = await Bun.file(legacyRegistryPath()).json() as { providers?: Record<string, { config?: Record<string, unknown>; credentials?: Record<string, unknown> }> };
+    const registry = await Bun.file(defaultRegistryPath()).json() as { providers?: Record<string, { config?: Record<string, unknown>; credentials?: Record<string, unknown> }> };
     const entry = registry.providers?.[id];
     return entry ? { config: entry.config ?? {}, credentials: credentialReferences(entry.credentials ?? {}) } : null;
   } catch {
@@ -143,7 +138,7 @@ export async function addExtension(nameOrPath: string, options: { from?: string;
       await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
       await chmod(configPath, 0o600);
       lines.push(legacy
-        ? `wrote ${configPath} from ${legacyRegistryPath()} (its config and credential references; no secret values)`
+        ? `wrote ${configPath} from ${defaultRegistryPath()} (its config and credential references; no secret values)`
         : `wrote ${configPath} from the example: edit it (email, keychain or env token, sources) before the first fetch`);
     }
   }
@@ -206,7 +201,7 @@ export async function listExtensions(): Promise<string[]> {
       }
     }
   }
-  if (existsSync(legacyRegistryPath())) lines.push(`legacy registry: ${legacyRegistryPath()} (used when no folder has the extension)`);
+  if (existsSync(defaultRegistryPath())) lines.push(`legacy registry: ${defaultRegistryPath()} (used when no folder has the extension)`);
   lines.push(`built-ins (outliner ext add <name>): ${(await builtIns()).join(", ")}`);
   lines.push("Extensions are trusted code, not a sandbox: they run as the service user.");
   return lines;

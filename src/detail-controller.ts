@@ -589,12 +589,6 @@ export function detailBlockTarget(
   return state.target?.kind === "block" ? state.target : null;
 }
 
-export function detailResourceTarget(
-  state: Pick<DetailState, "document">,
-): ResourceDescription["resource"] | null {
-  return detailResourceDescription(state)?.resource ?? null;
-}
-
 export interface DetailEffects {
   chooseChecklistAction?(): Promise<ChecklistChoice | undefined>;
   updateChecklist?(blockId: string, input: ChecklistUpdateInput): Promise<ChecklistUpdateReceipt>;

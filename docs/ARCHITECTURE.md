@@ -15,7 +15,14 @@ flowchart LR
     Herdr[Herdr plugin action] --> Service
     Herdr --> Tree
     Herdr --> Detail
+    Door[ep0ch-door] -->|snapshot + events + draft holds| Service
+    Service --> Extensions[Extension processes, one per call]
 ```
+
+The door ([ep0ch-door](https://github.com/float-ritual-stack/ep0ch-door)) is a
+second client over the same outline: the everyday board, where Tree and Detail
+are the sysop console. It holds live drafts (see "Agent edits while someone
+types") and draws extension tiles; the service owns what both show.
 
 ### Service
 
@@ -36,7 +43,9 @@ the canonical database path. It contains no application data. The sidecar stays
 in place; closing the store or process death releases its OS lock. Read-only
 observers of the application database remain supported. Store initialization
 failure also releases ownership. Service shutdown removes its pane metadata
-before releasing ownership.
+before releasing ownership. A `:memory:` (or other private, in-memory) database
+takes no lock: no other process can open it, so there is nothing to own
+([`src/workspace-ownership.ts`](../src/workspace-ownership.ts)).
 
 All writable owners must use this contract. When upgrading from a version that
 predates ownership locking, stop its service before starting the new version;
@@ -831,6 +840,8 @@ Do not leave older editors running across this upgrade.
 - reactive clients: `events.subscribe`, `changes.since`, `clients.list`, `clients.update`
 - exact-client behavior: `ui.command.send`; document-changing commands respect destination operation protection, while pure focus preserves Current
 - targeted ephemeral attention: `attention.get`, `attention.mark`, `attention.advance`, `attention.clear`, and `attention.acknowledge`
+- agent edits while someone types (PIE-501): `draft.patch`, `draft.proposal.apply`, `drafts.read`; a door's live-draft lease `drafts.hold | heartbeat | release` and its `drafts.answer` to a `draft` event (see "Agent edits while someone types")
+- extensions (PIE-507): `extensions.list`, `extensions.act`, `extensions.render`, and the `extensions` event when the registry changes (see "Extensions")
 - typed workflows: `workflows.start`, `workflows.get`, `workflows.list`, `workflows.structure`, `workflows.plan`, `workflows.transition`, `workflows.cancel`, `workflows.promotion.preview`, and `workflows.promotion.commit`
 
 ### Live client identity
@@ -1700,6 +1711,138 @@ tabs, reshape an existing layout, or persist physical topology.
 
 After deploying a merged change, restart Detail, Tree, and service in that order, invoke the plugin action, wait for `herdr_registry_ready`, and exercise the changed surface.
 
+## Agent edits while someone types (`draft.patch`)
+
+An agent changes a span of a note with `draft.patch` (PIE-501): compare and swap.
+It sends the text it observed, the revision it read and the replacement; the
+range is only a hint. [`src/draft-patch-compare.ts`](../src/draft-patch-compare.ts)
+finds the observed text and maps positions. It imports nothing, because the door
+runs a byte-for-byte copy of it against its live draft; `ping` reports
+`draftPatchCompare.version` (`DRAFT_PATCH_COMPARE_VERSION`).
+
+**Policy.** [`src/draft-patch.ts`](../src/draft-patch.ts) owns which rule a
+matching patch is held to. `edit`, the default, is the guard every agent edit
+has: `droppedLinkedStructure` in [`src/work-tools.ts`](../src/work-tools.ts),
+shared with `outline_edit`, `note_section` and `work_body`. It refuses only a
+dropped `[page::…]` or a dropped `^anchor` another note links to (unless
+`allowStructural`), and that refusal is an error with nothing written. `prose`
+is opt-in, for tidying words a person is typing: it keeps every `^anchor`,
+`[[page]]`, `((ref))` and `[key::value]` in the span and the note, using the
+service's own parsers, and what it refuses becomes a proposal.
+
+**Draft holds.** A door editing a note takes a lease on its live draft
+(`DraftHolds`: `drafts.hold`, renewed by `drafts.heartbeat`, ended by
+`drafts.release` or by the client disconnecting; default 15 s, 1 s to 120 s).
+`drafts.read` returns a note as its live draft has it, or as saved.
+
+**Routing.** [`src/draft-patch-router.ts`](../src/draft-patch-router.ts)
+(`DraftPatchRouter`, built by `OutlinerServer`) decides where a patch goes. A held
+note gets a `draft` event sent only to the holding door, which runs the compare
+against its buffer and replies with `drafts.answer` (read past any request
+waiting for it, never queued behind it). A door that misses the 2.5 s deadline
+keeps its hold, so nothing is written to the saved note under its draft: patches
+to it become proposals, at once rather than after another wait, until the door
+is heard from again (a heartbeat or an answer), its lease runs out or it
+disconnects. Any other note is written under a revision check
+(or against its current text with `current`, capability `draft.patch.current`).
+A patch over several notes applies together or not at all: the drafts are
+patched, then the saved notes in one transaction, and a failure reverts the
+drafts already patched.
+
+**Proposals.** Only a failed compare (the note changed, the passage isn't there,
+the cursor is in it) or a `prose` refusal becomes a proposal: one reply block,
+however many changes it holds, embedded under the mark (the `@request` line) or
+the note, with its payload in a hidden, capped `[draft-patch::…]` property
+(`proposalText`). `draft.proposal.apply` applies it anyway: forced for the
+person, the same compare as a patch for an agent, and only what the proposal's
+text shows. Writes are `author: agent` with the agent's actor id. Dismissing a
+proposal in the service (`draft.proposal.dismiss`) is in review in PR #271; see
+CONTRIBUTING, "Source boundaries", once it lands.
+
+`outliner patch-demo` ([`src/draft-patch-demo.ts`](../src/draft-patch-demo.ts))
+is a proof agent for demos and tests. Agents reach `draft.patch` through
+[`src/agent-tools.ts`](../src/agent-tools.ts) (the CLI `agent` command, the Claude
+mod's `outline_patch`).
+
+## Extensions
+
+An extension is a folder (contract 2): `extension.json` plus an optional
+`config.json`. [`src/extension-manifest.ts`](../src/extension-manifest.ts) is the
+one parser of a folder and its error wording; the registry, the runtime and
+`outliner ext add` all read folders through it. The contract, the four kinds and
+worked examples are in [extensions/README.md](extensions/README.md).
+
+**Registry.** [`src/extension-registry.ts`](../src/extension-registry.ts)
+(`ExtensionRegistry`, one per outline's service) owns which extensions an outline
+has. It reads `<outline root>/extensions/<id>/` and
+`~/.config/pi-herdr-outliner/extensions/<id>/` (`OUTLINER_EXTENSIONS_DIR`); the
+outline's copy of an id wins and the other is listed as `shadowed`. Each folder
+is watched (300 ms of quiet, then a reload). Every reload rebuilds the whole
+registry from the folders and publishes it in one step, then the service
+broadcasts `extensions.changed`. A folder that stops loading keeps serving its
+last good copy and says why (`state: "failed"`, `error`). The repo's own
+`extensions/` holds forkable built-ins and is never loaded in place.
+`extensions.list` reports every folder, its state, handlers, actions, agents and
+tile kinds.
+
+**Running.** `ResourceExtensionRuntime`
+([`src/resource-extensions.ts`](../src/resource-extensions.ts)) runs one process
+per call, so code needs no reload. It looks in the registry's folders before the
+old single-file registry, `resource-extensions.json` (`defaultRegistryPath`,
+moved by `OUTLINER_RESOURCE_EXTENSIONS`). [`src/extension-handlers.ts`](../src/extension-handlers.ts)
+is the one grammar of a handler line (`key:: argument --option`).
+
+**The four kinds**, declared in `extension.json`:
+
+1. **Data** (`handlers[].kind: "resource" | "data"`): a record put into a block
+   as if copied in, like `jira::`. [`src/extension-records.ts`](../src/extension-records.ts)
+   owns what a record is: ordinary blocks, fields as namespaced properties
+   (`[jira.status::…]`), comments as child blocks. Only the owning extension
+   writes an owned block, as `author: agent`, `actorId: ext:<id>`.
+   [`src/extension-sync.ts`](../src/extension-sync.ts) decides when records sync.
+2. **Inline output** (`"output"`): markdown under the line.
+3. **Rich component** (`"component"`): data plus a view composed from the shared
+   primitives in [`src/component-primitives.ts`](../src/component-primitives.ts),
+   which also owns the render targets and their fallbacks. A client draws
+   primitives, never a component by name.
+4. **A whole tile** (`tiles[]`): a tile kind for the door's tile-kind registry.
+
+[`src/extension-calls.ts`](../src/extension-calls.ts) runs data, output and
+component handlers by their `effects` (`read`, `spend`, `write`), keeps the
+results, answers them in the `resources.projection.read` slot beside provider
+lines, renders them (`extensions.render`: markdown, blockdown, html, json, csv,
+terminal) and runs `actions[]` (`extensions.act`, the same for a key, a click and
+an agent; writes kept inside the block and attributed `ext:<id>`). How extension
+writes route through `DraftPatchRouter` with reserved `ext:` ids is in review
+in PR #272; see CONTRIBUTING, "Source boundaries", once it lands.
+[`src/extension-install.ts`](../src/extension-install.ts) is
+`outliner ext ls | add | remove | act`.
+
+### Agents addressed in a note (`@name`)
+
+An extension may declare `agents[]`. [`src/agent-requests.ts`](../src/agent-requests.ts)
+(`AgentRequests`, PIE-501) finds `@name …` lines whose name an extension answers
+(outside code), once the line has been quiet for a moment, and runs that agent's
+`respond` with the note as the person sees it. Its patches apply through
+`draft.patch` with the default `edit` policy, spans ending above the request
+line; it has no write path of its own. A reply shows under the line, in the
+same projection slot as extension output (event `extensions.agent`). A
+person's line runs once per wording; a line an agent or an import wrote waits for
+`r`, so agents can't loop; `r` asks again. Every write is `author: agent`,
+`actorId: ext:<id>`.
+
+## The door's control socket
+
+[`src/door-control.ts`](../src/door-control.ts) is a client of ep0ch-door's
+control socket (the door's `docs/AGENT-INTERFACE.md`): one JSON request per line,
+one answer per line. The door owns what its actions do; this only asks.
+`openInDoor` asks for an agent's `open` (`from` a tile, then a `reader`, then
+the door's own choice, each only when the door can't take the one before), and
+any other refusal is the answer. The CLI's `door-open` wraps it and exits 3 when
+no door answers. The Claude mod opens a note the same way for a click on a
+reference, `show` and `door_open`: in a door first (`EP0CH_CONTROL` set), then a
+Herdr Detail split, else it says why it can't and gives the `((id))`.
+
 ## Repository map
 
 ```text
@@ -1728,6 +1871,22 @@ src/detail-editor-layout.ts   wrapped visual rows and selections
 src/text-buffer.ts            raw editor state
 src/herdr-open.ts             plugin pane orchestration
 src/herdr-registry.ts         ephemeral live Herdr runtime metadata
+src/workspace-ownership.ts    workspace ownership lock (`.owner.sqlite`)
+src/draft-patch.ts            draft.patch policies, draft holds, proposals
+src/draft-patch-router.ts     where a draft.patch goes (live draft or saved note)
+src/draft-patch-compare.ts    the compare (copied byte for byte by the door)
+src/agent-tools.ts            agent outline operations (CLI `agent`, mod `outline_*`)
+src/extension-manifest.ts     the one parser of an extension folder (contract 2)
+src/extension-registry.ts     which extensions an outline has; watched folders
+src/extension-handlers.ts     handler-line grammar
+src/extension-calls.ts        runs handlers and actions; keeps their outputs
+src/extension-records.ts      extension records as blocks; the owned-block guard
+src/extension-sync.ts         when extension records sync
+src/component-primitives.ts   shared component primitives and render targets
+src/resource-extensions.ts    one process per extension call; legacy registry path
+src/extension-install.ts      `outliner ext ls|add|remove|act`
+src/agent-requests.ts         `@name` request lines and their agents
+src/door-control.ts           client of ep0ch-door's control socket
 pi-extension/index.ts         Pi/OMP commands, tools, context hook
 ```
 

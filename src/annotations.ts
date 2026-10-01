@@ -14,7 +14,6 @@ import type {
   AnnotationLifecycle,
   AnnotationRepresentation,
   AnnotationReferenceContext,
-  AnnotationResolutionEvent,
   AnnotationResolutionMethod,
   AnnotationResolutionCandidate,
   AnnotationResolutionReviewer,
@@ -726,44 +725,6 @@ export function parseStoredRepresentation(json: string): AnnotationRepresentatio
   } catch (error) {
     throw new Error(`Invalid stored annotation representation: ${error instanceof Error ? error.message : String(error)}`);
   }
-}
-
-export function parseStoredResolutionEvent(json: string): AnnotationResolutionEvent {
-  let value: unknown;
-  try { value = JSON.parse(json); } catch { throw new Error("Invalid stored annotation resolution event JSON"); }
-  if (!value || typeof value !== "object") throw new Error("Stored annotation resolution event must be an object");
-  const event = value as Record<string, unknown>;
-  const status = event.status;
-  if (
-    status !== "resolved" &&
-    status !== "probable" &&
-    status !== "unresolved" &&
-    status !== "ambiguous" &&
-    status !== "orphaned" &&
-    status !== "unsupported" &&
-    status !== "rejected"
-  ) throw new Error("Stored annotation resolution status is invalid");
-  const confidence = event.confidence === null ? null : event.confidence;
-  if (confidence !== null && (typeof confidence !== "number" || !Number.isFinite(confidence) || confidence < 0 || confidence > 1)) throw new Error("Stored annotation confidence is invalid");
-  return {
-    id: identity(event.id, "Resolution event ID"),
-    annotationId: identity(event.annotationId, "Resolution annotation ID"),
-    sequence: integer(event.sequence, "Resolution sequence"),
-    sourceRepresentation: normalizeAnnotationRepresentation(event.sourceRepresentation, true),
-    targetRepresentation: normalizeAnnotationRepresentation(event.targetRepresentation, true),
-    resolvedTarget: event.resolvedTarget === null ? null : normalizeAnnotationTarget(event.resolvedTarget, true),
-    method: normalizeResolutionMethod(event.method),
-    reviewer: normalizeResolutionReviewer(event.reviewer),
-    confidence,
-    candidates: event.candidates === undefined
-      ? []
-      : Array.isArray(event.candidates)
-        ? event.candidates.map(normalizeResolutionCandidate)
-        : (() => { throw new Error("Stored annotation candidates must be an array"); })(),
-    status,
-    appliesCurrent: event.appliesCurrent === true,
-    createdAt: timestamp(event.createdAt, "Resolution event time"),
-  };
 }
 
 function quoteForHeading(target: AnnotationTarget): string {

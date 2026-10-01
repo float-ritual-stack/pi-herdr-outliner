@@ -22,7 +22,16 @@ export function acquireLockFile(lockPath: string, what = "Outliner workspace"): 
   }
 }
 
+/** SQLite's in-memory and private temporary databases: each open is its own, so there is nothing to own. */
+function isPrivateDatabase(databasePath: string): boolean {
+  return databasePath === "" || databasePath === ":memory:" ||
+    (databasePath.startsWith("file:") && /(^file::memory:)|[?&]mode=memory(&|$)/.test(databasePath));
+}
+
 export function acquireWorkspaceOwnership(databasePath: string): () => void {
+  // A memory database has no file another process could open; a lock file
+  // beside it would land in the working directory as `:memory:.owner.sqlite`.
+  if (isPrivateDatabase(databasePath)) return () => {};
   const canonicalPath = existsSync(databasePath)
     ? realpathSync(databasePath)
     : join(realpathSync(dirname(databasePath)), basename(databasePath));

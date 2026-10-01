@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OutlinerStore } from "../src/store";
@@ -174,6 +174,27 @@ test("failed store initialization releases ownership for a valid retry", () => {
       owner.close();
     }
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a memory store owns nothing and leaves no lock file in the working directory", () => {
+  const root = mkdtempSync(join(tmpdir(), "outliner-ownership-memory-"));
+  const cwd = process.cwd();
+  process.chdir(root);
+  try {
+    const first = new OutlinerStore(":memory:");
+    const second = new OutlinerStore(":memory:");
+    try {
+      expect(first.create("First memory note").text).toBe("First memory note");
+      expect(second.create("Second memory note").text).toBe("Second memory note");
+    } finally {
+      first.close();
+      second.close();
+    }
+    expect(readdirSync(root)).toEqual([]);
+  } finally {
+    process.chdir(cwd);
     rmSync(root, { recursive: true, force: true });
   }
 });

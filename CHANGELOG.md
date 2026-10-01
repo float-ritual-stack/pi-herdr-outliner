@@ -37,6 +37,30 @@ This file records notable user-facing changes. The project remains active dogfoo
   note's tickets and extension lines. See
   [docs/extensions/README.md](docs/extensions/README.md).
 
+### Merged without an entry, Sep 30 – Oct 1 (added in the PIE-510 cleanup)
+
+Newest first.
+
+- An applied proposal says what was done: "Applied as an ordinary edit." rather
+  than "A applies it anyway". The tarot tile fits a door tile 8 to 60 columns
+  wide, cutting long lines with `…` (#270).
+- Claude mod: a click on a reference, `show` and `door_open` share one open. In
+  a door (`EP0CH_CONTROL` set) it asks that door through `door-open --from
+  <tile>`, using the `t<n>` id when the tile has no name, and the door's refusal
+  is the answer; else Herdr's Detail split; else a toast or denial that says
+  why and gives the `((id))` to copy. `door_open` no longer runs its own
+  `ep0ch` command (#264).
+- **Behaviour change:** `draft.patch` defaults to the `edit` policy, the same
+  guard as `outline_edit`: only a dropped `[page::]` or a dropped `^anchor`
+  another note links to is refused, as an error with nothing written, unless
+  `allowStructural`. Before, every patch got the strict prose check, and a
+  dropped `[[link]]` turned the whole patch into a proposal. The prose check is
+  opt-in (`policy: "prose"`); its refusals still become proposals. A patch
+  stays atomic, and a proposal reads as one edit of N changes. The mod's
+  `outline_patch` takes `policy` and `allowStructural` (#263).
+- A store opened at `:memory:` takes no ownership lock, so tests no longer leave
+  a `:memory:.owner.sqlite` file in the working directory (PIE-510).
+
 ### Merged without an entry, Sep 22–30 (added in the PIE-502 catch-up)
 
 These shipped with README or PR notes but no changelog line. Newest first.
