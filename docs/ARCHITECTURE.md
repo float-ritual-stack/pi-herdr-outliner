@@ -1755,9 +1755,13 @@ however many changes it holds, embedded under the mark (the `@request` line) or
 the note, with its payload in a hidden, capped `[draft-patch::…]` property
 (`proposalText`). `draft.proposal.apply` applies it anyway: forced for the
 person, the same compare as a patch for an agent, and only what the proposal's
-text shows. Writes are `author: agent` with the agent's actor id. Dismissing a
-proposal in the service (`draft.proposal.dismiss`) is in review in PR #271; see
-CONTRIBUTING, "Source boundaries", once it lands.
+text shows. Writes are `author: agent` with the agent's actor id.
+`draft.proposal.dismiss` takes the proposal's embed line out of the note (or the
+live draft), marks it `[proposal-status::dismissed]` and trashes it; an agent
+dismisses only its own. A proposal is applied or dismissed once (a claim), and
+one whose passage was already gone or sits at or below the mark carries
+`[proposal-applies::no]`, so clients offer only dismiss. An `@name` request's
+row follows its proposal to `applied` or `dismissed`.
 
 `outliner patch-demo` ([`src/draft-patch-demo.ts`](../src/draft-patch-demo.ts))
 is a proof agent for demos and tests. Agents reach `draft.patch` through
@@ -1812,9 +1816,14 @@ component handlers by their `effects` (`read`, `spend`, `write`), keeps the
 results, answers them in the `resources.projection.read` slot beside provider
 lines, renders them (`extensions.render`: markdown, blockdown, html, json, csv,
 terminal) and runs `actions[]` (`extensions.act`, the same for a key, a click and
-an agent; writes kept inside the block and attributed `ext:<id>`). How extension
-writes route through `DraftPatchRouter` with reserved `ext:` ids is in review
-in PR #272; see CONTRIBUTING, "Source boundaries", once it lands.
+an agent; writes kept inside the block and attributed `ext:<id>`, with who
+asked recorded as `requestedBy`). An action's update goes through
+`DraftPatchRouter` with the `edit` policy, like an `@agent`'s patch, never a
+write path of its own: a door's live draft gets it, and one that can't apply
+becomes a proposal (then nothing else the action wrote is written). `ext:<id>` actor ids are reserved for the runtime: `server.ts` refuses
+a client request that names one. What an extension says (messages, names,
+errors) is cleaned of terminal escapes (`cleanExtensionText`) before a reader
+or a terminal sees it.
 [`src/extension-install.ts`](../src/extension-install.ts) is
 `outliner ext ls | add | remove | act`.
 

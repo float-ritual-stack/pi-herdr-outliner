@@ -136,8 +136,10 @@ source evidence or distinguish authored glyphs from controls.
   `src/extension-install.ts` is `outliner ext ls|add|remove|act`. The four kinds
   and their contracts: [docs/extensions/README.md](docs/extensions/README.md).
 - `src/door-control.ts` is a client of ep0ch-door's control socket (the door's
-  `docs/AGENT-INTERFACE.md`). The door owns what its actions do; the Claude mod's
-  `show` only asks it for an agent's `open` when Claude runs in a door tile.
+  `docs/AGENT-INTERFACE.md`). The door owns what its actions do; this only asks
+  for an agent's `open` (`openInDoor`). The CLI's `door-open` wraps it, and the
+  Claude mod's reference clicks, `show` and `door_open` all go through
+  `door-open` when Claude runs in a door tile.
 - `src/publish.ts` is the read-only publisher (`outliner publish serve`): a
   client that finds `[publish::…]` blocks with `blocks.query`, resolves `[[page]]`
   links with `pages.resolve`, reads attached `[file::…]` content with
