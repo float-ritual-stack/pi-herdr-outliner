@@ -202,7 +202,9 @@ source evidence or distinguish authored glyphs from controls.
   An `@name` request's row follows its proposal to `applied` or `dismissed`).
   `src/draft-patch-router.ts` routes: a held note's patch goes to the holding
   door as a `draft` event (answered with `drafts.answer`, never queued behind
-  the request waiting for it), any other is written under a revision check;
+  the request waiting for it; a patch that applies or dismisses a proposal says
+  so in `proposal: { id, op }`, so the door words it without reading the
+  patch's shape), any other is written under a revision check;
   several notes apply together or not at all. `src/draft-patch-compare.ts` is
   the compare itself (where the observed text is, what a position becomes). It
   imports nothing, because ep0ch-door runs it against its live draft from a

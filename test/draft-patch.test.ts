@@ -385,6 +385,8 @@ describe("draft.patch over the protocol", () => {
     const dismissed = await client.request<{ embedRemoved: string | null }>({ action: "draft.proposal.dismiss", proposalId: result.proposalId, mutation: { author: "user" } });
     expect(dismissed.embedRemoved).toBe("draft");
     expect(door.text).toBe(typed);
+    // The door is told the patch dismisses that proposal, so it says so without reading the patch's shape.
+    expect(door.requests.filter(r => r.kind === "patch").at(-1)).toMatchObject({ force: true, proposal: { id: result.proposalId, op: "dismiss" } });
     expect(store.require(note.id).text).toBe(note.text);
     expect(store.require(result.proposalId).deletedAt).toBeTruthy();
 

@@ -18,7 +18,9 @@ This file records notable user-facing changes. The project remains active dogfoo
 - `draft.proposal.dismiss` (capability of the same name) dismisses a proposal
   in one step. Its embed line comes out of the note or of the door's live
   draft, the proposal gets `[proposal-status::dismissed]` and goes to the
-  Trash, attributed. An agent can dismiss only its own proposals.
+  Trash, attributed. An agent can dismiss only its own proposals. A patch the
+  service sends a door's live draft to apply or dismiss a proposal carries
+  `proposal: { id, op }`.
 - An `@name` request whose proposal was applied or dismissed now shows
   `applied` or `dismissed` under its line. A proposal's text no longer names a
   door key.

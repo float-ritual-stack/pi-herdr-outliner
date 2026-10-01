@@ -101,12 +101,17 @@ export interface DraftPatchProposed {
 export type DraftPatchResult = DraftPatchApplied | DraftPatchProposed;
 
 /** What the service asks the door holding a draft; the door answers with `drafts.answer`. */
+/** The proposal a patch sent to a holding door settles: `apply` (apply anyway) or `dismiss` (its embed line out). */
+export interface DraftHolderProposal { id: string; op: "apply" | "dismiss" }
+
 export type DraftHolderRequest =
   | { kind: "read"; requestId: string; holdId: string; blockId: string; targetClientId: string }
   | {
       kind: "patch"; requestId: string; holdId: string; blockId: string; targetClientId: string;
       patchId: string; revision: number; patches: DraftPatchSpan[]; mutation: MutationProvenance;
       mark?: string; force?: boolean;
+      /** Set when the patch applies or dismisses a proposal, so the door says which it was, not guessing from the patch. */
+      proposal?: DraftHolderProposal;
     }
   | { kind: "revert"; requestId: string; holdId: string; blockId: string; targetClientId: string; patchId: string }
   | {

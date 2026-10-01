@@ -42,6 +42,7 @@ import {
   withProposalStatus,
   type DraftHold,
   type DraftHolderAnswer,
+  type DraftHolderProposal,
   type DraftHolderRequest,
   type DraftHolds,
   type DraftPatchApplied,
@@ -62,7 +63,7 @@ import { droppedLinkedStructure, type WorkToolsClient } from "./work-tools";
 /** What a request to a holding door carries besides its ids, which the server fills in. */
 export type DraftHolderAsk =
   | { kind: "read" }
-  | { kind: "patch"; patchId: string; revision: number; patches: DraftPatchSpan[]; mutation: MutationProvenance; mark?: string; force?: boolean }
+  | { kind: "patch"; patchId: string; revision: number; patches: DraftPatchSpan[]; mutation: MutationProvenance; mark?: string; force?: boolean; proposal?: DraftHolderProposal }
   | { kind: "revert"; patchId: string }
   | { kind: "embed"; line: string; mark?: string; mutation: MutationProvenance };
 
@@ -95,6 +96,8 @@ interface RunOptions {
   /** The rule a matching patch is held to (not checked when forced). */
   policy: DraftPatchPolicyName;
   allowStructural?: boolean;
+  /** The proposal this run settles: the holding door is told, so it says what was done (PIE-510). */
+  proposal?: DraftHolderProposal;
 }
 
 /** `refused`: the `edit` policy's guard said no; the patch is an error, never a proposal. */
@@ -338,8 +341,8 @@ export class DraftPatchRouter {
         ? { text: kept.text, blockId: typeof kept.blockId === "string" && kept.blockId.trim() ? kept.blockId.trim() : edits[0]!.blockId }
         : undefined;
       const outcome = await this.run(edits, forced
-        ? { mutation: who, force: true, policy, ...(mark ? { mark } : {}) }
-        : { mutation: who, current: true, policy, ...(allowStructural ? { allowStructural } : {}), ...(mark ? { mark } : {}) });
+        ? { mutation: who, force: true, policy, proposal: { id: proposalId, op: "apply" }, ...(mark ? { mark } : {}) }
+        : { mutation: who, current: true, policy, proposal: { id: proposalId, op: "apply" }, ...(allowStructural ? { allowStructural } : {}), ...(mark ? { mark } : {}) });
       if (!outcome.ok) throw new Error(`Couldn't apply it: ${outcome.reason}${outcome.refused ? "; only the person applies that anyway" : ""}`);
       const warning = this.writeStatus(proposalId, "applied", who);
       this.settled(proposalId, "applied", who);
@@ -387,7 +390,7 @@ export class DraftPatchRouter {
           const patchId = crypto.randomUUID();
           let patched: DraftHolderAnswer;
           try {
-            patched = await this.deps.ask(hold, { kind: "patch", patchId, revision: hold.revision, patches: [span], mutation: who, force: true });
+            patched = await this.deps.ask(hold, { kind: "patch", patchId, revision: hold.revision, patches: [span], mutation: who, force: true, proposal: { id: proposalId, op: "dismiss" } });
           } catch (error) {
             void this.deps.ask(hold, { kind: "revert", patchId }).catch(() => undefined);
             throw new Error(`The door holding a draft of its note didn't answer (${error instanceof Error ? error.message : String(error)}); the proposal wasn't dismissed`);
@@ -491,6 +494,7 @@ export class DraftPatchRouter {
           mutation: options.mutation,
           ...(options.mark && options.mark.blockId === edit.blockId ? { mark: options.mark.text } : {}),
           ...(options.force ? { force: true } : {}),
+          ...(options.proposal ? { proposal: options.proposal } : {}),
         });
       } catch (error) {
         // A slow door may still apply it after the service stopped waiting: take it back there too.
