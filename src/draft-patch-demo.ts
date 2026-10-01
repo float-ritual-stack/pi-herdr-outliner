@@ -50,6 +50,6 @@ export function tidyAboveMark(text: string, mark: string): DraftPatchSpan | null
   const observed = lines.slice(start, end + 1).join("\n");
   const replacement = lines.slice(start, end + 1).map(tidyLine).join("\n");
   if (replacement === observed) return null;
-  // The text either side goes along, so "apply anyway" can still place it after the person edits the passage.
+  // The text either side goes along, so "apply anyway" can tell which copy of the passage it means.
   return { observed, replacement, range: { start: offset, end: offset + observed.length }, unit: "utf16", ...spanContext(text, offset, offset + observed.length) };
 }

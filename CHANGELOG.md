@@ -4,6 +4,25 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+### Proposals apply once, never past their passage, and dismiss in the service (PIE-510)
+
+- "Apply anyway" places only the passage the proposal shows. If the person
+  changed that passage since, the apply is refused and their text stays. It
+  used to replace whatever stood between the context kept around the passage,
+  which at a note's end was everything after it. A forced apply also stays
+  above the mark. A proposal whose passage was already gone when it was made
+  carries `[proposal-applies::no]`, so clients offer only dismiss.
+- A proposal is applied or dismissed once: a second call made at the same time
+  is refused. If the applied status can't be written, the answer has a
+  `warning`.
+- `draft.proposal.dismiss` (capability of the same name) dismisses a proposal
+  in one step. Its embed line comes out of the note or of the door's live
+  draft, the proposal gets `[proposal-status::dismissed]` and goes to the
+  Trash, attributed. An agent can dismiss only its own proposals.
+- An `@name` request whose proposal was applied or dismissed now shows
+  `applied` or `dismissed` under its line. A proposal's text no longer names a
+  door key.
+
 ### Agents addressed while you write (PIE-501)
 
 - An extension can declare `agents[]`. A person's `@name …` line (quiet for a

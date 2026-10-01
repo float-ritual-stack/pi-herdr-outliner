@@ -420,6 +420,32 @@ function extensionRecordRow(row: ExtensionRecordDbRow): ExtensionRecordRow {
   };
 }
 
+/**
+ * What an `@name` request came to. `waiting`: written by an agent, so it waits for r. `proposed` becomes
+ * `applied` or `dismissed` when the person settles the proposal it left (PIE-510).
+ */
+export const AGENT_REQUEST_STATUSES = ["waiting", "running", "applied", "proposed", "dismissed", "replied", "nothing", "failed"] as const;
+export type AgentRequestStatus = typeof AGENT_REQUEST_STATUSES[number];
+
+/** The `agent_requests` table, shared by creation and the status migration so the two cannot drift. */
+function agentRequestsTableSql(name: string): string {
+  return `CREATE TABLE IF NOT EXISTS ${name} (
+        block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+        request_key TEXT NOT NULL,
+        agent TEXT NOT NULL,
+        extension_id TEXT NOT NULL,
+        request TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN (${AGENT_REQUEST_STATUSES.map(status => `'${status}'`).join(", ")})),
+        message TEXT,
+        reply TEXT,
+        proposal_id TEXT,
+        requested_by TEXT NOT NULL,
+        requested_at TEXT NOT NULL,
+        answered_at TEXT,
+        PRIMARY KEY (block_id, request_key)
+      )`;
+}
+
 /** One `@name` request line and what its agent did (`agent_requests`). */
 export interface AgentRequestRow {
   readonly blockId: string;
@@ -428,7 +454,7 @@ export interface AgentRequestRow {
   readonly extensionId: string;
   readonly request: string;
   /** `waiting`: written by an agent, so it waits for r. */
-  readonly status: "waiting" | "running" | "applied" | "proposed" | "replied" | "nothing" | "failed";
+  readonly status: AgentRequestStatus;
   readonly message?: string | null;
   readonly reply?: string | null;
   readonly proposalId?: string | null;
@@ -1771,6 +1797,12 @@ export class OutlinerStore {
 
   agentRequests(blockId: string): AgentRequestRow[] {
     return (this.database.query("SELECT * FROM agent_requests WHERE block_id = ?").all(blockId) as AgentRequestDbRow[]).map(agentRequestRow);
+  }
+
+  /** The request answered with proposal `proposalId`, if one was. */
+  agentRequestByProposal(proposalId: string): AgentRequestRow | null {
+    const row = this.database.query("SELECT * FROM agent_requests WHERE proposal_id = ? LIMIT 1").get(proposalId) as AgentRequestDbRow | null;
+    return row ? agentRequestRow(row) : null;
   }
 
   /** Records a request, or its answer. */
@@ -3954,21 +3986,7 @@ export class OutlinerStore {
         PRIMARY KEY (block_id, extension_id, item_key)
       );
       CREATE INDEX IF NOT EXISTS extension_askers_key ON extension_askers(extension_id, item_key);
-      CREATE TABLE IF NOT EXISTS agent_requests (
-        block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
-        request_key TEXT NOT NULL,
-        agent TEXT NOT NULL,
-        extension_id TEXT NOT NULL,
-        request TEXT NOT NULL,
-        status TEXT NOT NULL CHECK (status IN ('waiting', 'running', 'applied', 'proposed', 'replied', 'nothing', 'failed')),
-        message TEXT,
-        reply TEXT,
-        proposal_id TEXT,
-        requested_by TEXT NOT NULL,
-        requested_at TEXT NOT NULL,
-        answered_at TEXT,
-        PRIMARY KEY (block_id, request_key)
-      );
+      ${agentRequestsTableSql("agent_requests")};
       CREATE TABLE IF NOT EXISTS agent_request_baseline (
         block_id TEXT PRIMARY KEY REFERENCES blocks(id) ON DELETE CASCADE,
         request_keys TEXT NOT NULL
@@ -3997,6 +4015,7 @@ export class OutlinerStore {
     `);
     this.database.query(blockActivityTableSql("block_edit_activity", { ifNotExists: true })).run();
     this.migrateActivityKinds();
+    this.migrateAgentRequestStatuses();
     this.database.exec(`
       CREATE INDEX IF NOT EXISTS block_edit_activity_author_cursor
         ON block_edit_activity(author, activity_id DESC);
@@ -4013,6 +4032,33 @@ export class OutlinerStore {
     this.migratePageAddressRegistry();
     this.reconcileWorkIdAddresses();
     this.migrateNavigationHistory();
+  }
+
+  /**
+   * Widens the agent request status check (`dismissed`, PIE-510). SQLite cannot alter a CHECK, so an older
+   * table is rebuilt with its rows.
+   */
+  private migrateAgentRequestStatuses(): void {
+    const table = this.database.query(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_requests'",
+    ).get() as { sql: string } | null;
+    if (!table || AGENT_REQUEST_STATUSES.every(status => table.sql.includes(`'${status}'`))) return;
+    this.database.transaction(() => {
+      const { expected } = this.database.query("SELECT COUNT(*) AS expected FROM agent_requests WHERE block_id IN (SELECT id FROM blocks)").get() as { expected: number };
+      this.database.query("DROP TABLE IF EXISTS agent_requests_next").run();
+      this.database.query(agentRequestsTableSql("agent_requests_next")).run();
+      this.database.query(`
+        INSERT INTO agent_requests_next
+          (block_id, request_key, agent, extension_id, request, status, message, reply, proposal_id, requested_by, requested_at, answered_at)
+        SELECT block_id, request_key, agent, extension_id, request, status, message, reply, proposal_id, requested_by, requested_at, answered_at
+        FROM agent_requests
+        WHERE block_id IN (SELECT id FROM blocks)
+      `).run();
+      const { copied } = this.database.query("SELECT COUNT(*) AS copied FROM agent_requests_next").get() as { copied: number };
+      if (copied !== expected) throw new Error(`Agent request migration copied ${copied} of ${expected} rows; the original table is unchanged`);
+      this.database.query("DROP TABLE agent_requests").run();
+      this.database.query("ALTER TABLE agent_requests_next RENAME TO agent_requests").run();
+    })();
   }
 
   private migrateCaptureState(): void {

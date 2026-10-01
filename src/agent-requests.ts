@@ -335,6 +335,22 @@ export class AgentRequests {
     }
   }
 
+  /**
+   * The proposal a request left was applied anyway or dismissed (PIE-510): its row says so, so the line's
+   * projection tells the truth in every client. Who did it is said when it wasn't the person.
+   */
+  proposalSettled(proposalId: string, status: "applied" | "dismissed", by: MutationProvenance): void {
+    const row = this.store.agentRequestByProposal(proposalId);
+    if (!row || row.status !== "proposed") return;
+    const who = by.author === "agent" ? ` by @${by.actorId ?? "an agent"}` : "";
+    this.store.putAgentRequest({
+      ...row, status,
+      message: status === "applied" ? `its proposal was applied anyway${who}` : `its proposal was dismissed${who}`,
+      answeredAt: new Date(this.now).toISOString(),
+    });
+    this.deps.changed(row.blockId);
+  }
+
   /** One projection per request line, in the slot extension outputs use (`resources.projection.read`). */
   projections(blockId: string, line?: number): ResourceProjection[] {
     const block = this.store.get(blockId);

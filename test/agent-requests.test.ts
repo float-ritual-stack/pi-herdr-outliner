@@ -138,6 +138,27 @@ process.stdout.write(JSON.stringify({ ok: true, value: { message: "two items", r
   expect(failed.reason).toBe("@broken answered something the service can't apply: patches must be a list of at most 20");
 });
 
+test("a request's proposal, applied anyway or dismissed, says so under the line (PIE-510)", async () => {
+  const { store, client, create, agentOf, writeAgent } = await setup();
+  await writeAgent("stale", `process.stdout.write(JSON.stringify({ ok: true, value: { patches: [{ observed: "two  beans", replacement: "two beans" }] } }));`);
+  const dropped = await create("Plan\nthe real text\n@stale");
+  const first = await agentOf(dropped.id, (p) => p.agent?.status === "proposed");
+  const dismissed = await client.request<{ outcome: string }>({ action: "draft.proposal.dismiss", proposalId: first.agent!.proposalId!, mutation: PERSON });
+  expect(dismissed.outcome).toBe("dismissed");
+  const after = await agentOf(dropped.id, (p) => p.agent?.status === "dismissed");
+  expect(after.summary).toBe("its proposal was dismissed");
+
+  const kept = await create("Plan\nthe real text\n@stale");
+  const second = await agentOf(kept.id, (p) => p.agent?.status === "proposed");
+  // The passage the agent meant turns up after all; the person applies the proposal anyway.
+  const now = store.get(kept.id)!;
+  await client.request({ action: "update", blockId: kept.id, text: now.text.replace("the real text", "two  beans"), expectedRevision: now.revision, mutation: PERSON });
+  await client.request({ action: "draft.proposal.apply", proposalId: second.agent!.proposalId!, mutation: PERSON });
+  const applied = await agentOf(kept.id, (p) => p.agent?.status === "applied");
+  expect(applied.summary).toBe("its proposal was applied anyway");
+  expect(store.get(kept.id)!.text).toStartWith("Plan\ntwo beans\n@stale");
+});
+
 test("only a request a person's save adds runs: lines from before the install wait, note-level r doesn't ask, typing elsewhere still applies", async () => {
   const { store, client, create, agentOf, writeAgent } = await setup();
   // Written while no extension answered @slow: when one appears, an unrelated save doesn't run it.
@@ -191,4 +212,26 @@ process.stdout.write(JSON.stringify({ ok: true, value: { patches: [{ observed: "
   await until("the new wording answered", () => store.agentRequests(asked.id).some((row) => row.request === "two" && row.status === "applied"));
   expect(store.agentRequests(asked.id).map((row) => row.request)).toEqual(["two"]);
   expect(store.get(asked.id)!.text).toBe("y\nWORDS\n@tardy two");
+});
+
+test("an older outline's request table takes the dismissed status, its rows kept", () => {
+  const root = mkdtempSync(join(tmpdir(), "outliner-agent-migrate-"));
+  cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+  const path = join(root, "outliner.sqlite");
+  const first = new OutlinerStore(path);
+  const note = first.create("Plan\n@tidy");
+  const row = { blockId: note.id, requestKey: "k1", agent: "tidy", extensionId: "tidy", request: "", status: "proposed" as const, proposalId: "p-1", requestedBy: "user", requestedAt: "2026-01-02T03:04:05.000Z" };
+  // The table as it was before PIE-510: its check doesn't know `dismissed`.
+  first.database.exec(`DROP TABLE agent_requests; CREATE TABLE agent_requests (
+    block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE, request_key TEXT NOT NULL, agent TEXT NOT NULL, extension_id TEXT NOT NULL,
+    request TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('waiting', 'running', 'applied', 'proposed', 'replied', 'nothing', 'failed')),
+    message TEXT, reply TEXT, proposal_id TEXT, requested_by TEXT NOT NULL, requested_at TEXT NOT NULL, answered_at TEXT, PRIMARY KEY (block_id, request_key))`);
+  first.putAgentRequest(row);
+  expect(() => first.putAgentRequest({ ...row, status: "dismissed" })).toThrow();
+  first.close();
+  const second = new OutlinerStore(path);
+  cleanups.push(() => second.close());
+  expect(second.agentRequestByProposal("p-1")).toMatchObject({ status: "proposed", requestKey: "k1" });
+  second.putAgentRequest({ ...row, status: "dismissed" });
+  expect(second.agentRequests(note.id).map((entry) => entry.status)).toEqual(["dismissed"]);
 });

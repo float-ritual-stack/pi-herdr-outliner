@@ -13,12 +13,12 @@
  * is compared.
  */
 
-export const DRAFT_PATCH_COMPARE_VERSION = 1;
+export const DRAFT_PATCH_COMPARE_VERSION = 2;
 
 /** How far from its hinted start a span's observed text may have moved (UTF-16 units) and still match. */
 export const DRAFT_PATCH_NEAR = 256;
 
-/** How much text either side of a span a proposal keeps, to place "apply anyway" once the span has changed. */
+/** How much text either side of a span a proposal keeps, to tell which copy "apply anyway" means. */
 export const DRAFT_PATCH_CONTEXT = 48;
 
 export type DraftPatchUnit = "utf16" | "utf8";
@@ -38,7 +38,7 @@ export interface DraftPatchSpan {
   range?: DraftPatchRange;
   /** The range's unit; UTF-16 code units when left out. */
   unit?: DraftPatchUnit;
-  /** Text just before and after the span when it was proposed (a proposal keeps these for "apply anyway"). */
+  /** Text just before and after the span when it was proposed (a proposal keeps these: "apply anyway" prefers the copy they are beside). */
   before?: string;
   after?: string;
 }
@@ -115,32 +115,28 @@ export function locateSpan(text: string, span: DraftPatchSpan): { start: number;
 }
 
 /**
- * "Apply anyway": the observed text wherever it is nearest its hint, or else
- * the text now between the context the proposal kept on either side.
+ * "Apply anyway": the observed text wherever it is nearest its hint, ignoring
+ * the revision it was read at. With more than one copy, the one with the
+ * context the proposal kept beside it is preferred. A passage that is no longer
+ * there is never guessed at: whatever is now between the kept context is the
+ * person's newer text, which the proposal doesn't show, so it is refused rather
+ * than replaced (PIE-510).
  */
 export function locateSpanForced(text: string, span: DraftPatchSpan): { start: number; end: number } | { reason: string } {
+  if (!span.observed) return { reason: "the observed text is empty; compare the text the change goes beside" };
+  const found = occurrences(text, span.observed);
+  if (!found.length) return { reason: "the passage changed since it was proposed; read the proposal and edit it by hand" };
   const hintStart = span.range ? (utf16Range(text, span.range, span.unit)?.start ?? Math.min(text.length, span.range.start)) : 0;
-  if (span.observed) {
-    const found = occurrences(text, span.observed);
-    const near = nearest(found, hintStart, Infinity);
-    if (near && "at" in near) return { start: near.at, end: near.at + span.observed.length };
-  }
-  if (span.before === undefined || span.after === undefined || (!span.before && !span.after)) {
-    return { reason: "the passage it replaces isn't there any more" };
-  }
-  // The context nearest the passage matters most: a line typed or put in further away (a proposal's own
-  // embed under the mark) only shortens it, a line at a time.
-  let start = -1;
-  for (const before of span.before ? trimmed(span.before, "start") : [""]) {
-    const pick = nearest(before ? occurrences(text, before).map(at => at + before.length) : [0], hintStart, Infinity);
-    if (pick && "at" in pick) { start = pick.at; break; }
-  }
-  if (start < 0) return { reason: "the text before the passage isn't there any more" };
-  for (const after of span.after ? trimmed(span.after, "end") : [""]) {
-    const end = after ? text.indexOf(after, start) : text.length;
-    if (end >= 0) return { start, end };
-  }
-  return { reason: "the text after the passage isn't there any more" };
+  const beside = found.filter(at => contextFits(text, at, at + span.observed.length, span));
+  const near = nearest(beside.length ? beside : found, hintStart, Infinity);
+  if (near && "at" in near) return { start: near.at, end: near.at + span.observed.length };
+  return { reason: "the passage is in the note more than once, and which one was meant isn't clear; edit it by hand" };
+}
+
+/** Whether the context a proposal kept (or the part of it nearest the passage) is beside `[start, end)`. */
+function contextFits(text: string, start: number, end: number, span: DraftPatchSpan): boolean {
+  if (span.before && trimmed(span.before, "start").some(before => text.slice(Math.max(0, start - before.length), start) === before)) return true;
+  return !!span.after && trimmed(span.after, "end").some(after => text.startsWith(after, end));
 }
 
 /** Context, then shorter by whole lines from its far side (`start`: the lines before; `end`: after). */

@@ -1705,6 +1705,13 @@ export const OUTLINER_CAPABILITIES = [
   "draft.patch",
   /** `draft.proposal.apply`: apply a proposal's patch anyway, as an ordinary edit. */
   "draft.proposal.apply",
+  /**
+   * `draft.proposal.dismiss`: dismiss a proposal without applying it (its embed line out of the note or its
+   * live draft, `proposal-status::dismissed`, then the Trash; an agent only its own). With it, apply and
+   * dismiss each settle a proposal once, `proposal-applies::no` marks one whose passage was already gone, and
+   * the forced apply never replaces more than the passage the proposal shows, nor reaches past its mark (PIE-510).
+   */
+  "draft.proposal.dismiss",
   /** `draft.patch` takes `current`: a saved note's spans and mark are compared as it is now, not by revision. */
   "draft.patch.current",
   /** `ping` reports `draftPatchCompare`: the version of src/draft-patch-compare.ts, which the door copies. */
@@ -2298,6 +2305,8 @@ export type OutlinerRequestAction =
   | ({ id: string; action: "draft.patch" } & DraftPatchInput)
   /** "Apply anyway": a proposal block's patch as an ordinary edit (capability `draft.proposal.apply`). */
   | { id: string; action: "draft.proposal.apply"; proposalId: string; mutation: MutationProvenance }
+  /** Dismiss a proposal without applying it (capability `draft.proposal.dismiss`). */
+  | { id: string; action: "draft.proposal.dismiss"; proposalId: string; mutation: MutationProvenance }
   /** `mutation` needs capability `mutations.provenance`; without it the change is unattributed. */
   | { id: string; action: "move"; blockId: string; parentId: string | null; position?: number; mutation?: MutationProvenance }
   | { id: string; action: "delete"; blockId: string; mutation?: MutationProvenance }

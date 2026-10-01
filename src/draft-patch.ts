@@ -328,28 +328,57 @@ function labelOf(title: string): string {
 }
 
 /**
+ * Where a proposal is in its life (`[proposal-status::…]`): `open` until the person (or its own agent)
+ * applies it anyway (`applied`) or dismisses it (`dismissed`). Clients offer apply and dismiss on an `open`
+ * one; `[proposal-applies::no]` beside it says the passage it changes was already gone when it was proposed,
+ * so only dismiss is offered (PIE-510).
+ */
+export type DraftProposalStatus = "open" | "applied" | "dismissed";
+
+export const DRAFT_PROPOSAL_STATUSES: readonly DraftProposalStatus[] = ["open", "applied", "dismissed"];
+
+/** The property a proposal carries, set to `no`, when its passage wasn't in the note when it was proposed. */
+export const DRAFT_PROPOSAL_APPLIES = "proposal-applies";
+
+/**
+ * A proposal's first line, from its patch and its status (never from the sentences already there): who
+ * proposed it, why it didn't apply, what became of it. It names no client's keys; each client offers its
+ * own controls by the status.
+ */
+function proposalHeader(proposal: DraftProposal, status: DraftProposalStatus, applies: boolean): string {
+  const who = proposal.actor?.actorId ? `@${proposal.actor.actorId}` : proposal.actor?.author === "agent" ? "an agent" : "someone";
+  const changes = proposalChanges(proposal);
+  const count = changes > 1 ? ` (${changes} changes)` : "";
+  const reason = typeof proposal.reason === "string" ? proposal.reason : "it couldn't be placed";
+  const said = status === "applied"
+    ? `Applied anyway: 1 edit${count} from ${who}, which didn't apply at first because ${reason}`
+    : status === "dismissed"
+      ? `Dismissed: 1 proposed edit${count} from ${who}, not applied because ${reason}`
+      : `1 proposed edit${count} from ${who}: not applied, because ${reason}`;
+  return `${said} [type::${DRAFT_PROPOSAL_TYPE}] [proposal-status::${status}]${applies ? "" : ` [${DRAFT_PROPOSAL_APPLIES}::no]`}`;
+}
+
+/**
  * The reply block's text: who proposed what, why it didn't apply, what it
  * would change (fenced, so its links stay text), and the patch itself as a
  * metadata property (`[draft-patch::…]`, base64url JSON: inert, and hidden by
  * readers like any metadata line). A patch is one proposal however many
  * changes it holds, applied whole or not at all, and its header says so:
- * `1 proposed edit (6 changes) from @agent: not applied, because change 1 would … · A applies all`.
+ * `1 proposed edit (6 changes) from @agent: not applied, because change 1 would …`.
+ * `applies: false`: its passage is already gone, so it can only be dismissed.
  */
-export function proposalText(proposal: DraftProposal, names: (blockId: string) => string = id => id): string {
+export function proposalText(proposal: DraftProposal, names: (blockId: string) => string = id => id, options: { applies?: boolean } = {}): string {
   const payload = Buffer.from(JSON.stringify(proposal), "utf8").toString("base64url");
   if (payload.length > DRAFT_PROPOSAL_MAX_PAYLOAD) {
     throw new Error(`The patch is too large to keep as a proposal (${Math.ceil(payload.length / 1024)} KB of the ${DRAFT_PROPOSAL_MAX_PAYLOAD / 1024} KB a proposal holds); nothing was changed. Patch a smaller passage`);
   }
-  const who = proposal.actor.actorId ? `@${proposal.actor.actorId}` : proposal.actor.author === "agent" ? "an agent" : "someone";
   const targets = [...new Set(proposal.edits.map(edit => edit.blockId))].map(id => `((${id}|${labelOf(names(id))}))`).join(", ");
   const changes = proposalChanges(proposal);
   const many = changes > 1;
   const lines = [
-    `1 proposed edit${many ? ` (${changes} changes)` : ""} from ${who}: not applied, because ${proposal.reason} · A applies ${many ? "all" : "it"} [type::${DRAFT_PROPOSAL_TYPE}] [proposal-status::open]`,
+    proposalHeader(proposal, "open", options.applies !== false),
     `[draft-patch::${payload}]`,
-    many
-      ? `To ${targets}: one edit, its ${changes} changes applied together or not at all. A applies all of them anyway, as one ordinary edit.`
-      : `To ${targets}. A applies it anyway, as an ordinary edit.`,
+    many ? `To ${targets}: one edit, its ${changes} changes applied together or not at all.` : `To ${targets}.`,
   ];
   let change = 0;
   for (const edit of proposal.edits) {
@@ -390,23 +419,55 @@ export function parseProposal(text: string): DraftProposal | null {
   }
 }
 
-/** A proposal's text once "apply anyway" applied it: its header says so, and its status token. */
-export function withProposalApplied(text: string): string {
-  const title = /^1 proposed edit/.test(text)
-    ? text
-      .replace(/^1 proposed edit( \(\d+ changes\))? from (.*?): not applied, because /, "Applied anyway: 1 edit$1 from $2, which didn't apply at first because ")
-      .replace(/ · A applies (?:all|it)(?= \[type::)/, "")
-      // Its body said what A would do; now it says what was done.
-      .replace(/^(To .*?)\. A applies it anyway, as an ordinary edit\.$/m, "$1. Applied as an ordinary edit.")
-      .replace(/^(To .*?): one edit, its (\d+) changes applied together or not at all\. A applies all of them anyway, as one ordinary edit\.$/m, "$1: one edit, its $2 changes applied together as one ordinary edit.")
-    // A proposal from before the header named one edit and its changes.
-    : text.replace(/^Proposed edit from (.*?): not applied, /, "Applied anyway: edit from $1, which didn't apply at first: ");
-  return title.replace(/\[proposal-status::[a-z-]+\]/, "[proposal-status::applied]");
+/** A proposal's status, from its properties: `open` when it names none this service knows. */
+export function proposalStatus(properties: readonly { key: string; value: string }[]): DraftProposalStatus {
+  const value = properties.find(property => property.key === "proposal-status")?.value;
+  return DRAFT_PROPOSAL_STATUSES.includes(value as DraftProposalStatus) ? value as DraftProposalStatus : "open";
+}
+
+/**
+ * A proposal's text with a new status. Its first line is written again from the patch it holds and the
+ * status, so no sentence is matched; the person's own edits below it stay. A proposal from before PIE-510
+ * said in its body what a door's key would do: that line is put the neutral way.
+ */
+export function withProposalStatus(text: string, status: DraftProposalStatus): string {
+  const lines = text.split("\n");
+  const proposal = parseProposal(text);
+  if (proposal && lines[0]!.includes(`[type::${DRAFT_PROPOSAL_TYPE}]`)) {
+    lines[0] = proposalHeader(proposal, status, !lines[0]!.includes(`[${DRAFT_PROPOSAL_APPLIES}::no]`));
+  } else if (/\[proposal-status::[a-z-]+\]/.test(lines[0]!)) {
+    lines[0] = lines[0]!.replace(/\[proposal-status::[a-z-]+\]/, `[proposal-status::${status}]`);
+  } else {
+    lines[0] = `${lines[0]} [proposal-status::${status}]`;
+  }
+  return lines.join("\n")
+    .replace(/^(To .*?)\. A applies it anyway, as an ordinary edit\.$/m, "$1.")
+    .replace(/^(To .*?: one edit, its \d+ changes applied together or not at all)\. A applies all of them anyway, as one ordinary edit\.$/m, "$1.");
 }
 
 /** The embed line a proposal gets under the mark or at the end of the note. */
 export function embedLine(proposalId: string): string {
   return `!((${proposalId}))`;
+}
+
+/**
+ * The span that takes a proposal's embed line out of `text`: the line with the line break before it (after
+ * it, when it is the first line), or the embed alone when it shares its line with other text. Null when the
+ * text doesn't have it.
+ */
+export function embedLineSpan(text: string, line: string): DraftPatchSpan | null {
+  let start = 0;
+  const lines = text.split("\n");
+  for (const [index, candidate] of lines.entries()) {
+    if (candidate.trim() === line) {
+      const from = index > 0 ? start - 1 : start;
+      const to = index > 0 ? start + candidate.length : Math.min(text.length, start + candidate.length + 1);
+      return { observed: text.slice(from, to), replacement: "", range: { start: from, end: to }, unit: "utf16" };
+    }
+    start += candidate.length + 1;
+  }
+  const at = text.indexOf(line);
+  return at < 0 ? null : { observed: line, replacement: "", range: { start: at, end: at + line.length }, unit: "utf16" };
 }
 
 /**

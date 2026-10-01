@@ -266,6 +266,8 @@ export class OutlinerServer {
           return response.result as T;
         },
       },
+      // An `@name` request answered with a proposal says what became of it.
+      proposalSettled: (proposalId, status, by) => this.agentRequests.proposalSettled(proposalId, status, by),
     });
     // Baseline before accepting edits or awaiting provider configuration.
     this.noteRepository.initialize();
@@ -1529,13 +1531,15 @@ export class OutlinerServer {
         return { id: request.id, ok: false, error: error instanceof Error ? error.message : String(error), sequence: this.store.sequence };
       }
     }
-    if (request.action === "draft.patch" || request.action === "draft.proposal.apply" || request.action === "drafts.read") {
+    if (request.action === "draft.patch" || request.action === "draft.proposal.apply" || request.action === "draft.proposal.dismiss" || request.action === "drafts.read") {
       try {
         const result = request.action === "draft.patch"
           ? await this.draftPatches.patch(request)
           : request.action === "draft.proposal.apply"
             ? await this.draftPatches.applyProposal(request.proposalId, request.mutation)
-            : await this.draftPatches.read(request.blockId);
+            : request.action === "draft.proposal.dismiss"
+              ? await this.draftPatches.dismissProposal(request.proposalId, request.mutation)
+              : await this.draftPatches.read(request.blockId);
         return { id: request.id, ok: true, result, sequence: this.store.sequence };
       } catch (error) {
         return { id: request.id, ok: false, error: error instanceof Error ? error.message : String(error), sequence: this.store.sequence };
@@ -2360,6 +2364,7 @@ export class OutlinerServer {
           throw Error("Merge proposals require asynchronous dispatch");
         case "draft.patch":
         case "draft.proposal.apply":
+        case "draft.proposal.dismiss":
         case "drafts.read":
           throw Error(`${action} requires asynchronous dispatch`);
         case "edit-recovery.start":

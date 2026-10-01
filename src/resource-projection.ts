@@ -91,7 +91,7 @@ export interface ResourceProjection {
   /** An `@name` request line (kind `agent`, capability `extensions.agents`): what the agent did about it. */
   readonly agent?: {
     readonly name: string;
-    /** `queued` (waiting for the line to be quiet), `not-asked`, `waiting`, `running`, `applied`, `proposed`, `replied`, `nothing`, `failed`. */
+    /** `queued` (waiting for the line to be quiet), `not-asked`, `waiting`, `running`, `applied`, `proposed`, `dismissed` (its proposal was), `replied`, `nothing`, `failed`. A proposal applied anyway turns `proposed` into `applied`. */
     readonly status: string;
     readonly message?: string;
     /** The proposal block when the edit became a proposal. */

@@ -470,7 +470,9 @@ lands in the note while he goes on.
   - `message`: what it did, in a few words (`tidied 2 lines above`).
 - **What readers get.** A projection of `kind: "agent"` on the request line, with
   `agent: { name, status, message?, proposalId?, requestedBy }`. `status` is `queued`, `not-asked`,
-  `waiting` (an agent wrote it), `running`, `applied`, `proposed`, `replied`, `nothing` or `failed`.
+  `waiting` (an agent wrote it), `running`, `applied`, `proposed`, `dismissed`, `replied`, `nothing`
+  or `failed`. A `proposed` request becomes `applied` or `dismissed` when the person settles its
+  proposal (`draft.proposal.apply`, `draft.proposal.dismiss`).
 
 [tidy](../../extensions/tidy) is the example: it tidies the paragraph above the line (or, with
 `@tidy all`, everything above it) and never runs a model. A model-backed agent is the same folder
