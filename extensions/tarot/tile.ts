@@ -41,7 +41,7 @@ let card: Card = draw(`${new Date().toISOString().slice(0, 10)} 0`);
 function paint(): void {
   // As wide as the tile, at most 60: a box wider than the tile would wrap into a mess (PIE-509 saw one at 20).
   const cols = process.stdout.columns ?? 60;
-  const width = Math.max(8, Math.min(cols, 60));
+  const width = Math.max(4, Math.min(cols, 60));
   const fit = (text: string, n: number) => (text.length > n ? `${text.slice(0, Math.max(0, n - 1))}…` : text);
   const line = (text = "") => `│ ${text.padEnd(width - 4)} │`;
   const meaning = fit(card.meaning, width - 4);

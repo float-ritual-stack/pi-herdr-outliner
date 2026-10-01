@@ -388,7 +388,7 @@ test.skipIf(process.platform !== "linux" || !Bun.which("script"))("tarot's tile 
   await Bun.sleep(800);
   program.stdin.write("q");
   await program.stdin.flush();
-  await program.exited;
+  expect(await Promise.race([program.exited, Bun.sleep(10_000).then(() => "still running")])).toBe(0);
   const screen = (await new Response(program.stdout).text()).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").split(/\r?\n/).filter((line) => line.trim());
   expect(screen.some((line) => line.startsWith("┌") && line.endsWith("┐"))).toBe(true);
   for (const line of screen) expect([...line.replace(/\r/g, "")].length).toBeLessThanOrEqual(20);
