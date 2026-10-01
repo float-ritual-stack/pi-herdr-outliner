@@ -1837,8 +1837,13 @@ An extension may declare `agents[]`. [`src/agent-requests.ts`](../src/agent-requ
 line; it has no write path of its own. A reply shows under the line, in the
 same projection slot as extension output (event `extensions.agent`). A
 person's line runs once per wording; a line an agent or an import wrote waits for
-`r`, so agents can't loop; `r` asks again. Every write is `author: agent`,
-`actorId: ext:<id>`.
+`r`, so agents can't loop; `r` asks again, recording who pressed it as
+`requestedBy`. One guard in `DraftPatchRouter` refuses any agent's patch that
+writes or rewords an `@name` line, whoever routes it. A door holding the live
+draft calls `drafts.touch`, so a request typed there runs before any save. At
+start the service takes a baseline of older notes' `@name` lines (they stay
+old) and marks requests a restart cut off as `failed`. Every write is
+`author: agent`, `actorId: ext:<id>`.
 
 ## The door's control socket
 
