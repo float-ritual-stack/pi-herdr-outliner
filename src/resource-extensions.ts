@@ -364,7 +364,8 @@ export class ResourceExtensionRuntime {
       // Removed, or edited while it ran.
       if (after === null || after !== before) return false;
       if (after === extension.stamp) return true;
-      // Changed before the call and not reloaded yet: a broken manifest keeps its last good copy; a disabled one doesn't run.
+      // Changed before the call and not reloaded yet: a broken manifest (or one past the read limit) keeps its last good
+      // copy; a disabled one still ran, and its answer is discarded.
       try {
         return (await readExtensionFolder(extension.directory, extension.origin)).enabled;
       } catch {

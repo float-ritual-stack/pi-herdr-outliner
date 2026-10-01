@@ -359,6 +359,19 @@ process.stdout.write(JSON.stringify({ ok: true, value: { patches: [{ observed: "
   expect(store.get(note.id)!.text).toBe("N\nmessy\n@slowpoke");
 });
 
+test("an extension.json grown past 64 KiB keeps serving its last good copy: a call's answer is kept, not lost to the read limit", async () => {
+  const { store, client, extensions, install } = await setup();
+  await install("steady", { agents: [{ name: "steady" }] }, `await Bun.stdin.json();
+process.stdout.write(JSON.stringify({ ok: true, value: { reply: "still here" } }));`);
+  writeFileSync(join(extensions, "steady", "extension.json"), JSON.stringify({ contract: 2, id: "steady", version: 1, name: "steady",
+    run: ["bun", "main.ts"], agents: [{ name: "steady" }], description: "x".repeat(70 * 1024) }));
+  const listed = await client.request<ExtensionsListResult>({ action: "extensions.list", reload: true });
+  expect(listed.extensions.find((entry) => entry.id === "steady")).toMatchObject({ state: "failed", error: expect.stringContaining("larger than 64 KiB") });
+  const note = await client.request<Block>({ action: "create", text: "N\n@steady", author: "user" });
+  const row = await until("answered", () => store.agentRequests(note.id).find((candidate) => candidate.status !== "running"));
+  expect(row).toMatchObject({ status: "replied", reply: "still here" });
+});
+
 // ── C7: clean text ───────────────────────────────────────────────────────
 
 test("what an extension says is kept and shown without terminal escapes: outputs, messages, replies, its manifest's words, ext ls and ext act", async () => {

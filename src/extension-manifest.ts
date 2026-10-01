@@ -373,13 +373,30 @@ export async function folderStamp(directory: string): Promise<string | null> {
   try {
     const manifest = Bun.file(join(directory, "extension.json"));
     if (!(await manifest.exists())) return null;
-    const manifestRaw = await boundedText(join(directory, "extension.json"));
+    const hash = createHash("sha256");
+    await stampFile(hash, join(directory, "extension.json"));
+    hash.update("\0");
     const configPath = join(directory, "config.json");
-    const configRaw = (await Bun.file(configPath).exists()) ? await boundedText(configPath) : "{}";
-    return createHash("sha256").update(manifestRaw).update("\0").update(configRaw).digest("hex");
+    if (await Bun.file(configPath).exists()) await stampFile(hash, configPath);
+    else hash.update("{}");
+    return hash.digest("hex");
   } catch {
     return null;
   }
+}
+
+/**
+ * A file's part of a folder's stamp. Over the 64 KiB a load reads, the file can't be loaded, but it is still
+ * hashed (streamed), so a call over a last good copy compares the same stamp before and after instead of
+ * losing it to a read limit.
+ */
+async function stampFile(hash: ReturnType<typeof createHash>, path: string): Promise<void> {
+  const file = Bun.file(path);
+  if (file.size <= MAX_FILE_BYTES) {
+    hash.update(await file.text());
+    return;
+  }
+  for await (const chunk of file.stream()) hash.update(chunk);
 }
 
 /**
