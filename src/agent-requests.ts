@@ -49,10 +49,14 @@ const MAX_NOTE_TEXT = 64 * 1024;
 const MAX_REPLY = 64 * 1024;
 const MAX_PATCHES = 20;
 const DEFAULT_QUIET_MS = 1_500;
+const MAX_SEEN = 5_000;
 
-/** The `@name …` lines in a block's text whose names an extension answers. Code is text. */
-export function requestLines(text: string, names: ReadonlySet<string>): RequestLine[] {
-  if (!names.size || !text.includes("@")) return [];
+/**
+ * The `@name …` lines in a block's text whose names an extension answers
+ * (every `@name` line with `names` null). Code is text.
+ */
+export function requestLines(text: string, names: ReadonlySet<string> | null): RequestLine[] {
+  if ((names && !names.size) || !text.includes("@")) return [];
   const literal = scanPropertyLiteralRanges(text);
   const found: RequestLine[] = [];
   let offset = 0;
@@ -61,7 +65,7 @@ export function requestLines(text: string, names: ReadonlySet<string>): RequestL
     offset += raw.length + 1;
     const content = raw.replace(/\r$/, "");
     const match = REQUEST.exec(content);
-    if (!match || !names.has(match[2]!) || found.length >= MAX_REQUESTS) return;
+    if (!match || (names && !names.has(match[2]!)) || found.length >= (names ? MAX_REQUESTS : 256)) return;
     const at = start + match[1]!.length;
     if (literal.some((range) => range.start <= at && at < range.end)) return;
     const request = match[3]!.trim();
@@ -143,6 +147,12 @@ export class AgentRequests {
     this.timers.clear();
   }
 
+  /** Every `@name` line's key, whatever the name: what a later save is compared with. */
+  private shapes(block: Block): string[] {
+    if (block.effectiveDeletedRootId || this.store.extensionOwner(block.id)) return [];
+    return requestLines(block.text, null).map((line) => line.requestKey);
+  }
+
   private lines(block: Block): RequestLine[] {
     if (block.effectiveDeletedRootId || this.store.extensionOwner(block.id)) return [];
     return requestLines(block.text, this.registry.agentNames());
@@ -152,59 +162,101 @@ export class AgentRequests {
     return `${blockId}\0${requestKey}`;
   }
 
+  /** The request lines a block had when this service last looked (its saves and reads), most recent blocks only. */
+  private readonly seen = new Map<string, Set<string>>();
+  /** `r` pressed while that request was running: one more run after it. */
+  private readonly again = new Set<string>();
+
+  private remember(blockId: string, keys: readonly string[]): void {
+    this.seen.delete(blockId);
+    this.seen.set(blockId, new Set(keys));
+    if (this.seen.size > MAX_SEEN) this.seen.delete(this.seen.keys().next().value!);
+  }
+
+  private schedule(blockId: string, requestKey: string): void {
+    const key = this.key(blockId, requestKey);
+    const previous = this.timers.get(key);
+    if (previous) clearTimeout(previous);
+    const timer = setTimeout(() => {
+      this.timers.delete(key);
+      void this.run(blockId, requestKey).catch(() => {});
+    }, this.deps.quietMs ?? DEFAULT_QUIET_MS);
+    timer.unref?.();
+    this.timers.set(key, timer);
+  }
+
   /**
-   * A block was saved (not by an extension). A new request line a person
-   * wrote runs once it has been quiet for a moment; one an agent or an import
-   * wrote is recorded as waiting for `r`.
+   * A block was saved (not by an extension). A request line this save added
+   * runs once the note has been quiet for a moment, when a person wrote it;
+   * when an agent or an import did, it is recorded as waiting for `r`. Lines
+   * already there (before an install, or before this service started and no
+   * reader opened the note) are never run by a save: `r` asks. `created`: the
+   * save made the block, so all its lines are new.
    */
-  blockChanged(blockId: string, actor: MutationProvenance | undefined): void {
+  blockChanged(blockId: string, actor: MutationProvenance | undefined, created = false): void {
     if (this.stopped) return;
     const block = this.store.get(blockId);
     if (!block) return;
     const lines = this.lines(block);
-    const known = new Map(this.store.agentRequests(blockId).map((row) => [row.requestKey, row]));
-    if (!lines.length && !known.size) return;
-    this.store.pruneAgentRequests(blockId, lines.map((line) => line.requestKey));
+    const keys = lines.map((line) => line.requestKey);
+    // The baseline is every `@name` line, answered or not: a line written before its extension was
+    // installed is an old line once it is, not a new request.
+    const shapes = this.shapes(block);
+    const before = this.seen.get(blockId) ?? (created ? new Set<string>() : new Set(shapes));
+    this.remember(blockId, shapes);
+    const rows = this.store.agentRequests(blockId);
+    const waitingTimers = [...this.timers.keys()].some((key) => key.startsWith(`${blockId}\0`));
+    // Most saves: no request lines, nothing known, nothing waiting. No event either.
+    if (!lines.length && !rows.length && !waitingTimers) return;
+    // A request still waiting for quiet that the note no longer has is withdrawn.
+    for (const [key, timer] of this.timers) {
+      const [timerBlock, requestKey] = key.split("\0");
+      if (timerBlock === blockId && !keys.includes(requestKey!)) {
+        clearTimeout(timer);
+        this.timers.delete(key);
+      }
+    }
+    // Rows of names no extension answers now stay (the folder may be coming back); others follow the text.
+    this.store.pruneAgentRequests(blockId, [...keys, ...rows.filter((row) => !this.registry.agent(row.agent)).map((row) => row.requestKey)]);
+    const answered = new Set(rows.map((row) => row.requestKey));
     const byPerson = actor?.author === "user";
     for (const line of lines) {
       const key = this.key(blockId, line.requestKey);
-      if (known.has(line.requestKey) || this.timers.has(key)) continue;
-      const bound = this.registry.agent(line.agent)!;
-      if (!byPerson) {
-        this.store.putAgentRequest({
-          blockId, requestKey: line.requestKey, agent: line.agent, extensionId: bound.extension.id, request: line.request,
-          status: "waiting", message: "written by an agent: r asks it", requestedBy: actor?.actorId ? `agent:${actor.actorId}` : actor?.author ?? "system",
-          requestedAt: new Date(this.now).toISOString(),
-        });
+      // Quiet means quiet: any save while the line waits starts the wait again.
+      if (this.timers.has(key)) {
+        this.schedule(blockId, line.requestKey);
         continue;
       }
-      this.timers.set(key, setTimeout(() => {
-        this.timers.delete(key);
-        void this.run(blockId, line.requestKey).catch(() => {});
-      }, this.deps.quietMs ?? DEFAULT_QUIET_MS));
-      this.timers.get(key)!.unref?.();
+      if (before.has(line.requestKey) || answered.has(line.requestKey)) continue;
+      if (byPerson) {
+        this.schedule(blockId, line.requestKey);
+        continue;
+      }
+      this.store.putAgentRequest({
+        blockId, requestKey: line.requestKey, agent: line.agent, extensionId: this.registry.agent(line.agent)!.extension.id, request: line.request,
+        status: "waiting", message: "written by an agent: r asks it", requestedBy: actor?.actorId ? `agent:${actor.actorId}` : actor?.author ?? "system",
+        requestedAt: new Date(this.now).toISOString(),
+      });
     }
     this.deps.changed(blockId);
   }
 
-  /** `r` on a request line (or on the note): ask its agent again now. Returns whether there was one. */
-  async refresh(blockId: string, line?: number): Promise<boolean> {
+  /** `r` on a request line: ask its agent again now. Returns whether the line is a request. */
+  async refresh(blockId: string, line: number): Promise<boolean> {
     const block = this.store.get(blockId);
     if (!block) return false;
-    const chosen = this.lines(block).filter((candidate) => line === undefined || candidate.line === line);
+    const chosen = this.lines(block).filter((candidate) => candidate.line === line);
     await Promise.all(chosen.map((candidate) => this.run(blockId, candidate.requestKey, true)));
     return chosen.length > 0;
   }
 
-  /** The request lines a block has now. */
-  has(blockId: string, line?: number): boolean {
-    const block = this.store.get(blockId);
-    return !!block && this.lines(block).some((candidate) => line === undefined || candidate.line === line);
-  }
-
   private async run(blockId: string, requestKey: string, asked = false): Promise<void> {
     const key = this.key(blockId, requestKey);
-    if (this.running.has(key) || this.stopped) return;
+    if (this.stopped) return;
+    if (this.running.has(key)) {
+      if (asked) this.again.add(key);
+      return;
+    }
     const block = this.store.get(blockId);
     const line = block ? this.lines(block).find((candidate) => candidate.requestKey === requestKey) : undefined;
     const bound = line ? this.registry.agent(line.agent) : undefined;
@@ -213,20 +265,18 @@ export class AgentRequests {
     const previous = this.store.agentRequests(blockId).find((row) => row.requestKey === requestKey);
     const base = {
       blockId, requestKey, agent: line.agent, extensionId: extension.id, request: line.request,
-      requestedBy: previous && !asked ? previous.requestedBy : "user",
+      requestedBy: previous && !asked ? previous.requestedBy : asked ? "r" : "user",
       requestedAt: previous?.requestedAt ?? new Date(this.now).toISOString(),
     };
+    const stillThere = (text: string) => text.split("\n").some((candidate) => candidate.replace(/\r$/, "") === line.text);
     this.running.add(key);
     this.store.putAgentRequest({ ...base, status: "running" });
     this.deps.changed(blockId);
-    let answer: Pick<AgentRequestRow, "status" | "message" | "reply" | "proposalId">;
+    let answer: Pick<AgentRequestRow, "status" | "message" | "reply" | "proposalId"> | null = null;
     try {
       const draft = await this.deps.readDraft(blockId);
-      // The person changed or removed the line meanwhile: that is a new request (or none).
-      if (!draft.text.split("\n").some((text) => text.replace(/\r$/, "") === line.text)) {
-        this.store.pruneAgentRequests(blockId, this.lines(this.store.get(blockId) ?? block).map((candidate) => candidate.requestKey).filter((candidate) => candidate !== requestKey));
-        return;
-      }
+      // The person changed or removed the line meanwhile: that is a new request (or none), not this one.
+      if (!stillThere(draft.text)) return;
       const context = this.store.blockContext(blockId);
       const result = await this.runtime.invokeLoaded(extension, "respond", {
         agent: line.agent,
@@ -245,12 +295,20 @@ export class AgentRequests {
       } catch (error) {
         throw new Error(`@${line.agent} answered something the service can't apply: ${message(error)}`);
       }
+      // An agent never writes a request line: its edit can't set off another agent.
+      const names = this.registry.agentNames();
+      if (respond.patches.some((patch) => requestLines(patch.replacement, names).length > requestLines(patch.observed, names).length)) {
+        throw new Error(`@${line.agent} tried to write an @request line; agents can't ask agents`);
+      }
+      // Reworded while it ran: the answer was to a request that isn't there any more.
+      if (!stillThere((await this.deps.readDraft(blockId)).text)) return;
       if (respond.patches.length) {
         const actor: MutationProvenance = { author: "agent", actorId: extensionActorId(extension.id) };
-        // The edit's own feed entries say which agent made it.
+        // The edit's own feed entries say which agent made it. `current`: typing elsewhere in the note
+        // doesn't make it a proposal; typing in that passage does.
         const outcome = await this.store.changes.run(
           this.store.changes.attribution({ action: `ext.${extension.id}.agent.${line.agent}`, actor }),
-          () => this.deps.patch({ blockId, revision: draft.revision, patches: respond.patches, mutation: actor, mark: { text: line.text, blockId } }),
+          () => this.deps.patch({ blockId, revision: draft.revision, patches: respond.patches, mutation: actor, mark: { text: line.text, blockId }, current: true }),
         );
         answer = outcome.outcome === "applied"
           ? { status: "applied", message: respond.message ?? `applied ${respond.patches.length === 1 ? "an edit" : `${respond.patches.length} edits`}`, reply: respond.reply ?? null }
@@ -264,9 +322,14 @@ export class AgentRequests {
       answer = { status: "failed", message: message(error) };
     } finally {
       this.running.delete(key);
+      const current = this.store.get(blockId);
+      if (answer && current) this.store.putAgentRequest({ ...base, ...answer, answeredAt: new Date(this.now).toISOString() });
+      // Not answered (the line changed): put back what was known before this run, or nothing.
+      else if (current && previous) this.store.putAgentRequest(previous);
+      else if (current) this.store.pruneAgentRequests(blockId, this.store.agentRequests(blockId).map((row) => row.requestKey).filter((candidate) => candidate !== requestKey));
+      this.deps.changed(blockId);
+      if (this.again.delete(key)) void this.run(blockId, requestKey, true).catch(() => {});
     }
-    if (this.store.get(blockId)) this.store.putAgentRequest({ ...base, ...answer, answeredAt: new Date(this.now).toISOString() });
-    this.deps.changed(blockId);
   }
 
   /** One projection per request line, in the slot extension outputs use (`resources.projection.read`). */
@@ -274,7 +337,10 @@ export class AgentRequests {
     const block = this.store.get(blockId);
     if (!block) return [];
     const rows = new Map(this.store.agentRequests(blockId).map((row) => [row.requestKey, row]));
-    return this.lines(block)
+    const lines = this.lines(block);
+    // A note a reader opens: what it holds now is the baseline a later save is compared with.
+    if (!this.seen.has(blockId)) this.remember(blockId, this.shapes(block));
+    return lines
       .filter((candidate) => line === undefined || candidate.line === line)
       .map((candidate) => {
         const bound = this.registry.agent(candidate.agent)!;

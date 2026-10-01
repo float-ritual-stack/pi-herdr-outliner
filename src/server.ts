@@ -1593,7 +1593,7 @@ export class OutlinerServer {
           await this.extensionCalls.materialize(normalized.blockId, "refresh", normalized.line !== undefined ? { line: normalized.line } : {});
         }
         // `r` on an `@name` line (or on the note) asks its agent again.
-        const asked = !dataRecord && !record && await this.agentRequests.refresh(normalized.blockId, normalized.line);
+        const asked = !dataRecord && !record && normalized.line !== undefined && await this.agentRequests.refresh(normalized.blockId, normalized.line);
         const onlyHandlers = dataRecord || ((handlerLines.length > 0 || asked) && normalized.line !== undefined);
         // One line's ticket (a click on its age), the ticket block's own, or every ticket the block shows.
         const one = !onlyHandlers && normalized.line !== undefined && !record
@@ -2959,7 +2959,7 @@ export class OutlinerServer {
         !isExtensionActor(event.change.actor?.actorId)) {
         this.extensionSync.blockChanged(event.blockId);
         this.extensionCalls.blockChanged(event.blockId, event.change.actor, event.change.kind === "create");
-        this.agentRequests.blockChanged(event.blockId, event.change.actor);
+        this.agentRequests.blockChanged(event.blockId, event.change.actor, event.change.kind === "create");
       }
     }
     if (events.some(event => event.domain === "content")) this.inbox?.wake();

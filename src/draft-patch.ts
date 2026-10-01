@@ -71,6 +71,13 @@ export interface DraftPatchInput {
   policy?: DraftPatchPolicyName;
   /** Under the `edit` policy: dropping a `[page::…]` or a linked `^anchor` is the point. */
   allowStructural?: boolean;
+  /**
+   * Capability `draft.patch.current`: on a saved note, compare the spans (and
+   * the mark) against the text as it is now instead of requiring `revision`:
+   * a person typing elsewhere in the note doesn't turn the patch into a
+   * proposal; typing in the passage still does. A live draft compares this way already.
+   */
+  current?: boolean;
 }
 
 export type DraftPatchRoute = "draft" | "saved";

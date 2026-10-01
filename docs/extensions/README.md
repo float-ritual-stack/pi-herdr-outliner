@@ -447,19 +447,24 @@ lands in the note while he goes on.
 - **Addressing.** A line that starts with `@name` (after an optional bullet), outside code, whose
   name an active extension answers. Any other `@word` is prose. Two extensions can't answer one
   name.
-- **When it runs.** Once the line has been quiet for a moment (1.5 s), so a request still being
-  typed doesn't run half-written. Each wording runs once per note: changing the line is a new
-  request, and `r` on the line asks again. A line an agent (or an import) wrote waits for `r`, so
-  agents can't set each other off.
+- **When it runs.** A request line that a person's save adds runs once the note has been quiet
+  for a moment (1.5 s; every save restarts the wait), so a pause mid-sentence rarely sends half a
+  request. It runs once: rewording the line is a new request, and `r` on the line asks again
+  (`r` on the note doesn't ask agents). Lines that were already there (written before the
+  extension was installed, or before the service started and nobody opened the note since) wait
+  for `r`, as does a line an agent or an import wrote, so agents can't set each other off. An
+  agent's own patch may not write a request line.
 - **`respond`** gets the note as the person sees it (their live draft when a door holds one), the
   request (the words after the name) and the mark (the request line), plus bounded context. It
   answers any of:
   - `patches`: spans of the text above the mark (`observed` → `replacement`, with `before`/`after`
     context). The service applies them through `draft.patch` with the default `edit` policy: an
     ordinary edit, attributed `author: agent`, `actorId: ext:<id>`, under `ext.<id>.agent.<name>` in
-    the change feed. A note held by a door gets the patch in its live draft. Only a failed compare
-    (the person was typing in that passage) becomes a proposal, embedded under the line, to apply or
-    dismiss.
+    the change feed. A note held by a door gets the patch in its live draft. The spans are compared
+    with the text as it is when the answer comes back (`draft.patch` with `current`), so typing
+    elsewhere in the note is fine; if the person changed that passage meanwhile, the edit becomes a
+    proposal embedded under the line, to apply or dismiss. If the request line itself changed, the
+    answer is dropped: the new wording is a new request.
   - `reply`: markdown shown under the line (inert, like an output). The note's text is untouched.
   - `message`: what it did, in a few words (`tidied 2 lines above`).
 - **What readers get.** A projection of `kind: "agent"` on the request line, with

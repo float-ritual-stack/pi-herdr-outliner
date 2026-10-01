@@ -233,7 +233,7 @@ export class DraftPatchRouter {
         }
       }
     }
-    const outcome = await this.run(edits, { mutation, mark, ...sent });
+    const outcome = await this.run(edits, { mutation, mark, ...sent, ...(input.current === true ? { current: true } : {}) });
     if (outcome.ok) return { outcome: "applied", edits: outcome.applied };
     if (outcome.refused) throw new DraftPatchRefusal(outcome.reason);
     return this.propose(outcome.reason, edits, mutation, mark, sent);

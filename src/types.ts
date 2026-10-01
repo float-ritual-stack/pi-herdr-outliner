@@ -1705,6 +1705,8 @@ export const OUTLINER_CAPABILITIES = [
   "draft.patch",
   /** `draft.proposal.apply`: apply a proposal's patch anyway, as an ordinary edit. */
   "draft.proposal.apply",
+  /** `draft.patch` takes `current`: a saved note's spans and mark are compared as it is now, not by revision. */
+  "draft.patch.current",
   /** `ping` reports `draftPatchCompare`: the version of src/draft-patch-compare.ts, which the door copies. */
   "ping.draftPatchCompare",
   /** `blocks.authored-links`: a block's outlinks and resources with their spans (PIE-324); records name their block. */
