@@ -230,8 +230,12 @@ test("an older outline's request table takes the dismissed status, its rows kept
   expect(() => first.putAgentRequest({ ...row, status: "dismissed" })).toThrow();
   first.close();
   const second = new OutlinerStore(path);
-  cleanups.push(() => second.close());
   expect(second.agentRequestByProposal("p-1")).toMatchObject({ status: "proposed", requestKey: "k1" });
   second.putAgentRequest({ ...row, status: "dismissed" });
   expect(second.agentRequests(note.id).map((entry) => entry.status)).toEqual(["dismissed"]);
+  second.close();
+  // Opening it again leaves the migrated table as it is.
+  const third = new OutlinerStore(path);
+  cleanups.push(() => third.close());
+  expect(third.agentRequests(note.id).map((entry) => entry.status)).toEqual(["dismissed"]);
 });

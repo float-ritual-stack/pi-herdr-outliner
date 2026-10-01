@@ -597,6 +597,8 @@ export class DraftPatchRouter {
     for (const edit of edits) {
       // Keep the text around each span as it is now, so "apply anyway" can tell which copy it means.
       const text = (await this.read(edit.blockId).catch(() => null))?.text ?? store.get(edit.blockId)?.text ?? "";
+      // A forced apply stays above the mark too, so a passage at or below it can only be dismissed.
+      const markAt = mark && mark.blockId === edit.blockId ? markStart(text, mark.text) : -1;
       kept.push({
         ...edit,
         patches: edit.patches.map(span => {
@@ -605,6 +607,7 @@ export class DraftPatchRouter {
             applies = false;
             return span;
           }
+          if (markAt >= 0 && at.end > markAt) applies = false;
           return span.before !== undefined && span.after !== undefined ? span : { ...span, ...spanContext(text, at.start, at.end) };
         }),
       });

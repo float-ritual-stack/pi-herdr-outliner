@@ -196,7 +196,7 @@ source evidence or distinguish authored glyphs from controls.
   own. Each settles a proposal once (the router holds it while it runs).
   The proposal contract clients read:
   `[proposal-status::open|applied|dismissed]`, and `[proposal-applies::no]` when
-  its passage was already gone when proposed (offer only dismiss). The header
+  its passage was already gone when proposed, or is at or below the mark (offer only dismiss). The header
   is written from the payload and the status (`withProposalStatus`), never
   matched as a sentence. It names no client's keys.
   An `@name` request's row follows its proposal to `applied` or `dismissed`).

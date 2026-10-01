@@ -330,14 +330,14 @@ function labelOf(title: string): string {
 /**
  * Where a proposal is in its life (`[proposal-status::…]`): `open` until the person (or its own agent)
  * applies it anyway (`applied`) or dismisses it (`dismissed`). Clients offer apply and dismiss on an `open`
- * one; `[proposal-applies::no]` beside it says the passage it changes was already gone when it was proposed,
- * so only dismiss is offered (PIE-510).
+ * one; `[proposal-applies::no]` beside it says the passage it changes was already gone when it was proposed
+ * (or is at or below the mark, which a forced apply doesn't pass either), so only dismiss is offered (PIE-510).
  */
 export type DraftProposalStatus = "open" | "applied" | "dismissed";
 
 export const DRAFT_PROPOSAL_STATUSES: readonly DraftProposalStatus[] = ["open", "applied", "dismissed"];
 
-/** The property a proposal carries, set to `no`, when its passage wasn't in the note when it was proposed. */
+/** The property a proposal carries, set to `no`, when its passage wasn't in the note when it was proposed, or was at or below the mark. */
 export const DRAFT_PROPOSAL_APPLIES = "proposal-applies";
 
 /**

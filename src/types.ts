@@ -1708,7 +1708,7 @@ export const OUTLINER_CAPABILITIES = [
   /**
    * `draft.proposal.dismiss`: dismiss a proposal without applying it (its embed line out of the note or its
    * live draft, `proposal-status::dismissed`, then the Trash; an agent only its own). With it, apply and
-   * dismiss each settle a proposal once, `proposal-applies::no` marks one whose passage was already gone, and
+   * dismiss each settle a proposal once, `proposal-applies::no` marks one whose passage was already gone (or below its mark), and
    * the forced apply never replaces more than the passage the proposal shows, nor reaches past its mark (PIE-510).
    */
   "draft.proposal.dismiss",

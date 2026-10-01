@@ -10,8 +10,8 @@ This file records notable user-facing changes. The project remains active dogfoo
   changed that passage since, the apply is refused and their text stays. It
   used to replace whatever stood between the context kept around the passage,
   which at a note's end was everything after it. A forced apply also stays
-  above the mark. A proposal whose passage was already gone when it was made
-  carries `[proposal-applies::no]`, so clients offer only dismiss.
+  above the mark. A proposal whose passage was already gone when it was made, or
+  is at or below the mark, carries `[proposal-applies::no]`, so clients offer only dismiss.
 - A proposal is applied or dismissed once: a second call made at the same time
   is refused. If the applied status can't be written, the answer has a
   `warning`.

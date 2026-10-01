@@ -288,6 +288,8 @@ describe("draft.patch over the protocol", () => {
     const result = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: note.id, revision: note.revision, patches: [spanOf(note.text, "my own  words below", "my own words below")], mark: { text: "@tidy go" }, mutation: TIDY });
     expect(result).toMatchObject({ outcome: "proposed", reason: "it reaches the mark or below it; a patch changes only text above the mark" });
     if (result.outcome !== "proposed") return;
+    // It can never be applied, so it says so: clients offer only dismiss.
+    expect(store.require(result.proposalId).properties).toEqual(expect.arrayContaining([{ key: "proposal-applies", value: "no" }]));
     await expect(client.request({ action: "draft.proposal.apply", proposalId: result.proposalId, mutation: { author: "user" } })).rejects.toThrow("reaches the mark or below it");
     expect(store.require(note.id).text).toContain("my own  words below");
     // The same in a live draft: the door is never asked to patch.
@@ -296,6 +298,7 @@ describe("draft.patch over the protocol", () => {
     const door = await fakeDoor(client, "door-mark", held.id, live, held.revision);
     const inDraft = await client.request<DraftPatchResult>({ action: "draft.patch", blockId: held.id, revision: held.revision, patches: [spanOf(live, "my own  words below", "my own words below")], mark: { text: "@tidy go" }, mutation: TIDY });
     if (inDraft.outcome !== "proposed") throw new Error("expected a proposal");
+    expect(store.require(inDraft.proposalId).properties).toEqual(expect.arrayContaining([{ key: "proposal-applies", value: "no" }]));
     await expect(client.request({ action: "draft.proposal.apply", proposalId: inDraft.proposalId, mutation: { author: "user" } })).rejects.toThrow("reaches the mark or below it");
     expect(door.requests.filter(request => request.kind === "patch")).toEqual([]);
     expect(door.text).toContain("my own  words below");
