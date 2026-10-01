@@ -45,6 +45,14 @@ const LOCK_WALK_LIMIT = 256;
 
 export type PublishedEntryType = PublishedFileType | "block";
 
+/**
+ * Who a listener serves. `tailnet`: every published note, the index, embeds of
+ * any note. `public` (`[publish::public]`, for anyone with the link, exposed by
+ * Tailscale Funnel): only notes tagged public, no index, and an embed of a note
+ * that isn't public shows a placeholder, never its text.
+ */
+export type PublishAudience = "tailnet" | "public";
+
 export interface PublishedEntry {
   blockId: string;
   title: string;
@@ -55,6 +63,11 @@ export interface PublishedEntry {
   collision?: { requested: string; heldBy: string };
   type: PublishedEntryType;
   updatedAt: string;
+  /**
+   * Set when the block is `[publish::public…]`: anyone with the link may open it
+   * on the public listener, at `publicPath`. Its title there links only public notes.
+   */
+  public?: { title: string };
   /**
    * Set when the block has `[file::…]`: the path as authored and why it is not
    * served, if not. Over HTTP only a refusal is shown, never the path.
@@ -89,21 +102,35 @@ export interface PublisherOptions {
    * attachment shows a page saying compiling is not set up.
    */
   artifactCacheDirectory?: string;
+  /**
+   * Where the public listener is mounted (`/share`), or the full URL anyone opens
+   * it at (`https://host.ts.net:8443/share`): its path is the base path, and the
+   * whole URL is what the index and `publish list` show for public notes.
+   */
+  publicUrl?: string;
   log?: (line: string) => void;
 }
 
+/** What a block's `[publish::…]` asks for: not published, locked, or published (public or tailnet only), maybe at a slug. */
+export type PublishIntent = "off" | "never" | { slug?: string; public: boolean };
+
 /**
- * `true`/`yes` publish at the page address or block id; `false`/`no`/`off`/`0` or empty do not publish;
- * `never` locks the block and everything under it (see `blockPublishIntent`).
+ * `true`/`yes` publish at the page address or block id; `<slug>` at that slug;
+ * `public` and `public:<slug>` do the same and also open the note to anyone
+ * with the link; `false`/`no`/`off`/`0` or empty do not publish; `never` locks
+ * the block and everything under it (see `blockPublishIntent`).
  */
-export function publishIntent(value: string | undefined): "auto" | "off" | "never" | { slug: string } {
-  const trimmed = value?.trim() ?? "";
+export function publishIntent(value: string | undefined): PublishIntent {
+  let trimmed = value?.trim() ?? "";
   const lowered = trimmed.toLowerCase();
   if (lowered === "never") return "never";
   if (!trimmed || lowered === "false" || lowered === "no" || lowered === "off" || lowered === "0") return "off";
-  if (lowered === "true" || lowered === "yes") return "auto";
+  const isPublic = lowered === "public" || lowered.startsWith("public:");
+  if (isPublic) trimmed = trimmed.slice("public".length).replace(/^:/, "").trim();
+  const lowerRest = trimmed.toLowerCase();
+  if (!trimmed || lowerRest === "true" || lowerRest === "yes") return { public: isPublic };
   const slug = slugify(trimmed);
-  return slug ? { slug } : "auto";
+  return slug ? { slug, public: isPublic } : { public: isPublic };
 }
 
 /**
@@ -130,13 +157,17 @@ export function slugify(value: string): string | null {
  * A block's publish intent from all its `[publish::…]` tokens. `never` wins
  * over everything: the block and its whole subtree are locked, never published,
  * embedded or linked. Otherwise, when any says false/no/off/0 the block is not
- * published, whatever the others say.
+ * published, whatever the others say. The first slug asked for is used, and
+ * the block is public when any token says `public`.
  */
-export function blockPublishIntent(properties: readonly BlockProperty[]): ReturnType<typeof publishIntent> | undefined {
+export function blockPublishIntent(properties: readonly BlockProperty[]): PublishIntent | undefined {
   const values = properties.filter((property) => property.key === PUBLISH_PROPERTY).map((property) => publishIntent(property.value));
   if (!values.length) return undefined;
   if (values.includes("never")) return "never";
-  return values.includes("off") ? "off" : values[0];
+  if (values.includes("off")) return "off";
+  const published = values.filter((value): value is Exclude<PublishIntent, string> => typeof value === "object");
+  const slug = published.find((value) => value.slug)?.slug;
+  return { ...(slug ? { slug } : {}), public: published.some((value) => value.public) };
 }
 
 /** `[publish.ext::jira]` on a block or page lets that extension's blocks under it be published. */
@@ -166,15 +197,19 @@ export const EXTENSION_HIDDEN = (extensionId: string) => `${extensionId} data, n
 
 /** Said on the index: what a published page may show besides the published blocks. */
 export const EMBED_NOTICE = "Embeds (!((note))) show the embedded note's text even when that note is not published: " +
-  "this publisher is for the tailnet. Mark a note [publish::never] to lock it and everything under it.";
+  "this publisher is for the tailnet. Mark a note [publish::never] to lock it and everything under it. " +
+  "A note marked [publish::public] is also open to anyone with its public link, where embeds show only public notes.";
 
 /** What a locked note shows in its place on a published page. */
 export const LOCKED_NOTE = "locked note";
 
+/** What an embed of a note that isn't public shows in its place on a public page. */
+export const NOT_SHARED_NOTE = "not shared";
+
 function requestedSlug(block: { id: string; properties?: BlockProperty[] }): string | null {
   const intent = blockPublishIntent(block.properties ?? []) ?? "off";
   if (intent === "off" || intent === "never") return null;
-  if (intent !== "auto") return intent.slug;
+  if (intent.slug) return intent.slug;
   const page = getProperty(block.properties ?? [], "page");
   const address = page ? tryNormalizePageAddress(page) : null;
   return (address && slugify(address.displayAddress)) || block.id;
@@ -288,9 +323,55 @@ function notFound(): Response {
   return respond("Not published\n", "text/plain; charset=utf-8", 404);
 }
 
+/** Every public response also asks search engines not to list it: the link is the invitation. */
+const PUBLIC_HEADERS = { "x-robots-tag": "noindex, nofollow" };
+
+function withHeaders(response: Response, headers: Record<string, string>): Response {
+  for (const [name, value] of Object.entries(headers)) response.headers.set(name, value);
+  return response;
+}
+
+function isPublicIntent(properties: readonly BlockProperty[] | undefined): boolean {
+  const intent = blockPublishIntent(properties ?? []);
+  return typeof intent === "object" && intent.public;
+}
+
+/**
+ * The index one audience sees: the tailnet sees everything published; the
+ * public sees only public notes, each under its public title (which links
+ * only other public notes).
+ */
+export function audienceIndex(index: PublishedIndex, audience: PublishAudience): PublishedIndex {
+  if (audience === "tailnet") return index;
+  return {
+    ...index,
+    entries: index.entries.flatMap((entry) => entry.public ? [{ ...entry, title: entry.public.title }] : []),
+  };
+}
+
+/** `--public-url`: a path (`/share`) or a full URL whose path is the mount. */
+export function parsePublicUrl(value: string | undefined): { basePath: string; origin?: string } {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) return { basePath: DEFAULT_PUBLIC_BASE_PATH };
+  if (trimmed.startsWith("/")) return { basePath: normalizeBasePath(trimmed) || DEFAULT_PUBLIC_BASE_PATH };
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new Error(`--public-url must be a path such as /share or a URL such as https://host.ts.net:8443/share: ${value}`);
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error(`--public-url must be http(s): ${value}`);
+  return { basePath: normalizeBasePath(url.pathname) || DEFAULT_PUBLIC_BASE_PATH, origin: url.origin };
+}
+
+/** Where the public listener is mounted when nothing says otherwise. */
+export const DEFAULT_PUBLIC_BASE_PATH = "/share";
+
 export class Publisher {
   private readonly client: OutlinerClient;
   readonly basePath: string;
+  /** The public listener's mount (`/share`) and, when known, the origin anyone opens it at. */
+  readonly publicBase: { basePath: string; origin?: string };
   private readonly maxBytes: number;
   private readonly log: (line: string) => void;
   private readonly allowedHosts: ReadonlySet<string>;
@@ -306,6 +387,7 @@ export class Publisher {
   constructor(private readonly options: PublisherOptions) {
     this.client = options.client;
     this.basePath = normalizeBasePath(options.basePath);
+    this.publicBase = parsePublicUrl(options.publicUrl);
     this.maxBytes = Math.min(options.maxBytes ?? MAX_TEXT_FILE_BYTES, MAX_TEXT_FILE_BYTES);
     this.log = options.log ?? (() => {});
     this.allowedHosts = new Set((options.allowedHosts ?? []).map((host) => host.trim().toLowerCase()).filter(Boolean));
@@ -410,6 +492,8 @@ export class Publisher {
     const locked = await this.lockedIds(wanted.map((block) => block.id));
     const assigned = assignPaths(wanted.filter((block) => !locked.has(block.id)));
     const rawTitles = new Map(assigned.map(({ block }) => [block.id, block.title ?? ""]));
+    // A public note's title links only other public notes, so it never names a tailnet-only one.
+    const publicTitles = new Map(assigned.filter(({ block }) => isPublicIntent(block.properties)).map(({ block }) => [block.id, block.title ?? ""]));
     const entries = assigned.map(({ block, slug, collision }): PublishedEntry => {
       const source = getProperty(block.properties ?? [], "file");
       const check = source === undefined ? undefined : checkAttachment(source, policy);
@@ -422,6 +506,7 @@ export class Publisher {
         ...(collision ? { collision } : {}),
         type: served ? served.type : "block",
         updatedAt: served && served.updatedAt > (block.updatedAt ?? "") ? served.updatedAt : block.updatedAt ?? "",
+        ...(publicTitles.has(block.id) ? { public: { title: publishedTitle(block.title ?? "", publicTitles) || block.id } } : {}),
         ...(source === undefined ? {} : { attachment: { source, ...(check && !check.ok ? { refused: check.reason } : {}) } }),
       };
     }).sort((left, right) => left.path.localeCompare(right.path));
@@ -431,8 +516,25 @@ export class Publisher {
     return value;
   }
 
-  /** Answers one HTTP request. Only GET and HEAD; only the index and published entries. */
-  async handle(request: Request): Promise<Response> {
+  /** The full public URL of an entry, or its public path when the public origin is not known. */
+  publicHref(entry: PublishedEntry): string | undefined {
+    return entry.public ? `${this.publicBase.origin ?? ""}${this.publicBase.basePath}${entry.path}` : undefined;
+  }
+
+  private basePathFor(audience: PublishAudience): string {
+    return audience === "public" ? this.publicBase.basePath : this.basePath;
+  }
+
+  /**
+   * Answers one HTTP request. Only GET and HEAD; only the index and published
+   * entries. The public audience has no index and sees only public notes.
+   */
+  async handle(request: Request, audience: PublishAudience = "tailnet"): Promise<Response> {
+    const response = await this.answer(request, audience);
+    return audience === "public" ? withHeaders(response, PUBLIC_HEADERS) : response;
+  }
+
+  private async answer(request: Request, audience: PublishAudience): Promise<Response> {
     if (request.method !== "GET" && request.method !== "HEAD") {
       return respond("Read-only\n", "text/plain; charset=utf-8", 405, { allow: "GET, HEAD" });
     }
@@ -440,19 +542,22 @@ export class Publisher {
       return respond("Host not allowed\n", "text/plain; charset=utf-8", 421);
     }
     const url = new URL(request.url);
+    const basePath = this.basePathFor(audience);
     let path = url.pathname;
-    if (this.basePath && (path === this.basePath || path.startsWith(`${this.basePath}/`))) {
-      path = path.slice(this.basePath.length) || "/";
+    if (basePath && (path === basePath || path.startsWith(`${basePath}/`))) {
+      path = path.slice(basePath.length) || "/";
     }
     try {
+      // The public listener has no index: a public note is reached by its link alone.
+      if (audience === "public" && !path.startsWith("/p/")) return notFound();
       if (path === "/" || path === "" || path === "/index" || path === "/index.html") {
         const accept = request.headers.get("accept") ?? "";
         if (path !== "/index.html" && accept.includes("text/plain") && !accept.includes("text/html")) {
-          return respond(renderIndexText(await this.readIndex(), this.basePath), "text/plain; charset=utf-8");
+          return respond(renderIndexText(await this.readIndex(), this.basePath, this.publicHrefs()), "text/plain; charset=utf-8");
         }
-        return renderedHtml(renderIndexHtml(await this.readIndex(), this.basePath));
+        return renderedHtml(renderIndexHtml(await this.readIndex(), this.basePath, this.publicHrefs()));
       }
-      if (path === "/index.txt") return respond(renderIndexText(await this.readIndex(), this.basePath), "text/plain; charset=utf-8");
+      if (path === "/index.txt") return respond(renderIndexText(await this.readIndex(), this.basePath, this.publicHrefs()), "text/plain; charset=utf-8");
       if (path === "/index.json") return respond(`${JSON.stringify(readerIndex(await this.readIndex()), null, 2)}\n`, "application/json; charset=utf-8");
       if (!path.startsWith("/p/")) return notFound();
       let slug: string;
@@ -461,22 +566,28 @@ export class Publisher {
       } catch {
         return notFound();
       }
-      const index = await this.readIndex();
+      const index = audienceIndex(await this.readIndex(), audience);
       const entry = index.entries.find((candidate) => candidate.slug === slug) ??
         index.entries.find((candidate) => candidate.blockId === slug);
       if (!entry) return notFound();
-      return await this.serveEntry(entry, index, url.searchParams.get("view"));
+      return await this.serveEntry(entry, index, url.searchParams.get("view"), audience);
     } catch (error) {
       this.log(`publish: ${request.method} ${path}: ${error instanceof Error ? error.message : String(error)}`);
       return respond("The outline could not be read\n", "text/plain; charset=utf-8", 502);
     }
   }
 
-  private async serveEntry(entry: PublishedEntry, index: PublishedIndex, view: string | null): Promise<Response> {
+  private publicHrefs(): (entry: PublishedEntry) => string | undefined {
+    return (entry) => this.publicHref(entry);
+  }
+
+  private async serveEntry(entry: PublishedEntry, index: PublishedIndex, view: string | null, audience: PublishAudience): Promise<Response> {
     const asHtml = view === "html";
     // The lock is checked again at request time, so `[publish::never]` holds from the next request
     // even before the change feed has cleared the cached index.
     if ((await this.lockedIds([entry.blockId])).size) return notFound();
+    // So is `public`: a note made tailnet-only again leaves the public listener at once.
+    if (audience === "public" && !(await this.stillPublic(entry.blockId))) return notFound();
     if (entry.type !== "block" && entry.attachment?.source !== undefined) {
       // Check again at request time: the file or a link in its path may have changed since the index.
       const check = checkAttachment(entry.attachment.source, this.requirePolicy());
@@ -499,15 +610,15 @@ export class Publisher {
       if (check.type === "mermaid") {
         return respond(mermaidArtifactPage(entry.title, contents.text), "text/html; charset=utf-8", 200, { "content-security-policy": ATTACHED_HTML_CSP });
       }
-      if (check.type === "react") return this.serveReact(entry, contents.text, extname(check.path).toLowerCase() === ".tsx" ? ".tsx" : ".jsx");
+      if (check.type === "react") return this.serveReact(entry, contents.text, extname(check.path).toLowerCase() === ".tsx" ? ".tsx" : ".jsx", audience);
       if (check.type === "markdown") {
-        if (asHtml) return renderedHtml(this.page(entry, renderMarkdownHtml(await this.attachedMarkdown(entry, index, contents.text))));
+        if (asHtml) return renderedHtml(this.page(entry, renderMarkdownHtml(await this.attachedMarkdown(entry, index, contents.text, audience)), audience));
         return respond(contents.text, "text/markdown; charset=utf-8", 200, { "content-disposition": "inline" });
       }
       return respond(contents.text, "text/plain; charset=utf-8");
     }
-    const markdown = await this.blockMarkdown(entry, index);
-    if (asHtml) return renderedHtml(this.page(entry, renderMarkdownHtml(markdown)));
+    const markdown = await this.blockMarkdown(entry, index, audience);
+    if (asHtml) return renderedHtml(this.page(entry, renderMarkdownHtml(markdown), audience));
     return respond(markdown, "text/markdown; charset=utf-8", 200, { "content-disposition": "inline" });
   }
 
@@ -516,9 +627,9 @@ export class Publisher {
    * HTML. A compile error is a readable page (422) naming the artifact's line,
    * never a stack trace or a path on this machine.
    */
-  private async serveReact(entry: PublishedEntry, source: string, extension: ".jsx" | ".tsx"): Promise<Response> {
+  private async serveReact(entry: PublishedEntry, source: string, extension: ".jsx" | ".tsx", audience: PublishAudience): Promise<Response> {
     if (!this.compiler) {
-      return renderedHtml(this.page(entry, "<h1>Not compiled</h1>\n<p>This publisher has no artifact cache, so React artifacts are not compiled.</p>\n"), 503);
+      return renderedHtml(this.page(entry, "<h1>Not compiled</h1>\n<p>This publisher has no artifact cache, so React artifacts are not compiled.</p>\n", audience), 503);
     }
     const build = await this.compiler.compile(source, extension);
     if (build.ok) {
@@ -527,14 +638,22 @@ export class Publisher {
     const problems = build.problems.map((problem) => `<pre>${escapeHtml(problem)}</pre>`).join("\n");
     const status = build.transient ? 503 : 422;
     const body = `<h1>${build.transient ? "Not compiled yet" : "This artifact does not compile"}</h1>\n${problems}\n` +
-      `<p class="dim">Fix the file and reload; <a href="${escapeHtml(`${this.basePath}${entry.path}?view=source`)}">source</a>.</p>\n`;
-    return renderedHtml(this.page(entry, body), status);
+      `<p class="dim">Fix the file and reload; <a href="${escapeHtml(`${this.basePathFor(audience)}${entry.path}?view=source`)}">source</a>.</p>\n`;
+    return renderedHtml(this.page(entry, body, audience), status);
   }
 
-  private page(entry: PublishedEntry, body: string): string {
-    const href = (path: string) => escapeHtml(`${this.basePath}${path}`);
-    return htmlPage(entry.title, `<article>\n${body}</article>\n<footer>updated ${escapeHtml(entry.updatedAt)} · <a href="${href(entry.path)}">raw</a></footer>`,
-      `<a href="${href("/index")}">index</a> / ${escapeHtml(entry.slug)}`);
+  private page(entry: PublishedEntry, body: string, audience: PublishAudience): string {
+    const href = (path: string) => escapeHtml(`${this.basePathFor(audience)}${path}`);
+    // The public listener has no index to link to.
+    const nav = audience === "public" ? escapeHtml(entry.slug) : `<a href="${href("/index")}">index</a> / ${escapeHtml(entry.slug)}`;
+    return htmlPage(entry.title, `<article>\n${body}</article>\n<footer>updated ${escapeHtml(entry.updatedAt)} · <a href="${href(entry.path)}">raw</a></footer>`, nav);
+  }
+
+  /** Whether the block still says `[publish::public…]` now, not just when the index was built. */
+  private async stillPublic(blockId: string): Promise<boolean> {
+    const read = await this.client.request<BlockReadCollection>({ action: "blocks.read", ids: [blockId], fields: ["properties"] });
+    const block = read.blocks[0];
+    return !!block && isPublicIntent(block.properties);
   }
 
   /**
@@ -601,7 +720,7 @@ export class Publisher {
    * count, byte budget, cycle and Trash rules apply. Then every embedded note
    * that is locked is found, so it shows as a locked note.
    */
-  private async readEmbeds(texts: readonly string[], hostBlockId: string): Promise<EmbedExpansion | undefined> {
+  private async readEmbeds(texts: readonly string[], hostBlockId: string, shareable?: ReadonlySet<string>): Promise<EmbedExpansion | undefined> {
     const targets = texts.flatMap((text) => embedMatches(text)
       .map((match) => ({ blockId: match[1]!, ...(match[2] ? { fragmentId: match[2] } : {}) })));
     if (!targets.length) return undefined;
@@ -620,6 +739,7 @@ export class Publisher {
     }));
     return {
       read,
+      ...(shareable ? { shareable } : {}),
       locked: ids.size ? await this.lockedIds([...ids]) : new Set(),
       ...(extensionBlocks.size ? { extensionHidden: await this.extensionHiddenIds(extensionBlocks, hostBlockId) } : {}),
       cursor: { next: 0 },
@@ -674,25 +794,34 @@ export class Publisher {
     return locked.size ? { ...index, entries: index.entries.filter((entry) => !locked.has(entry.blockId)) } : index;
   }
 
+  /**
+   * For the public audience: the notes an embed may show, the public notes and
+   * the rows this page shows anyway. Any other embed shows NOT_SHARED_NOTE.
+   */
+  private shareable(audience: PublishAudience, index: PublishedIndex, shownIds: readonly string[] = []): ReadonlySet<string> | undefined {
+    return audience === "public" ? new Set([...index.entries.map((entry) => entry.blockId), ...shownIds]) : undefined;
+  }
+
   /** The block and its subtree as markdown, with its links and embeds. */
-  private async blockMarkdown(entry: PublishedEntry, index: PublishedIndex): Promise<string> {
+  private async blockMarkdown(entry: PublishedEntry, index: PublishedIndex, audience: PublishAudience): Promise<string> {
     const subtree = await this.client.request<ProjectedBlockCollection>({
       action: "blocks.query",
       query: { subtreeRootId: entry.blockId, limit: PUBLISH_QUERY_LIMIT },
       fields: ["text", "parent", "properties", "author"],
     });
-    const shown = shownSubtree(subtree).filter((row) => !row.locked).map((row) => row.block.text ?? "");
+    const rows = shownSubtree(subtree).filter((row) => !row.locked);
+    const shown = rows.map((row) => row.block.text ?? "");
     const pages = await this.resolvePages(shown);
-    const embeds = await this.readEmbeds(shown, entry.blockId);
-    return renderSubtreeMarkdown(subtree, await this.linkable(index, shown, pages, embeds), this.basePath, pages, embeds);
+    const embeds = await this.readEmbeds(shown, entry.blockId, this.shareable(audience, index, rows.map((row) => row.block.id)));
+    return renderSubtreeMarkdown(subtree, await this.linkable(index, shown, pages, embeds), this.basePathFor(audience), pages, embeds);
   }
 
   /** An attached markdown file rendered: its `((block))` and `[[page]]` links and its embeds, as a block's. */
-  private async attachedMarkdown(entry: PublishedEntry, index: PublishedIndex, text: string): Promise<string> {
+  private async attachedMarkdown(entry: PublishedEntry, index: PublishedIndex, text: string, audience: PublishAudience): Promise<string> {
     const pages = await this.resolvePages([text]);
-    const embeds = await this.readEmbeds([text], entry.blockId);
+    const embeds = await this.readEmbeds([text], entry.blockId, this.shareable(audience, index, [entry.blockId]));
     const linkable = await this.linkable(index, [text], pages, embeds);
-    return publishedText(text, { index: linkable, basePath: this.basePath, pages, ...(embeds ? { embeds } : {}) }, { keepProperties: true });
+    return publishedText(text, { index: linkable, basePath: this.basePathFor(audience), pages, ...(embeds ? { embeds } : {}) }, { keepProperties: true });
   }
 }
 
@@ -711,6 +840,11 @@ export interface EmbedExpansion {
   locked: ReadonlySet<string>;
   /** Embedded extension blocks nothing opted in, by id, with their extension. */
   extensionHidden?: ReadonlyMap<string, string>;
+  /**
+   * On a public page: the only notes an embed may show. Any other ready embed
+   * shows NOT_SHARED_NOTE, never its text, title or id.
+   */
+  shareable?: ReadonlySet<string>;
   cursor: { next: number };
 }
 
@@ -743,6 +877,8 @@ const placeholder = (text: string) => `*${text}*`;
 function renderEmbed(node: TransclusionNode | undefined, context: TextContext): string {
   const expansion = context.embeds!;
   if (!node) return placeholder(TRANSCLUSION_WORDING.limit);
+  // On a public page an embed of a note that isn't public names nothing from it, whatever its state.
+  if (expansion.shareable && !expansion.shareable.has(node.blockId)) return placeholder(NOT_SHARED_NOTE);
   if (node.status !== "ready") {
     // Wording that names nothing from the target: a trashed note's title is not shown.
     if (node.status === "deleted") return placeholder("note in Trash");
@@ -920,12 +1056,17 @@ function entryHref(entry: PublishedEntry, basePath: string): string {
   return `${basePath}${entry.path}${view}`;
 }
 
-export function renderIndexText(index: PublishedIndex, basePath = ""): string {
-  const header = ["TYPE", "UPDATED", "URL", "TITLE"];
+/** A public note's public URL, for the index and `publish list`. */
+type PublicHref = (entry: PublishedEntry) => string | undefined;
+const defaultPublicHref: PublicHref = (entry) => entry.public ? `${DEFAULT_PUBLIC_BASE_PATH}${entry.path}` : undefined;
+
+export function renderIndexText(index: PublishedIndex, basePath = "", publicHref: PublicHref = defaultPublicHref): string {
+  const header = ["TYPE", "UPDATED", "URL", "PUBLIC", "TITLE"];
   const rows = index.entries.map((entry) => [
     entry.type,
     entry.updatedAt.replace("T", " ").replace(/\.\d+Z$/, "Z"),
     `${basePath}${entry.path}`,
+    publicHref(entry) ?? "-",
     entry.title +
       (entry.collision ? `  (collision: ${entry.collision.requested} is held by ${entry.collision.heldBy})` : "") +
       (entry.attachment?.refused ? `  (attachment not served: ${entry.attachment.refused})` : ""),
@@ -939,7 +1080,7 @@ export function renderIndexText(index: PublishedIndex, basePath = ""): string {
   return `${lines.join("\n")}\n`;
 }
 
-export function renderIndexHtml(index: PublishedIndex, basePath = ""): string {
+export function renderIndexHtml(index: PublishedIndex, basePath = "", publicHref: PublicHref = defaultPublicHref): string {
   const rows = index.entries.map((entry) => {
     const notes = [
       entry.collision ? `collision: “${escapeHtml(entry.collision.requested)}” is held by ${escapeHtml(entry.collision.heldBy)}` : "",
@@ -947,8 +1088,10 @@ export function renderIndexHtml(index: PublishedIndex, basePath = ""): string {
     ].filter(Boolean).map((note) => `<div class="dim">${note}</div>`).join("");
     const raw = entry.type === "markdown" || entry.type === "block"
       ? ` <a class="dim" href="${escapeHtml(`${basePath}${entry.path}`)}">md</a>` : "";
+    const shared = publicHref(entry);
+    const open = shared ? `<div class="dim">public: <a href="${escapeHtml(shared)}">${escapeHtml(shared)}</a></div>` : "";
     return `<tr><td><a href="${escapeHtml(entryHref(entry, basePath))}">${escapeHtml(entry.title)}</a>${notes}</td>` +
-      `<td>${escapeHtml(`${basePath}${entry.path}`)}${raw}</td><td>${escapeHtml(entry.type)}</td>` +
+      `<td>${escapeHtml(`${basePath}${entry.path}`)}${raw}${open}</td><td>${escapeHtml(entry.type)}</td>` +
       `<td>${escapeHtml(entry.updatedAt.slice(0, 16).replace("T", " "))}</td></tr>`;
   }).join("\n");
   const body = index.entries.length
@@ -959,7 +1102,11 @@ export function renderIndexHtml(index: PublishedIndex, basePath = ""): string {
   return htmlPage("Published", `${body}${truncated}\n${notice}\n<footer><a href="${escapeHtml(`${basePath}/index.txt`)}">index.txt</a> · <a href="${escapeHtml(`${basePath}/index.json`)}">index.json</a></footer>`, "published");
 }
 
-/** Serves a publisher on 127.0.0.1 only; exposure beyond the machine is a proxy's job (tailscale serve). */
-export function servePublisher(publisher: Publisher, port: number): ReturnType<typeof Bun.serve> {
-  return Bun.serve({ hostname: "127.0.0.1", port, fetch: (request) => publisher.handle(request) });
+/**
+ * Serves a publisher on 127.0.0.1 only; exposure beyond the machine is a
+ * proxy's job (`tailscale serve` for the tailnet, `tailscale funnel` for the
+ * public audience, each on its own port).
+ */
+export function servePublisher(publisher: Publisher, port: number, audience: PublishAudience = "tailnet"): ReturnType<typeof Bun.serve> {
+  return Bun.serve({ hostname: "127.0.0.1", port, fetch: (request) => publisher.handle(request, audience) });
 }

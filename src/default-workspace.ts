@@ -245,7 +245,7 @@ const FEATURE_TOUR_SECTIONS = [
     lines: [
       "One outline host per machine serves every outline by name. `bun run cli outlines` lists them; `OUTLINER_OUTLINE=<name>` or `--outline <name>` picks one. A folder binds to an outline through its `client.json`. Opening from Herdr in an unbound folder shows Choose outline and never creates an outline by itself.",
       "",
-      "Give a block `[publish::true]` or `[publish::<slug>]` and `outliner publish serve` shows it read-only at `/p/<page or slug>`, along with an attached HTML page, claude.ai artifact, SVG, Mermaid or Markdown file. `[publish::false]` opts one block out; `[publish::never]` keeps it and everything under it off every page, embed and link.",
+      "Give a block `[publish::true]` or `[publish::<slug>]` and `outliner publish serve` shows it read-only at `/p/<page or slug>`, along with an attached HTML page, claude.ai artifact, SVG, Mermaid or Markdown file. `[publish::false]` opts one block out; `[publish::never]` keeps it and everything under it off every page, embed and link. `[publish::public]` or `[publish::public:<slug>]` also opens a note to anyone with the link, the way a shared doc does: `--public-port` serves only those notes, with no index, and an embed of a note that isn't public shows nothing of it.",
       "",
       "The Claude Code mod turns Work IDs, `[[pages]]` and `((ids))` in Claude's replies into links that open in Claude's own Detail, and feeds Recent Mentions. ep0ch-door is a separate terminal client for the same outlines, with boards, readers and an agent drawer.",
     ],

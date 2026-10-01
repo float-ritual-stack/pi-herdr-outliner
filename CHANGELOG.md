@@ -4,6 +4,20 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+### Anyone with the link: `[publish::public]` (PIE-518)
+
+- Tag a note `[publish::public]` or `[publish::public:<slug>]` and anyone with
+  its link can open it, including claude.ai and ChatGPT. `publish serve
+  --public-port N` adds a public listener from the same publisher: it serves
+  only public notes, has no index, and shows "not shared" for an embed of a
+  note that isn't public. `[publish::never]` still wins. Expose it with
+  Tailscale Funnel on its own port (Funnel opens a whole port, so never beside
+  the tailnet mounts on 443).
+- `publish list` and the tailnet index gain a PUBLIC column with each public
+  note's link (`--public-url`).
+- `[publish::public]` used to publish at the slug `public`; it now means the
+  above.
+
 ### Proposals apply once, never past their passage, and dismiss in the service (PIE-510)
 
 - "Apply anyway" places only the passage the proposal shows. If the person

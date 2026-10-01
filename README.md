@@ -719,8 +719,8 @@ of the service (`blocks.query`, `pages.resolve`, `files.read` and the content
 event feed) and listens on `127.0.0.1` only; exposing it is Tailscale's job.
 
 ```sh
-bun run cli publish serve --outline pie --port 8790 --base-path /pub [--root ~/writing]… [--max-bytes 1048576] [--allow-host NAME]… [--artifact-cache DIR]
-bun run cli publish list --outline pie [--json]
+bun run cli publish serve --outline pie --port 8790 --base-path /pub [--root ~/writing]… [--max-bytes 1048576] [--allow-host NAME]… [--artifact-cache DIR] [--public-port 8791 --public-url https://HOST.ts.net:8443/share]
+bun run cli publish list --outline pie [--public-url URL] [--json]
 ```
 
 **Publish a block** by giving it a `[publish::…]` property:
@@ -729,6 +729,7 @@ bun run cli publish list --outline pie [--json]
 | --- | --- |
 | `[publish::true]` or `[publish::yes]` | `/p/<page address>` when the block has `[page::…]`, else `/p/<block id>` |
 | `[publish::<slug>]` | `/p/<slug>`; `/` makes folders, e.g. `[publish::field-notes/moths]` |
+| `[publish::public]`, `[publish::public:<slug>]` | as `true` or `<slug>`, and **also open to anyone with the link** ([Anyone with the link](#anyone-with-the-link)) |
 | `[publish::false]`, `no`, `off`, `0` | not published, even when the block has another `[publish::…]` |
 | `[publish::never]` | **locked**: never published, embedded or linked, and neither is anything under it |
 
@@ -839,6 +840,54 @@ clears the cached index, which is otherwise at most five seconds old.
 Anyone who can write to the outline can publish: an agent that adds
 `[publish::true]` publishes that block. The publisher is built for a tailnet,
 where every reader is already trusted.
+
+#### Anyone with the link
+
+A note tagged `[publish::public]` (or `[publish::public:<slug>]`) can be opened
+by anyone who has its link, the way a shared Google Doc, gist or claude.ai
+artifact can: paste the link into claude.ai or ChatGPT and they read it from
+their own servers. It is for notes with nothing private in them; there is no
+token, expiry or sign-in. The note is published on the tailnet as before, at
+the same slug.
+
+`--public-port N` adds a second listener, also on `127.0.0.1`, from the same
+publisher and the same index. It is stricter than the tailnet one:
+
+- it serves only notes tagged public, at `<public mount>/p/<slug>` (or
+  `/p/<block id>`); every other path, including a tailnet-only note's, is the
+  same `404`;
+- it has **no index**: no `/`, `/index`, `/index.txt` or `/index.json`, and a
+  public page doesn't link to one;
+- inside a public page, a `((link))` to a note that isn't public shows only
+  its authored label (or "unpublished note"), and an **embed of a note that
+  isn't public shows "not shared"**, never its text, title or id, however deep
+  the embed. Notes the page shows anyway (its own subtree) and other public
+  notes embed as usual;
+- `[publish::never]` still wins: a locked public note is `404`, and a locked
+  embed says "locked note";
+- `public` is checked again on every request, so removing it takes the note
+  off at once;
+- attached files are served exactly as on the tailnet, with the same checks
+  and the same sandbox CSP, and every response carries
+  `X-Robots-Tag: noindex, nofollow`.
+
+`--public-url` (or `OUTLINER_PUBLIC_URL`) says where anyone opens the
+listener, such as `https://float-2.example.ts.net:8443/share`. Its path is the
+mount (default `/share`); with the whole URL, the tailnet index and
+`publish list` show each public note's full public link in their PUBLIC
+column (`-` for a tailnet-only note).
+
+Expose the public listener with [Tailscale Funnel](https://tailscale.com/kb/1223/funnel)
+on **its own port**. Funnel is switched on per port, not per path, so putting
+`/share` beside `/pub` on 443 would open `/pub` to the internet too:
+
+```sh
+tailscale funnel --bg --https=8443 --set-path /share http://127.0.0.1:8791
+tailscale funnel status   # 8443 (Funnel on); 443 still "tailnet only"
+```
+
+Funnel needs the node's `funnel` attribute in the tailnet policy (Funnel ports
+443, 8443 and 10000).
 
 #### Artifacts
 

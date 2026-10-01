@@ -153,7 +153,10 @@ source evidence or distinguish authored glyphs from controls.
   is its shadcn/ui. Embeds on a published page are projected by the service's
   `transclusions.read` (its limits and cycle rules), never re-derived; the
   `[publish::never]` lock (`blockPublishIntent`) is checked for every page,
-  embed and link.
+  embed and link. The public listener (`[publish::public]`, PIE-518) is the
+  same `Publisher` seen by the `public` audience (`handle(request, "public")`,
+  `audienceIndex`), never a second publisher: add an audience rule there, and
+  keep its stricter embed rule (`EmbedExpansion.shareable`) in `renderEmbed`.
 - `pi-extension/index.ts` is a host adapter, not a second implementation of the service.
 - `src/known-outlines.ts` owns whether a folder has an outline (`detectOutline`)
   and the read-only list of outlines on this machine (`listKnownOutlines`,

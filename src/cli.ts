@@ -97,10 +97,12 @@ if (process.argv[2] === "outlines" || process.argv[2] === "outline") {
   process.exit(await runOutlinesCommand(process.argv[2], process.argv.slice(3)));
 }
 /**
- * `publish serve [--port N] [--root DIR]… [--max-bytes N] [--base-path /pub] [--allow-host NAME]… [--artifact-cache DIR] [--outline NAME]`:
+ * `publish serve [--port N] [--root DIR]… [--max-bytes N] [--base-path /pub] [--allow-host NAME]… [--artifact-cache DIR] [--public-port N] [--public-url URL] [--outline NAME]`:
  * serves blocks carrying `[publish::…]` read-only on 127.0.0.1 (src/publish.ts).
  * React artifacts compile into `--artifact-cache` (default `<state root>/publish/artifacts`).
- * `publish list [--json]` prints the same index once.
+ * `--public-port` adds the public listener (only `[publish::public]` notes, no index) for
+ * `tailscale funnel`; `--public-url` (or OUTLINER_PUBLIC_URL) is where anyone opens it.
+ * `publish list [--json]` prints the same index once, with each public note's public URL.
  */
 if (process.argv[2] === "publish") {
   process.exit(await runPublishCommand(process.argv[3], process.argv.slice(4)));
@@ -109,14 +111,14 @@ if (process.argv[2] === "publish") {
 async function runPublishCommand(operation: string | undefined, args: string[]): Promise<number> {
   try {
     if (operation !== "serve" && operation !== "list") {
-      throw new Error("publish expects: serve [--port N] [--root DIR]… [--max-bytes N] [--base-path /pub] [--allow-host NAME]… [--artifact-cache DIR] [--outline NAME] | list [--json]");
+      throw new Error("publish expects: serve [--port N] [--root DIR]… [--max-bytes N] [--base-path /pub] [--allow-host NAME]… [--artifact-cache DIR] [--public-port N] [--public-url URL] [--outline NAME] | list [--public-url URL] [--json]");
     }
     const { values } = parseArgs({
       args, strict: true,
       options: {
         port: { type: "string" }, root: { type: "string", multiple: true }, "max-bytes": { type: "string" },
         "base-path": { type: "string" }, "allow-host": { type: "string", multiple: true }, outline: { type: "string" },
-        "artifact-cache": { type: "string" },
+        "artifact-cache": { type: "string" }, "public-port": { type: "string" }, "public-url": { type: "string" },
         json: { type: "boolean" },
       },
     });
@@ -125,6 +127,10 @@ async function runPublishCommand(operation: string | undefined, args: string[]):
     const maxBytes = values["max-bytes"] === undefined ? undefined : Number(values["max-bytes"]);
     if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("--port must be a port number");
     if (maxBytes !== undefined && (!Number.isInteger(maxBytes) || maxBytes < 1)) throw new Error("--max-bytes must be a positive integer");
+    const publicPort = values["public-port"] === undefined ? undefined : Number(values["public-port"]);
+    if (publicPort !== undefined && (!Number.isInteger(publicPort) || publicPort < 0 || publicPort > 65535)) throw new Error("--public-port must be a port number");
+    if (publicPort !== undefined && publicPort !== 0 && publicPort === port) throw new Error("--public-port must differ from --port");
+    const publicUrl = values["public-url"] ?? process.env.OUTLINER_PUBLIC_URL;
     const { Publisher, servePublisher, renderIndexText } = await import("./publish");
     const publisher = new Publisher({
       client: createOutlinerClient(resolveClientPaths()),
@@ -133,24 +139,30 @@ async function runPublishCommand(operation: string | undefined, args: string[]):
       ...(values["base-path"] === undefined ? {} : { basePath: values["base-path"] }),
       ...(values["allow-host"] === undefined ? {} : { allowedHosts: values["allow-host"] }),
       artifactCacheDirectory: resolve(values["artifact-cache"] ?? join(resolveStateRoot(), "publish", "artifacts")),
+      ...(publicUrl ? { publicUrl } : {}),
       log: line => console.error(line),
     });
     const status = await publisher.start();
     if (operation === "list") {
       const index = await publisher.readIndex();
       await publisher.stop();
-      console.log(values.json ? JSON.stringify(index, null, 2) : renderIndexText(index, publisher.basePath).trimEnd());
+      const listed = { ...index, entries: index.entries.map(entry => ({ ...entry, ...(entry.public ? { publicUrl: publisher.publicHref(entry) } : {}) })) };
+      console.log(values.json ? JSON.stringify(listed, null, 2) : renderIndexText(index, publisher.basePath, entry => publisher.publicHref(entry)).trimEnd());
       return 0;
     }
     const server = servePublisher(publisher, port);
+    // One publisher, one index; the public listener is the same publisher seen by the public audience.
+    const publicServer = publicPort === undefined ? undefined : servePublisher(publisher, publicPort, "public");
     console.log(JSON.stringify({
       status: "publishing", url: `http://127.0.0.1:${server.port}${publisher.basePath}/`,
+      ...(publicServer ? { publicListener: `http://127.0.0.1:${publicServer.port}${publisher.publicBase.basePath}/p/…`, publicUrl: `${publisher.publicBase.origin ?? ""}${publisher.publicBase.basePath}` } : {}),
       outline: status.outline?.name ?? process.env.OUTLINER_OUTLINE ?? null, roots: publisher.roots,
     }));
     const stopped = Promise.withResolvers<void>();
     for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => stopped.resolve());
     await stopped.promise;
     server.stop(true);
+    publicServer?.stop(true);
     await publisher.stop();
     return 0;
   } catch (error) {

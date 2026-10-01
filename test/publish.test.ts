@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OutlinerClient } from "../src/client";
 import { resolvePaths } from "../src/paths";
-import { assignPaths, publishIntent, Publisher, renderSubtreeMarkdown, servePublisher, slugify, type PublishedIndex } from "../src/publish";
+import { assignPaths, parsePublicUrl, publishIntent, Publisher, renderSubtreeMarkdown, servePublisher, slugify, type PublishedIndex } from "../src/publish";
 import { canonicalPublishRoots, checkAttachment, type AttachmentPolicy } from "../src/publish-attachments";
 import { OutlinerServer } from "../src/server";
 import { OutlinerStore } from "../src/store";
@@ -164,9 +164,9 @@ test("the index lists published things in html, text and json", async () => {
   expect(await (await get("/pub/index")).text()).toBe(html);
 
   const plain = await (await get("/index", { accept: "text/plain" })).text();
-  expect(plain.split("\n")[0]).toMatch(/^TYPE\s+UPDATED\s+URL\s+TITLE$/);
+  expect(plain.split("\n")[0]).toMatch(/^TYPE\s+UPDATED\s+URL\s+PUBLIC\s+TITLE$/);
   expect(plain).toContain("/pub/p/census");
-  expect(plain).toMatch(/markdown\s+\S+ \S+\s+\/pub\/p\/moth-garden\s+Moth garden plan/);
+  expect(plain).toMatch(/markdown\s+\S+ \S+\s+\/pub\/p\/moth-garden\s+-\s+Moth garden plan/);
   expect(await (await get("/index.txt")).text()).toBe(plain);
 
   const json = await (await get("/index.json")).json() as PublishedIndex;
@@ -216,11 +216,16 @@ test("servePublisher binds to 127.0.0.1", async () => {
 });
 
 test("publishIntent and slugify", () => {
-  expect(publishIntent("true")).toBe("auto");
-  expect(publishIntent("YES")).toBe("auto");
+  expect(publishIntent("true")).toEqual({ public: false });
+  expect(publishIntent("YES")).toEqual({ public: false });
   for (const off of ["false", "no", "off", "0", "", undefined]) expect(publishIntent(off)).toBe("off");
-  expect(publishIntent("Field Notes/Luna Moths!")).toEqual({ slug: "field-notes/luna-moths" });
-  expect(publishIntent("../..")).toBe("auto");
+  expect(publishIntent("Field Notes/Luna Moths!")).toEqual({ slug: "field-notes/luna-moths", public: false });
+  expect(publishIntent("../..")).toEqual({ public: false });
+  expect(publishIntent("public")).toEqual({ public: true });
+  expect(publishIntent("Public:")).toEqual({ public: true });
+  expect(publishIntent("public:Moth Walk/Route")).toEqual({ slug: "moth-walk/route", public: true });
+  expect(publishIntent("public:../..")).toEqual({ public: true });
+  expect(publishIntent("publicity")).toEqual({ slug: "publicity", public: false });
   expect(slugify("../../etc/passwd")).toBe("etc/passwd");
   expect(slugify(".hidden/./x")).toBe("hidden/x");
   expect(slugify("Mottenstraße")).toBe("mottenstraße");
@@ -670,4 +675,178 @@ test("a rendered markdown attachment links published [[page]] and ((block)) targ
   expect(html).toContain('See <a href="/p/census">Pollinator census</a>, <a href="/p/census">Pollinator census</a> and Nowhere.');
   expect(html).toContain("<blockquote>\n<p>Bat tally: 14 pipistrelles</p>\n</blockquote>");
   expect(html).toContain("[[Pollinator census]] stays as written in code");
+});
+
+// Anyone with the link: [publish::public] notes on the public listener (PIE-518).
+
+function sharing(publisher: Publisher) {
+  return (path: string, headers: Record<string, string> = {}) =>
+    publisher.handle(new Request(`http://moth-box.tail0000.ts.net${path}`, { headers }), "public");
+}
+
+test("a public note is served to anyone with the link, at its slug and its id, with or without the mount", async () => {
+  const { store, publisher, get } = await setup({ basePath: "/pub" });
+  const walk = store.create("Moth walk route [publish::public:moth-walk]\nMeet at the lime avenue at dusk.");
+  const plain = store.create("Lantern checklist [publish::public]");
+  const share = sharing(publisher);
+  for (const path of ["/share/p/moth-walk", "/p/moth-walk", `/share/p/${walk.id}`]) {
+    const response = await share(path);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("Meet at the lime avenue at dusk.");
+    expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+  }
+  expect((await share(`/share/p/${plain.id}`)).status).toBe(200);
+  // A public note is still published on the tailnet, at the same slug.
+  expect((await get("/pub/p/moth-walk")).status).toBe(200);
+  const html = await (await share("/share/p/moth-walk?view=html")).text();
+  expect(html).toContain('href="/share/p/moth-walk"');
+  expect(html).not.toContain("index");
+});
+
+test("a tailnet-only note is 404 on the public listener, by slug and by id", async () => {
+  const { store, publisher, get } = await setup();
+  const census = store.create("Pollinator census [publish::census]\nRed mason bees: 31");
+  const walk = store.create("Moth walk route [publish::public:moth-walk]");
+  const share = sharing(publisher);
+  expect((await get("/p/census")).status).toBe(200);
+  for (const path of ["/share/p/census", `/share/p/${census.id}`, "/p/census"]) {
+    const response = await share(path);
+    expect(response.status).toBe(404);
+    expect(await response.text()).not.toContain("mason");
+  }
+  // Made tailnet-only again, a public note leaves the public listener on the next request,
+  // before the index is rebuilt (a write straight to the store sends no change event).
+  expect((await share("/share/p/moth-walk")).status).toBe(200);
+  store.update(walk.id, "Moth walk route [publish::moth-walk]", walk.revision);
+  expect((await share("/share/p/moth-walk")).status).toBe(404);
+  expect((await get("/p/moth-walk")).status).toBe(200);
+});
+
+test("the public listener has no index and nothing but /p/", async () => {
+  const { store, publisher } = await setup();
+  store.create("Moth walk route [publish::public:moth-walk]");
+  store.create("Pollinator census [publish::census]");
+  const share = sharing(publisher);
+  for (const path of ["/", "/share", "/share/", "/share/index", "/share/index.html", "/share/index.txt", "/share/index.json", "/index.json", "/share/p/", "/share/p"]) {
+    const response = await share(path, { accept: "text/plain" });
+    expect(response.status).toBe(404);
+    const body = await response.text();
+    expect(body).not.toContain("moth-walk");
+    expect(body).not.toContain("census");
+  }
+  expect((await publisher.handle(new Request("http://127.0.0.1/share/p/moth-walk", { method: "POST" }), "public")).status).toBe(405);
+});
+
+test("on a public page an embed or link of a note that isn't public shows only its label, never its text or id", async () => {
+  const { store, publisher, get } = await setup();
+  const codes = store.create("Allotment gate code 2291\nkey behind the water butt");
+  const census = store.create("Pollinator census [publish::census]\nRed mason bees: 31");
+  const route = store.create("Route card [publish::public:route-card]\nStart at the lime avenue.");
+  const walk = store.create([
+    `Moth walk ((${census.id})) [publish::public:moth-walk]`,
+    `See ((${codes.id}|the gate)), ((${codes.id})), ((${census.id})) and ((${route.id})).`,
+    `!((${codes.id}))`,
+    `!((${census.id}))`,
+    `!((${route.id}))`,
+  ].join("\n"));
+  const lamp = store.create("Lamp log: 12 elephant hawk-moths", walk.id);
+  store.create(`Then !((${lamp.id})) again`, walk.id);
+  const share = sharing(publisher);
+
+  const markdown = await (await share("/share/p/moth-walk")).text();
+  const html = await (await share("/share/p/moth-walk?view=html")).text();
+  for (const body of [markdown, html]) {
+    for (const leak of ["gate code", "water butt", "mason bees", "Pollinator census", codes.id, census.id, "/p/census"]) expect(body).not.toContain(leak);
+    expect(body).toContain("the gate");
+    // A public note embeds and links as on the tailnet, under the public mount.
+    expect(body).toContain("Start at the lime avenue.");
+  }
+  // A row the page shows anyway may be embedded.
+  expect(markdown).toContain("> Lamp log: 12 elephant hawk-moths");
+  expect(markdown).toContain("*not shared*");
+  expect(html).toContain("<em>not shared</em>");
+  expect(markdown).toContain("[Route card](/share/p/route-card)");
+  expect(html).toContain("<title>Moth walk unpublished note</title>");
+  // On the tailnet the same page still shows embeds of any note, as before.
+  const tailnet = await (await get("/p/moth-walk")).text();
+  expect(tailnet).toContain("Allotment gate code 2291");
+  expect(tailnet).toContain("[Pollinator census](/p/census)");
+});
+
+test("a nested embed inside a public note's embed of another public note stays blank when it isn't public", async () => {
+  const { store, publisher } = await setup();
+  const secret = store.create("Hedgehog feeding spot under the shed");
+  const notes = store.create(`Field notes [publish::public:field-notes]\n!((${secret.id}))`);
+  store.create(`Moth walk [publish::public:moth-walk]\n!((${notes.id}))`);
+  const body = await (await sharing(publisher)("/share/p/moth-walk")).text();
+  expect(body).toContain("> Field notes");
+  expect(body).toContain("*not shared*");
+  expect(body).not.toContain("Hedgehog");
+});
+
+test("[publish::never] wins on the public listener: a locked public note is 404, and a locked embed says so", async () => {
+  const { store, publisher } = await setup();
+  const vault = store.create("Shed codes [publish::never]");
+  store.create("Bat box map [publish::public:bat-boxes]", vault.id);
+  store.create("Badger sett [publish::public:badger-sett] [publish::never]");
+  const walk = store.create(`Moth walk [publish::public:moth-walk]\n!((${vault.id}))`);
+  store.create("Spare key under the brick [publish::never]", walk.id);
+  const share = sharing(publisher);
+  expect((await share("/share/p/bat-boxes")).status).toBe(404);
+  expect((await share("/share/p/badger-sett")).status).toBe(404);
+  const body = await (await share("/share/p/moth-walk")).text();
+  expect(body).not.toContain("Shed codes");
+  expect(body).not.toContain("Spare key");
+  expect(body).toContain("*locked note*");
+});
+
+test("an attached html file is served on the public listener, sandboxed as on the tailnet", async () => {
+  const { store, publisher, write } = await setup();
+  write("site/walk.html", "<!doctype html><title>Walk</title><p>Glow-worm route</p>");
+  store.create("Walk handout [publish::public:walk-handout] [file::site/walk.html]");
+  const response = await sharing(publisher)("/share/p/walk-handout");
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");
+  const csp = response.headers.get("content-security-policy") ?? "";
+  expect(csp).toStartWith("sandbox ");
+  expect(csp).not.toContain("allow-same-origin");
+  expect(await response.text()).toContain("Glow-worm route");
+});
+
+test("the tailnet index and publish list show which notes are public and their public URL", async () => {
+  const { store, client } = await setup();
+  store.create("Moth walk route [publish::public:moth-walk]");
+  store.create("Pollinator census [publish::census]");
+  const publisher = new Publisher({ client, basePath: "/pub", publicUrl: "https://moth-box.tail0000.ts.net:8443/share" });
+  await publisher.start();
+  cleanups.push(() => publisher.stop());
+  const text = await (await publisher.handle(new Request("http://127.0.0.1/pub/index.txt"))).text();
+  expect(text).toContain("https://moth-box.tail0000.ts.net:8443/share/p/moth-walk");
+  expect(text).toMatch(/\/pub\/p\/census\s+-\s+Pollinator census/);
+  const json = JSON.parse(await (await publisher.handle(new Request("http://127.0.0.1/pub/index.json"))).text());
+  expect(json.entries.find((entry: { slug: string }) => entry.slug === "moth-walk").public).toBeDefined();
+  expect(json.entries.find((entry: { slug: string }) => entry.slug === "census").public).toBeUndefined();
+  expect(parsePublicUrl(undefined)).toEqual({ basePath: "/share" });
+  expect(parsePublicUrl("/open/")).toEqual({ basePath: "/open" });
+  expect(() => parsePublicUrl("ftp://x/y")).toThrow();
+});
+
+test("over real HTTP the public listener serves only public notes, and the tailnet listener is unchanged", async () => {
+  const { store, publisher } = await setup();
+  store.create("Moth walk route [publish::public:moth-walk]");
+  store.create("Pollinator census [publish::census]");
+  const tailnet = servePublisher(publisher, 0);
+  const open = servePublisher(publisher, 0, "public");
+  cleanups.push(() => { tailnet.stop(true); open.stop(true); });
+  expect(open.hostname).toBe("127.0.0.1");
+  const at = (server: typeof open, path: string) => fetch(`http://127.0.0.1:${server.port}${path}`);
+  expect((await at(open, "/share/p/moth-walk")).status).toBe(200);
+  expect((await at(open, "/share/p/census")).status).toBe(404);
+  expect((await at(open, "/share/index.json")).status).toBe(404);
+  for (const path of ["/share/p/%2e%2e/census", "/share/p/..%2fcensus", "/share/p/census%00", "/share/p/moth-walk/../census"]) {
+    const response = await at(open, path);
+    expect(await response.text()).not.toContain("Pollinator");
+  }
+  expect((await at(tailnet, "/p/census")).status).toBe(200);
+  expect((await at(tailnet, "/index.json")).status).toBe(200);
 });
