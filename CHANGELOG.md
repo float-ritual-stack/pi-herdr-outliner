@@ -34,6 +34,17 @@ This file records notable user-facing changes. The project remains active dogfoo
   failed compare becomes a proposal under the line. A reply shows under the
   line. Each request runs once; `r` asks again; a line an agent wrote waits for
   `r`. Example: `extensions/tidy` (`@tidy`, `@tidy all`).
+- PIE-510: every agent's `draft.patch` passes one guard that refuses writing or
+  rewording an `@name` line (not only an `@name` agent's own answer). Notes from
+  before agent requests keep their old `@name` lines old (a one-time baseline at
+  start). A request a restart cut off says so; one still waiting for quiet when
+  the service stops waits for `r`. Undoing the removal of an answered line brings
+  its answer back instead of asking again. `r` records who pressed it
+  (`requestedBy`: `user` or `agent:<id>`), an agent's `r` doesn't release a line
+  an agent wrote, and `r` on the note (Detail's) asks the requests not answered
+  yet. `drafts.touch { holdId }` lets a door say the person typed in a held
+  draft, so a request runs while they write, before any save. Note assistance
+  leaves lines addressed to an extension's agent alone.
 
 ### Extensions wave B: watched folders and the four kinds (PIE-507)
 

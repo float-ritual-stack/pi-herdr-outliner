@@ -55,6 +55,7 @@ import {
   type DraftProposal,
   type DraftProposalStatus,
 } from "./draft-patch";
+import { requestLines } from "./agent-requests";
 import { blockDisplayTitle } from "./references";
 import type { OutlinerStore } from "./store";
 import type { MutationProvenance } from "./types";
@@ -193,6 +194,13 @@ function normalizeMutation(mutation: MutationProvenance | undefined): MutationPr
   }
   if (mutation.author === "agent" && !mutation.actorId?.trim()) throw new Error("An agent's patch names its actorId");
   return mutation;
+}
+
+/** The first `@name …` line (any name) `after` has that `before` didn't, or null. */
+function addedRequestLine(before: string, after: string): string | null {
+  if (!after.includes("@")) return null;
+  const had = new Set(requestLines(before, null).map(line => line.requestKey));
+  return requestLines(after, null).find(line => !had.has(line.requestKey))?.text.trim() ?? null;
 }
 
 export class DraftPatchRouter {
@@ -566,6 +574,15 @@ export class DraftPatchRouter {
     if (!located.ok) return { ok: false, reason: located.reason };
     const after = applyLocated(text, located.spans);
     const total = proposalChanges({ edits });
+    // One guard for every agent's patch, whoever routes it (an @name agent's answer, an action, an agent's own
+    // draft.patch): it never writes or rewords an `@name` request line, so an agent can't set off an agent.
+    if (options.mutation.author === "agent") {
+      const written = addedRequestLine(text, after);
+      if (written !== null) {
+        const change = blame(edits, edit, text, next => addedRequestLine(text, next) !== null);
+        return { ok: false, refused: true, reason: blamed(`it would write a request line (${written}); agents can't ask agents`, change, total) };
+      }
+    }
     if (options.policy === "prose") {
       const reason = draftPatchTextPolicy(text, after);
       if (!reason) return null;

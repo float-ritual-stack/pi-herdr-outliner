@@ -214,8 +214,11 @@ source evidence or distinguish authored glyphs from controls.
   the compare itself (where the observed text is, what a position becomes). It
   imports nothing, because ep0ch-door runs it against its live draft from a
   byte-for-byte copy: bump `DRAFT_PATCH_COMPARE_VERSION` with any change (`ping`
-  reports it). `outliner patch-demo` (`src/draft-patch-demo.ts`) is a proof
-  agent for demos and tests, not the @-watcher.
+  reports it). `outliner patch-demo` (`src/draft-patch-demo.ts`) is a CLI demo
+  of the `prose` policy, not the `@tidy` agent (the tidy extension, whose line
+  rules, `extensions/tidy/tidy-line.ts`, it imports rather than copies). Every
+  agent's patch passes one request-line guard in the router: it never writes or
+  rewords an `@name` line (`requestLines` from `src/agent-requests.ts`).
 - `src/work-tools.ts` owns agent workboard operations (create, stage/set, PR delivery
   and delivery keys, completion with proof across all of an item's deliveries,
   delivery stage, note sections, item bodies) over the existing RPCs. The CLI

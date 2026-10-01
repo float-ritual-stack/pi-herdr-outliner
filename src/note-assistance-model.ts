@@ -20,6 +20,8 @@ export interface NoteModelContext {
   signal: AbortSignal;
   progress: (message: string) => void;
   reportUsage?: (usage: InboxUsage) => void;
+  /** The `@name`s extensions' agents answer: their lines are requests to them, never to note assistance. */
+  agentNames?: () => ReadonlySet<string>;
 }
 
 export type NoteModel = (context: NoteModelContext) => Promise<{ plan: NotePlan; usage: InboxUsage }>;
@@ -84,7 +86,7 @@ export function createNoteModel(options: InboxModelOptions = {}): NoteModel {
     const excerpt = content.slice(0, 12_000);
     const candidates = noteTagCandidates(excerpt, context.tags, context.candidate.rejectedTags);
     const seen = new Set(context.candidate.seenRequestPassages ?? []);
-    const eligiblePassages = requestPassages(excerpt).filter(text => context.candidate.explicitReconsideration || !seen.has(passageKey(text)));
+    const eligiblePassages = requestPassages(excerpt, context.agentNames?.()).filter(text => context.candidate.explicitReconsideration || !seen.has(passageKey(text)));
     const paragraphs = eligiblePassages.filter(text => text.length < 2000).slice(0, 16);
     const keys = [...new Set(["type", "tag", ...context.propertyKeys])].slice(0, 120);
     const mayRequest = context.candidate.requestAllowed && content.length <= 12_000 && paragraphs.length > 0;

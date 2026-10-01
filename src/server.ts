@@ -390,6 +390,7 @@ export class OutlinerServer {
       unlinkSync(this.socketPath);
     }
     this.store.changes.onBackgroundChanges = changes => this.publishChanges(undefined, changes);
+    this.agentRequests.start();
     const server = createServer((socket) => this.accept(socket));
     this.server = server;
     const started = Promise.withResolvers<void>();
@@ -442,6 +443,7 @@ export class OutlinerServer {
     if (!this.running) throw new Error("Start the service before its Inbox processor");
     this.inbox = new InboxWorker(this.store, model, result => this.inboxChanged(result), {
       repository: this.inboxRepository, notes: this.noteRepository, noteModel,
+      agentNames: () => this.extensionRegistry.agentNames(),
     });
     this.inbox.wake();
   }
@@ -1631,8 +1633,9 @@ export class OutlinerServer {
         if (handlerLines.length) {
           await this.extensionCalls.materialize(normalized.blockId, "refresh", normalized.line !== undefined ? { line: normalized.line } : {});
         }
-        // `r` on an `@name` line (or on the note) asks its agent again.
-        const asked = !dataRecord && !record && normalized.line !== undefined && await this.agentRequests.refresh(normalized.blockId, normalized.line);
+        // `r` on an `@name` line asks its agent again; on the note, the requests not answered yet. Who pressed it
+        // is who asked.
+        const asked = !dataRecord && !record && await this.agentRequests.refresh(normalized.blockId, normalized.line, declaredActor(request));
         const onlyHandlers = dataRecord || ((handlerLines.length > 0 || asked) && normalized.line !== undefined);
         // One line's ticket (a click on its age), the ticket block's own, or every ticket the block shows.
         const one = !onlyHandlers && normalized.line !== undefined && !record
@@ -2488,6 +2491,17 @@ export class OutlinerServer {
           this.stalledHolds.delete(request.holdId);
           result = { released: this.draftHolds.release(request.holdId) };
           break;
+        case "drafts.touch": {
+          // The person typed in the draft this hold keeps: a request line they wrote there runs once it is quiet.
+          // Answered at once; the draft is read from the door afterwards, never while the door waits on this.
+          const hold = this.draftHolds.list().find(candidate => candidate.holdId === request.holdId);
+          if (!hold) throw new Error("This draft hold has expired or was released; hold the draft again");
+          void this.askHolder(hold, { kind: "read" }).then(answer => {
+            if ("text" in answer && typeof answer.text === "string") this.agentRequests.touched(hold.blockId, answer.text);
+          }).catch(() => {});
+          result = { touched: true };
+          break;
+        }
         case "drafts.answer":
           result = this.answerHolder(request.requestId, request.clientId, request.answer, request.error);
           break;

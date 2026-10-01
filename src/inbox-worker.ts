@@ -72,6 +72,7 @@ export class InboxWorker {
   readonly repository: InboxRepository;
   readonly notes: NoteAssistanceRepository | undefined;
   private readonly noteModel: NoteModel | undefined;
+  private readonly agentNames: (() => ReadonlySet<string>) | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private running: Promise<void> | undefined;
   private active: AbortController | undefined;
@@ -86,8 +87,9 @@ export class InboxWorker {
     private readonly store: OutlinerStore,
     private readonly model: InboxModel,
     private readonly changed: (result?: InboxResult) => void,
-    options: { settleMs?: number; repository?: InboxRepository; notes?: NoteAssistanceRepository; noteModel?: NoteModel } = {},
+    options: { settleMs?: number; repository?: InboxRepository; notes?: NoteAssistanceRepository; noteModel?: NoteModel; agentNames?: () => ReadonlySet<string> } = {},
   ) {
+    this.agentNames = options.agentNames;
     this.repository = options.repository ?? new InboxRepository(store);
     this.noteModel = options.noteModel;
     this.notes = options.notes ?? (this.noteModel ? new NoteAssistanceRepository(store) : undefined);
@@ -227,6 +229,7 @@ export class InboxWorker {
         const noteCandidate = candidate ?? (this.noteModel ? this.notes!.candidateFor(source.id) : undefined);
         const inspectNote = () => this.noteModel!({
           candidate: noteCandidate!, read, search, progress, signal: abort.signal,
+          ...(this.agentNames ? { agentNames: this.agentNames } : {}),
           ...!candidate?{routeInbox:{hasChildren:this.store.children(source.id).length>0}}:{},
           reportUsage: usage => { reportedUsage = usage; },
           tags: this.store.propertyCatalog("tag", "", 100).map(item => item.value),

@@ -1843,6 +1843,28 @@ export class OutlinerStore {
     for (const row of rows) if (!keep.includes(row.request_key)) remove.run(blockId, row.request_key);
   }
 
+  /** Requests a restart cut off while they ran: failed, saying why. */
+  interruptAgentRequests(message: string, at: string): void {
+    this.database.query("UPDATE agent_requests SET status = 'failed', message = ?, answered_at = ? WHERE status = 'running'").run(message, at);
+  }
+
+  /**
+   * Once per outline: every block with an `@` and no baseline gets one (`keysOf` its text), so lines written
+   * before agent requests existed are old lines, not requests its next save adds.
+   */
+  seedAgentRequestBaselines(keysOf: (text: string) => string[]): void {
+    if (this.database.query("SELECT value FROM metadata WHERE key = 'agent_request_baseline_seeded'").get()) return;
+    this.database.transaction(() => {
+      const blocks = this.database.query(`SELECT id, text FROM blocks WHERE instr(text, '@') > 0
+        AND NOT EXISTS (SELECT 1 FROM agent_request_baseline WHERE agent_request_baseline.block_id = blocks.id)`).all() as Array<{ id: string; text: string }>;
+      for (const block of blocks) {
+        const keys = keysOf(block.text);
+        if (keys.length) this.setAgentRequestBaseline(block.id, keys);
+      }
+      this.database.query("INSERT INTO metadata (key, value) VALUES ('agent_request_baseline_seeded', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value").run();
+    })();
+  }
+
   // ── Extension outputs (src/extension-calls.ts) ──────────────────────────
   // What an output or component handler line last returned, kept per block
   // and call (handler, argument, fetch options), so a reader shows it at once

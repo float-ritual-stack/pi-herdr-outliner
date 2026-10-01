@@ -502,10 +502,10 @@ let directResult: unknown;
 
 switch (command) {
   case "patch-demo": {
-    // A proof agent for draft.patch (PIE-501), not the @-watcher: tidy the paragraph above a mark line.
+    // A CLI demo of draft.patch's prose policy (PIE-501), not the @tidy agent (extensions/tidy): tidy the paragraph above a mark line.
     const { values } = parseArgs({
       args: rest,
-      options: { block: { type: "string" }, "tidy-above": { type: "string" }, actor: { type: "string", default: "tidy" }, session: { type: "string" } },
+      options: { block: { type: "string" }, "tidy-above": { type: "string" }, actor: { type: "string", default: "patch-demo" }, session: { type: "string" } },
       strict: true,
     });
     if (!values.block || !values["tidy-above"]) throw new Error("patch-demo requires --block <id> and --tidy-above <mark line>");

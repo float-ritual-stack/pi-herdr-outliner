@@ -1,37 +1,16 @@
 /**
- * A tiny proof agent for `draft.patch` (PIE-501), for demos and tests only: it
- * is not the @-watcher. `outliner patch-demo --block <id> --tidy-above <mark>`
- * reads the note as its live draft has it (`drafts.read`), tidies the paragraph
- * just above the mark line (whitespace and Markdown markers, never inside a
- * link, reference or property token), and proposes that as one span.
+ * A CLI demo of `draft.patch` with the `prose` policy (PIE-501), for demos and
+ * tests only. It is not the `@tidy` agent: that is the tidy extension
+ * (`extensions/tidy`), which the service runs on a person's `@tidy` line and
+ * whose patches go through the `edit` policy. `outliner patch-demo --block <id>
+ * --tidy-above <mark>` reads the note as its live draft has it (`drafts.read`),
+ * tidies the paragraph just above the mark line with the extension's own line
+ * rules (`tidyLine`), and sends that as one span, as actor `patch-demo`.
  */
+import { tidyLine } from "../extensions/tidy/tidy-line";
 import { spanContext, type DraftPatchSpan } from "./draft-patch-compare";
 
-/** Links, references, anchors and property tokens: tidying never goes inside one. */
-const PROTECTED = /\[\[[^\]\r\n]*\]\]|!?\(\([^)\r\n]*\)\)|\[[A-Za-z][A-Za-z0-9_.-]*::[^\]\r\n]*\]|(?<=\s)\^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$|`[^`\r\n]*`/g;
-
-function tidyGap(text: string): string {
-  return text
-    .replace(/\*\*\s+([^*\n]*?)\s+\*\*/g, "**$1**")
-    .replace(/ {2,}/g, " ");
-}
-
-/** One line tidied: bullets as `-`, a heading's space after `#`, runs of spaces, trailing space. */
-export function tidyLine(line: string): string {
-  let out = line.replace(/\s+$/, "");
-  out = out.replace(/^(\s*)[*+](\s+)/, "$1-$2").replace(/^(\s*)([-]|\d{1,9}[.)])\s{2,}/, "$1$2 ");
-  out = out.replace(/^(#{1,6})(?=[^#\s])/, "$1 ");
-  const lead = /^\s*(?:(?:[-*+]|\d{1,9}[.)])\s+)?/.exec(out)![0];
-  let body = "";
-  let cursor = lead.length;
-  for (const match of out.slice(lead.length).matchAll(PROTECTED)) {
-    const at = lead.length + match.index!;
-    body += tidyGap(out.slice(cursor, at)) + match[0];
-    cursor = at + match[0].length;
-  }
-  body += tidyGap(out.slice(cursor));
-  return lead + body;
-}
+export { tidyLine };
 
 /**
  * The paragraph above the mark line (the nearest run of non-blank lines above

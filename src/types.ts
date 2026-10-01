@@ -1701,6 +1701,8 @@ export const OUTLINER_CAPABILITIES = [
   "drafts.hold",
   /** `drafts.read`: a note's text as its live draft has it, or as saved. */
   "drafts.read",
+  /** `drafts.touch`: the person typed in a held draft; an `@name` request line they wrote there runs once quiet, before any save (PIE-510). */
+  "drafts.touch",
   /** `draft.patch`: compare-and-swap on spans of text, routed to a live draft or the saved note; a failure lands as an embedded proposal. */
   "draft.patch",
   /** `draft.proposal.apply`: apply a proposal's patch anyway, as an ordinary edit. */
@@ -1943,6 +1945,8 @@ export type OutlinerRequestAction =
       /** A block with provider lines (or a ticket page), or an extension record block. */
       blockId: string;
       line?: number;
+      /** Who pressed `r`: recorded as who asked an `@name` agent (a person when absent). An agent's `r` doesn't release a line an agent wrote. */
+      mutation?: MutationProvenance;
     }
   | { id: string; action: "get"; blockId: string }
   | { id: string; action: "children"; parentId: string | null }
@@ -2301,6 +2305,11 @@ export type OutlinerRequestAction =
   | { id: string; action: "drafts.hold"; blockId: string; clientId: string; revision: number; leaseMs?: number }
   | { id: string; action: "drafts.heartbeat"; holdId: string; revision?: number }
   | { id: string; action: "drafts.release"; holdId: string }
+  /**
+   * The person typed in the draft a hold keeps (capability `drafts.touch`): the service reads the draft from the
+   * holding door and runs a request line written there once it is quiet. Answers `{ touched: true }` at once.
+   */
+  | { id: string; action: "drafts.touch"; holdId: string }
   /** The holding door's answer to a `draft` event; never queued behind the request waiting for it. */
   | { id: string; action: "drafts.answer"; requestId: string; clientId: string; answer?: DraftHolderAnswer; error?: string }
   /** A note's text as its live draft has it now, or as saved when no door holds one (capability `drafts.read`). */

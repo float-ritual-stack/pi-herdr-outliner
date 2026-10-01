@@ -471,7 +471,8 @@ actions yet; `r` is its path today.
 
 Not a fifth kind: an extension can also declare **agents** a person addresses from inside their own
 writing (PIE-501). Evan writes `@tidy can you fix the formatting above` and keeps typing; the result
-lands in the note while he goes on.
+lands in the note while he goes on. That needs a door that says when he types in the draft it holds
+(`drafts.touch`); with any other client the request runs once the line is saved.
 
 ```json
 "agents": [{ "name": "tidy", "description": "Tidies the paragraph above", "effects": "read", "deadline": "30s" }]
@@ -482,11 +483,23 @@ lands in the note while he goes on.
   name.
 - **When it runs.** A request line that a person's save adds runs once the note has been quiet
   for a moment (1.5 s; every save restarts the wait), so a pause mid-sentence rarely sends half a
-  request. It runs once: rewording the line is a new request, and `r` on the line asks again
-  (`r` on the note doesn't ask agents). Lines that were already there wait for `r`: the service
-  keeps, per note, the `@name` lines it last saw (any name, across restarts), so installing an
-  extension doesn't wake old lines. A line an agent or an import wrote waits for `r` too, so agents
-  can't set each other off, and an agent's own patch may not write or reword a request line.
+  request. A door holding the note's live draft calls `drafts.touch { holdId }` after the person
+  types (capability `drafts.touch`); the service reads that draft from the door, and a request line
+  the person wrote there runs the same way once the draft is quiet, before any save. It runs once:
+  rewording the line is a new request, removing an answered line and putting it back (an undo, within
+  ten minutes) brings its answer back rather than asking again, and `r` on the line asks again. `r`
+  on the note asks the requests in it not answered yet (not asked, waiting, failed). Lines that were
+  already there wait for `r`: the service keeps, per note, the `@name` lines it last saw (any name,
+  across restarts; notes from before this feature get theirs once, at start), so installing an
+  extension doesn't wake old lines. A line an agent or an import wrote waits for a person's `r`, so
+  agents can't set each other off: an agent's `r` on it is refused. No agent's `draft.patch` may
+  write or reword a request line: one guard in `draft.patch` refuses it for every agent, with the
+  reason. A request a restart cut off says so and `r` asks again; one still waiting for quiet when
+  the service stops waits for `r`.
+- **Who asked.** `r` takes the presser's `mutation` (`{ author: user }` or `{ author: agent,
+  actorId }`; a person when absent) and records it as `requestedBy` (`user`, `agent:<id>`).
+- **Note assistance** leaves a line addressed to an extension's agent alone: it is that agent's
+  request, not one for the assistant.
 - **`respond`** gets the note as the person sees it (their live draft when a door holds one), the
   request (the words after the name) and the mark (the request line), plus bounded context. It
   answers any of:
