@@ -338,6 +338,25 @@ test("notes from before agent requests keep their @name lines old; restarts say 
   expect(calls()).toEqual(["run please"]);
 });
 
+test("an outline a host opens gets the same start: old @name lines baselined, cut-off requests failed (B5, B17 hosted)", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "outliner-agents-hosted-")));
+  const store = new OutlinerStore(join(root, "outliner.sqlite"), { workspaceRoot: join(root, "outline") });
+  const old = store.create("Old note\n@tidy from long ago");
+  const crashed = store.create("Crashed\n@tidy halfway");
+  store.database.query("DELETE FROM agent_request_baseline").run();
+  store.putAgentRequest({ blockId: crashed.id, requestKey: requestLines(crashed.text, null)[0]!.requestKey, agent: "tidy", extensionId: "tidy",
+    request: "halfway", status: "running", requestedBy: "user", requestedAt: new Date().toISOString() });
+  const server = new OutlinerServer(store, join(root, "unused.sock"), undefined, undefined, { extensionPollMs: 0 });
+  server.startHosted();
+  cleanups.push(async () => {
+    await server.close();
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+  expect(store.agentRequestBaseline(old.id)).toEqual(requestLines(old.text, null).map((line) => line.requestKey));
+  expect(store.agentRequests(crashed.id)[0]).toMatchObject({ status: "failed", message: "interrupted by a restart: r asks again" });
+});
+
 test("taking an answered line out and putting it back (undo) doesn't ask again (B18)", async () => {
   const { store, client, create, agentOf, counted } = await setup();
   const calls = await counted("count");
@@ -364,6 +383,11 @@ test("r says who asked, an agent's r doesn't release a line an agent wrote, and 
   await agentOf(theirs.id, (p) => p.agent?.status === "waiting");
   await expect(client.request({ action: "resources.projection.refresh", blockId: theirs.id, line: 1, mutation: { author: "agent", actorId: "loki" } }))
     .rejects.toThrow("@count on this line was written by an agent or an import: it waits for a person's r");
+  // Who asks is checked as extensions.act checks it: an agent names itself, and no other author passes as a person.
+  await expect(client.request({ action: "resources.projection.refresh", blockId: theirs.id, line: 1, mutation: { author: "agent" } }))
+    .rejects.toThrow("resources.projection.refresh's mutation names who asks");
+  await expect(client.request({ action: "resources.projection.refresh", blockId: theirs.id, mutation: { author: "someone" } } as never))
+    .rejects.toThrow("resources.projection.refresh's mutation names who asks");
   // Not on the note either: the agent's note-level r passes it by.
   await client.request({ action: "resources.projection.refresh", blockId: theirs.id, mutation: { author: "agent", actorId: "loki" } });
   expect(calls()).toEqual([]);
