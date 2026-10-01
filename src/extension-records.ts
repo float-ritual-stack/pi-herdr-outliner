@@ -74,10 +74,11 @@ export function isExtensionActor(actorId: string | undefined | null): boolean {
  * sequences (CSI, OSC, DCS and the rest, 7-bit and C1 alike) and other control
  * characters go, through the one stripper readers use (`terminal.ts`). Tabs
  * stay, and so do line breaks when `lines` (markdown, a body); a label or a
- * message is one line.
+ * message is one line, its line breaks read as spaces so words stay apart.
  */
 export function cleanExtensionText(text: string, lines = false): string {
-  const source = text.replace(/\r\n?/g, "\n");
+  const normalized = text.replace(/\r\n?/g, "\n");
+  const source = lines ? normalized : normalized.replaceAll("\n", " ");
   return sanitizedTextParts(source, lines)
     .map((part) => (part.end - part.start === 1 && source[part.start] === "\t" ? "\t" : part.text))
     .join("");

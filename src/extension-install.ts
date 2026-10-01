@@ -309,7 +309,8 @@ export async function runExtCommand(args: readonly string[], connect: () => Prom
     console.log(USAGE);
     return operation === undefined || operation === "help" ? 0 : 1;
   } catch (error) {
-    console.error(cleanExtensionText(`error: ${error instanceof Error ? error.message : String(error)}`));
+    // Line breaks stay (the usage is several lines); escapes go.
+    console.error(cleanExtensionText(`error: ${error instanceof Error ? error.message : String(error)}`, true));
     return 1;
   }
 }

@@ -3,6 +3,7 @@
 // inert, a disabled extension's late answer is dropped, and what an extension says reaches no terminal raw.
 // Scratch services in temp folders; every note, name and secret is made up.
 import { afterEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -43,6 +44,7 @@ if (operation === "run") say({ markdown: "moon is up ${"\\x1b"}[2J${"\\x1b"}]52;
 else if (operation === "respond") say({ reply: "noted ${"\\x1b"}[2J" });
 else if (input.action === "rewrite") say({ message: "rewrote ${"\\x1b"}]0;title${"\\x07"}it", writes: [{ op: "update", blockId: input.target.blockId, expectedRevision: input.target.revision, text: input.args.text }] });
 else if (input.action === "child") say({ writes: [{ op: "create", parentId: input.target.blockId, text: input.args.text }] });
+else if (input.action === "both") say({ message: "did both", writes: [{ op: "update", blockId: input.target.blockId, expectedRevision: input.target.revision, text: input.args.text }, { op: "create", parentId: input.target.blockId, text: "a note on it" }] });
 else if (input.action === "slow") { await Bun.sleep(900); say({ writes: [{ op: "create", parentId: input.target.blockId, text: "late answer" }] }); }
 else say({});`;
 
@@ -76,7 +78,7 @@ async function setup() {
     return client.request<ExtensionsListResult>({ action: "extensions.list", reload: true });
   };
   const scribe = () => install("scribe", {
-    actions: ["rewrite", "child", "slow"].map((id) => ({ id, label: id, effects: "write" })),
+    actions: ["rewrite", "child", "both", "slow"].map((id) => ({ id, label: id, effects: "write" })),
     handlers: [{ key: "moon", kind: "output", effects: "read" }],
     agents: [{ name: "scribe" }],
   });
@@ -247,6 +249,60 @@ test("an action's update reaches a door's live draft, not the saved note under t
   expect(store.get(note.id)!.text).toBe("Errands\nbuy bread\nmore later");
 });
 
+test("an action whose update becomes a proposal writes none of its creates, and says so", async () => {
+  const { store, client, scribe, act } = await setup();
+  await scribe();
+  const note = await client.request<Block>({ action: "create", text: "Errands\nbuy bread\nmore later", author: "user" });
+  // A stand-in door whose person is typing in that passage: it refuses every patch.
+  const connected = Promise.withResolvers<void>();
+  const watcher = client.watch({
+    client: { clientId: "door-busy", role: "observer", contextId: "door-busy" }, onConnect: connected.resolve,
+    onEvent: async (event: OutlinerEvent) => {
+      const ask = event.domain === "draft" ? event.draft : undefined;
+      if (!ask) return;
+      const answer = ask.kind === "read" ? { text: "Errands\nbuy bread\nmore later", revision: note.revision } : { applied: false, reason: "the person is typing there" };
+      await client.request({ action: "drafts.answer", requestId: ask.requestId, clientId: "door-busy", answer: answer as never }).catch(() => undefined);
+    },
+  });
+  cleanups.push(() => watcher.stop());
+  await connected.promise;
+  await client.request({ action: "drafts.hold", blockId: note.id, clientId: "door-busy", revision: note.revision });
+  const done = await act("both", note.id, { text: "Errands\nbuy rye bread\nmore later" });
+  expect(done.written).toEqual([]);
+  expect(done.proposalId).toBeString();
+  expect(done.message).toStartWith("proposed instead: ");
+  expect(done.message).toEndWith("its new block wasn't written");
+  expect(store.get(note.id)!.text).toBe("Errands\nbuy bread\nmore later");
+  // The only new block under the note is the proposal itself: the action's own child wasn't made.
+  const children = store.children(note.id).filter((child) => child.id !== done.proposalId);
+  expect(children.map((child) => child.text)).not.toContain("a note on it");
+});
+
+test("an outline from before requestedBy gets the column once, and records who asked", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "outliner-requested-by-")));
+  cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+  const path = join(root, "outliner.sqlite");
+  new OutlinerStore(path, { workspaceRoot: root }).close();
+  // The feed table as an older build left it.
+  const old = new Database(path);
+  old.exec("ALTER TABLE change_feed DROP COLUMN requested_by");
+  old.close();
+  for (let opening = 0; opening < 2; opening++) {
+    const store = new OutlinerStore(path, { workspaceRoot: root });
+    try {
+      const columns = (store.database.query("PRAGMA table_info(change_feed)").all() as Array<{ name: string }>).map((column) => column.name);
+      expect(columns.filter((name) => name === "requested_by")).toHaveLength(1);
+      const attribution = store.changes.attribution({ action: "ext.scribe.child", actor: { author: "agent", actorId: "ext:scribe" }, requestedBy: LOKI });
+      const made = store.changes.run(attribution, () => store.create(`made ${opening}`, null, "agent", { actorId: "ext:scribe" }));
+      const page = store.changes.since(0, 1000);
+      const change = page.kind === "changes" ? page.changes.find((candidate) => candidate.blockId === made.id) : undefined;
+      expect(change).toMatchObject({ actor: { actorId: "ext:scribe" }, requestedBy: LOKI });
+    } finally {
+      store.close();
+    }
+  }
+});
+
 test("a created block's text is inert BlockDown with no terminal escapes", async () => {
   const { store, client, scribe, act } = await setup();
   await scribe();
@@ -345,7 +401,7 @@ test("what an extension says is kept and shown without terminal escapes: outputs
 });
 
 test("the one cleaner: escapes and C1 controls go, tabs stay, line breaks only when asked; inert BlockDown drops them too", () => {
-  expect(cleanExtensionText(`a\tb${ESC}c\nd`)).toBe("a\tbcd");
+  expect(cleanExtensionText(`a\tb${ESC}c\nd`)).toBe("a\tbc d");
   expect(cleanExtensionText(`a\tb${ESC}c\r\nd`, true)).toBe("a\tbc\nd");
   expect(cleanExtensionText("x\u0085y\u009b31mz")).toBe("xyz");
   expect(inertBlockdown(`body ${ESC}\njira:: KEY-1`)).toBe("body \njira:‍: KEY-1");

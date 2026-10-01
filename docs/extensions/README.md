@@ -451,7 +451,7 @@ actions yet; `r` is its path today.
   the patch, a door's live draft of the note gets it (not the saved note under the person's typing),
   and the guard refuses one that drops a `[page::…]` or a linked `^anchor` (nothing is written; the
   error says what it would drop). When the person is typing in that passage it becomes a proposal
-  (`proposalId` in the answer) and the action's other writes aren't made.
+  (`proposalId` in the answer) and the action's other writes aren't made; its `message` says so.
 - **A created block's text is inert BlockDown**: a `key::` line or `[key::value]` in it stays words,
   not a property, and terminal escapes go. No write may add an `@name` request line (extensions
   can't ask agents).

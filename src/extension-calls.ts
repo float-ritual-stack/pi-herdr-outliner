@@ -717,7 +717,9 @@ export class ExtensionCalls {
       if (!this.options.patch) throw new Error(`${action.name}'s update can't be checked here (no draft.patch); nothing was written`);
       const outcome = await this.store.changes.run(attribution, () => this.options.patch!({ edits, mutation: actor, policy: "edit" }));
       if (outcome.outcome !== "applied") {
-        return { written: [], proposalId: outcome.proposalId, proposed: `proposed instead: ${outcome.reason}` };
+        // Said plainly: the caller sees the proposal, and that the blocks it would have made weren't.
+        const unwritten = creates.length ? `; its ${creates.length === 1 ? "new block wasn't" : `${creates.length} new blocks weren't`} written` : "";
+        return { written: [], proposalId: outcome.proposalId, proposed: `proposed instead: ${outcome.reason}${unwritten}` };
       }
       written.push(...outcome.edits.map((edit) => edit.blockId));
     }
