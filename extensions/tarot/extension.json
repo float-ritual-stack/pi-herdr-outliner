@@ -1,0 +1,25 @@
+{
+  "contract": 2,
+  "id": "tarot",
+  "version": 1,
+  "name": "Tarot",
+  "description": "A whole tile: a card of the day you can draw again and keep in the outline.",
+  "run": ["bun", "tarot.ts"],
+  "actions": [
+    { "id": "draw", "label": "Draw a card", "on": "tile:reading", "key": "d", "effects": "read",
+      "description": "Draws a card (the same card for the same seed)" },
+    { "id": "keep", "label": "Keep the reading", "on": "block", "key": "k", "effects": "write",
+      "description": "Writes the reading under the block, attributed to ext:tarot" }
+  ],
+  "tiles": [
+    {
+      "kind": "reading",
+      "name": "Tarot",
+      "description": "Today's card; d draws again, k keeps it under the tile's block, q closes",
+      "run": ["bun", "tile.ts"],
+      "actions": ["draw", "keep"],
+      "policy": { "resizable": true, "collapsible": true, "droppable": false },
+      "args": { "block": { "type": "block", "description": "Where k keeps a reading" } }
+    }
+  ]
+}

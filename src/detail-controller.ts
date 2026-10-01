@@ -677,6 +677,8 @@ export interface DetailEffects {
   internFilesystem(path: string): Promise<InternResourceReceipt>;
   lookupFilesystem(path: string): Promise<InternResourceReceipt["resource"] | null>;
   refreshResource(resourceId: string): Promise<ResourceDescription>;
+  /** `r` on a note: fetch its tickets and run its extension lines again (`resources.projection.refresh`). */
+  refreshProjections?(blockId: string): Promise<void>;
   openExternal(url: string): void | Promise<void>;
   getAnnotation(annotationId: string): Promise<AnnotationRecord>;
   listAnnotations(query: AnnotationListQuery): Promise<AnnotationThread[]>;
@@ -3231,6 +3233,19 @@ export function createDetailController(
         ) {
           await loadCurrentTarget(true);
           state.status = "Filesystem Resource reopened from disk";
+          break;
+        }
+        if (!description && state.target?.kind === "block" && (state.resourceProjections ?? []).length && effects.refreshProjections) {
+          state.busy = true;
+          try {
+            await effects.refreshProjections(state.target.blockId);
+            await loadCurrentTarget(true);
+            state.status = "Refreshed this note's tickets and extension lines";
+          } catch (error) {
+            state.status = `Refresh failed · ${error instanceof Error ? error.message : String(error)}`;
+          } finally {
+            state.busy = false;
+          }
           break;
         }
         if (

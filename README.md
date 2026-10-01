@@ -2632,6 +2632,7 @@ Existing threads and an agent reply are seeded through public APIs.
 ## Project documents
 
 - [Architecture](docs/ARCHITECTURE.md)
+- [Extensions: the four kinds](docs/extensions/README.md) (data, inline output, rich component, a whole tile)
 - [Contributing and delivery workflow](CONTRIBUTING.md)
 - [Proposed safety and Herdr/Pi implementation plan](docs/IMPLEMENTATION_PLAN.md)
 - [OpenCode port requirements](docs/OPENCODE_PORT.md)
@@ -2821,12 +2822,16 @@ marker remains when you manually collapse a matching path. Manual open/collapse
 wins over later attention changes; resolving a comment cannot close a path you
 explicitly opened. **Reset view expansion** discards those choices and reevaluates.
 
-### Installed Resource extensions
+### Extensions
 
-Jira requests use an installed process on the service host. Installation, code updates,
-and enable/disable changes do not require rebuilding the Outliner. See
-[the process contract and configuration guide](docs/extensions/resource-process.md).
-The initial binding is read-only Jira; other Resource providers retain their existing paths.
+An extension is a folder in `<outline root>/extensions/` or `~/.config/pi-herdr-outliner/extensions/`.
+The service watches both and loads a folder as soon as it appears, with no restart; deleting it
+removes everything it added. There are four kinds: **data** put into a block as if copied in
+(`moon:: 2026-10-26`, `jira:: PC-12`), **inline output** shown under a line (`horoscope:: virgo`), a
+**rich component** composed from shared primitives with its own actions (`fancy-horror:: virgo`), and
+a **whole tile** for the door (`tarot.reading`). `outliner ext ls|add|remove|act` manages them. See
+[Extensions: the four kinds](docs/extensions/README.md); Jira's Resource process contract is in
+[resource-process.md](docs/extensions/resource-process.md).
 
 
 ### Temporary branch filtering

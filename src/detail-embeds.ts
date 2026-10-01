@@ -15,6 +15,7 @@ import {
 import { checkServiceCompatibility } from "./service-compatibility";
 import { outlinerLinkUri } from "./outliner-links";
 import { mayHaveResourceProjections } from "./resource-references";
+import { mayHaveHandlerLines } from "./extension-handlers";
 import type { ResourceProjection, ResourceProjectionReadResult } from "./resource-projection";
 import type {
   Block,
@@ -486,6 +487,7 @@ const STATUS_LABELS: Readonly<Record<string, string>> = {
   "not-fetched": "not fetched yet",
   "not-registered": "not registered",
   "no-key": "no key found",
+  "not-run": "not run yet",
   unavailable: "unavailable",
 };
 
@@ -509,7 +511,14 @@ export function resourceProjectionLayout(projection: ResourceProjection): Resour
   const reason = projection.reason ? generatedInline(projection.reason) : "";
   const lines: string[] = [];
   let fetchedLine: number | undefined;
-  if ((projection.status === "ready" || projection.status === "stale") && projection.summary !== undefined) {
+  if ((projection.status === "ready" || projection.status === "stale") && projection.output) {
+    // An extension's output or component (PIE-507): its markdown under the line, with when it ran.
+    lines.push(`- ${title} · ran ${localTime(projection.output.ranAt)}${projection.fetching ? " · running" : ""}`);
+    fetchedLine = 0;
+    for (const line of projection.output.markdown.split("\n")) lines.push(line.trim() ? `  ${line}` : "");
+    while (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+    if (projection.status === "stale" && reason) lines.push(`  ${reason}`);
+  } else if ((projection.status === "ready" || projection.status === "stale") && projection.summary !== undefined) {
     const fetched = projection.fetchedAt ? `fetched ${localTime(projection.fetchedAt)}` : "";
     lines.push(`- ${title} · ${generatedInline(projection.summary)}${projection.options.compact && fetched ? ` · ${fetched}` : ""}`);
     if (projection.options.compact && fetched) fetchedLine = 0;
@@ -549,10 +558,12 @@ async function readDetailResourceProjections(
   blockId: string,
   revision: number | undefined,
 ): Promise<readonly ResourceProjection[] | null> {
-  if (!mayHaveResourceProjections(text)) return null;
+  if (!mayHaveResourceProjections(text) && !mayHaveHandlerLines(text)) return null;
   try {
     if (await serviceIncompatibility(requester, "resources.projection")) return null;
-    const read = await requester.request<ResourceProjectionReadResult>({ action: "resources.projection.read", blockId });
+    // `materialize`: a stale ticket or extension line is fetched or run in the background on open (an older
+    // service ignores the field and answers the same).
+    const read = await requester.request<ResourceProjectionReadResult>({ action: "resources.projection.read", blockId, materialize: true });
     // A newer revision arrives with its own change event and read.
     if (revision !== undefined && read.revision !== revision) return null;
     return read.projections;

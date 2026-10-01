@@ -104,6 +104,16 @@ function body(text: string): string {
   return inertLines(escapeTokens(text.replace(/\r\n?/g, "\n"))).trim();
 }
 
+/**
+ * Text an extension wrote, made safe to put in a block: a `[key::value]` in it
+ * stays text and a `key::` line start keeps its words without the meaning
+ * (BlockDown with no properties of its own). Outputs kept as blocks and the
+ * `blockdown` render target use it.
+ */
+export function inertBlockdown(text: string): string {
+  return body(text);
+}
+
 function propertyLine(namespace: string, fields: readonly ExtensionRecordField[]): string {
   const tokens: string[] = [];
   for (const field of fields) {

@@ -1,0 +1,33 @@
+{
+  "contract": 2,
+  "id": "fancy-horror",
+  "version": 1,
+  "name": "Fancy Horror",
+  "description": "Rich component: a sign's weekly dread, drawn from the shared primitives, with omens you ward off.",
+  "run": ["bun", "fancy-horror.ts"],
+  "handlers": [
+    {
+      "key": "fancy-horror",
+      "kind": "component",
+      "effects": "read",
+      "description": "This week's dread for a sign, with the omens to ward off",
+      "argument": {
+        "name": "sign",
+        "required": true,
+        "pattern": "^(aries|taurus|gemini|cancer|leo|virgo|libra|scorpio|sagittarius|capricorn|aquarius|pisces)$",
+        "description": "a zodiac sign, in lowercase"
+      },
+      "staleAfter": "1h"
+    }
+  ],
+  "actions": [
+    {
+      "id": "ward",
+      "label": "Ward off the next omen",
+      "description": "Writes a warding under the block; the component counts it as warded",
+      "on": "handler:fancy-horror",
+      "key": "w",
+      "effects": "write"
+    }
+  ]
+}

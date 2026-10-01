@@ -6,24 +6,17 @@ import { Type, IsSchema } from "typebox";
 import { Parse } from "typebox/value";
 import { Compile } from "typebox/compile";
 import { ResourceCatalogError } from "./resources";
+import {
+  CredentialSchema,
+  ExtensionLoadError,
+  MAX_DEADLINE_MS,
+  readExtensionFolder,
+  type ExtensionHandler,
+  type ExtensionOrigin,
+  type LoadedExtension,
+} from "./extension-manifest";
 
-const Credential = Type.Union([
-  Type.Object(
-    { env: Type.String({ pattern: "^[A-Za-z_][A-Za-z0-9_]*$" }) },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      keychainService: Type.String({ minLength: 1, maxLength: 200 }),
-      account: Type.Optional(Type.String({ maxLength: 200 })),
-    },
-    { additionalProperties: false },
-  ),
-]);
-const FileCredential = Type.Object(
-  { file: Type.String({ minLength: 1, maxLength: 4096 }) },
-  { additionalProperties: false },
-);
+const Credential = CredentialSchema;
 const Installation = Type.Object(
   {
     manifest: Type.String({ minLength: 1 }),
@@ -40,52 +33,7 @@ const Registry = Type.Object(
   },
   { additionalProperties: false },
 );
-/**
- * Contract 2 (wave A of the extension design): a folder with `extension.json`
- * and a `config.json` beside it. The process wire is contract 1's, with the
- * operations the manifest's handlers need. Wave B adds folder discovery with a
- * watcher, outline folders, renderers, actions and tiles; until then the
- * fields it will read are allowed and ignored.
- */
-const Handler = Type.Object(
-  {
-    key: Type.String({ pattern: "^[a-z][a-z0-9-]{0,31}$" }),
-    kind: Type.Literal("resource"),
-    effects: Type.Union([Type.Literal("read"), Type.Literal("spend"), Type.Literal("write")]),
-    keyPattern: Type.Optional(Type.String({ maxLength: 200 })),
-    staleAfter: Type.Optional(Type.String({ pattern: "^[1-9][0-9]{0,3}m$" })),
-    pollEvery: Type.Optional(Type.String({ pattern: "^[1-9][0-9]{0,3}m$" })),
-    record: Type.Optional(Type.Boolean()),
-  },
-  { additionalProperties: true },
-);
-const ManifestV2 = Type.Object(
-  {
-    contract: Type.Literal(2),
-    id: Type.String({ pattern: "^[a-z][a-z0-9-]{0,31}$" }),
-    version: Type.Integer({ minimum: 1 }),
-    name: Type.String({ minLength: 1, maxLength: 60 }),
-    run: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 20 }),
-    configSchema: Type.Optional(Type.Unknown()),
-    secrets: Type.Optional(Type.Record(Type.String({ pattern: "^[a-z][a-zA-Z0-9]{0,31}$" }), Type.String({ maxLength: 200 }), { maxProperties: 16 })),
-    handlers: Type.Array(Handler, { minItems: 1, maxItems: 16 }),
-  },
-  { additionalProperties: true },
-);
-const FolderConfig = Type.Object(
-  {
-    config: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-    secrets: Type.Optional(Type.Record(Type.String(), Type.Union([Credential, FileCredential]), { maxProperties: 16 })),
-    sources: Type.Optional(Type.Array(
-      Type.Object({ origin: Type.String({ minLength: 1, maxLength: 2048 }), project: Type.String({ pattern: "^[A-Z][A-Z0-9_]*$" }) },
-        { additionalProperties: false }),
-      { maxItems: 32 },
-    )),
-    enabled: Type.Optional(Type.Boolean()),
-  },
-  { additionalProperties: false },
-);
-export type ExtensionHandler = import("typebox").Static<typeof Handler>;
+export type { ExtensionHandler };
 export interface ExtensionSourceConfig { readonly origin: string; readonly project: string }
 /** What the service knows of an installed extension without running it. */
 export interface ExtensionDescription {
@@ -96,6 +44,8 @@ export interface ExtensionDescription {
   readonly directory: string;
   readonly handlers: readonly ExtensionHandler[];
   readonly sources: readonly ExtensionSourceConfig[];
+  /** Which folder it came from (contract 2). */
+  readonly origin?: ExtensionOrigin;
 }
 const Manifest = Type.Object(
   {
@@ -131,6 +81,14 @@ const ERROR_MESSAGES: Record<string, string> = {
 export function userExtensionsDirectory(): string {
   return process.env.OUTLINER_EXTENSIONS_DIR ??
     join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "pi-herdr-outliner", "extensions");
+}
+/**
+ * Whether this process reads the user folder. A service pointed at another
+ * legacy registry (a scratch or test service) reads it only when pointed at
+ * a folder too, so it never picks up the owner's real extensions and secrets.
+ */
+export function userExtensionsFolderInUse(): boolean {
+  return !(process.env.OUTLINER_RESOURCE_EXTENSIONS !== undefined && process.env.OUTLINER_EXTENSIONS_DIR === undefined);
 }
 function label(provider: string): string {
   return provider.charAt(0).toUpperCase() + provider.slice(1);
@@ -266,49 +224,45 @@ export class ResourceExtensionRuntime {
     readonly timeoutMs = 15_000,
     folders?: readonly string[],
   ) {
-    // A service pointed at another registry (a scratch or test service) reads the user folder only when
-    // it is pointed at one too, so it never picks up the owner's real extension and its secrets.
-    const isolated = process.env.OUTLINER_RESOURCE_EXTENSIONS !== undefined && process.env.OUTLINER_EXTENSIONS_DIR === undefined;
+    const isolated = !userExtensionsFolderInUse();
     this.folders = folders ?? ((configPath === undefined || configPath === defaultRegistryPath()) && !isolated ? [userExtensionsDirectory()] : []);
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000)
       throw failure("deadline must be 1..60000 milliseconds");
   }
-  /** Where contract 2 folders are looked up, nearest first. Empty: only the legacy registry. */
-  readonly folders: readonly string[];
+  /** Where contract 2 folders are looked up, nearest first (the outline's, then the user's). Empty: only the legacy registry. */
+  folders: readonly string[];
+  /**
+   * Looks extensions up in these folders from now on, nearest first. The
+   * service passes its registry's roots (`src/extension-registry.ts`), so a
+   * folder in the outline's `extensions/` runs like one in the user folder.
+   */
+  useFolders(folders: readonly string[]): void {
+    this.folders = [...folders];
+  }
   private async folderInstallation(provider: string) {
     for (const root of this.folders) {
       const directory = join(root, provider);
-      const manifestPath = join(directory, "extension.json");
-      if (!(await Bun.file(manifestPath).exists())) continue;
-      const name = label(provider);
+      if (!(await Bun.file(join(directory, "extension.json")).exists())) continue;
+      let loaded;
       try {
-        const manifestRaw = await boundedFile(manifestPath);
-        const manifest = Parse(ManifestV2, JSON.parse(manifestRaw));
-        const configPath = join(directory, "config.json");
-        const configRaw = (await Bun.file(configPath).exists()) ? await boundedFile(configPath) : "{}";
-        const folder = Parse(FolderConfig, JSON.parse(configRaw));
-        if (folder.enabled === false) throw failure(`${manifest.name} is disabled in ${configPath}`);
-        const config = folder.config ?? {};
-        if (manifest.configSchema !== undefined &&
-          (!IsSchema(manifest.configSchema) || !Compile(manifest.configSchema).Check(config)))
-          throw failure(`${manifest.name} configuration does not match its schema; check ${configPath}`);
-        const run = [...manifest.run];
-        // The service's own Bun runs a folder's TypeScript unless run[0] is a path.
-        if (run[0] === "bun") run[0] = process.execPath;
-        return {
-          install: { manifest: manifestPath, enabled: true, config, credentials: folder.secrets ?? {} },
-          manifest: { contract: 2 as const, id: manifest.id, version: manifest.version, command: run, name: manifest.name },
-          description: {
-            id: manifest.id, name: manifest.name, version: manifest.version, contract: 2 as const, directory,
-            handlers: manifest.handlers, sources: folder.sources ?? [],
-          } satisfies ExtensionDescription,
-          directory,
-          stamp: hash(manifestRaw + configRaw),
-        };
+        loaded = await readExtensionFolder(directory, root === userExtensionsDirectory() ? "user" : "outline");
       } catch (error) {
-        if (error instanceof ResourceCatalogError) throw error;
-        throw failure(`${name} extension in ${directory} is invalid; check extension.json (contract 2) and config.json`);
+        // The same words `outliner ext ls` and `extensions.list` show, naming the file and the field.
+        throw failure(`${provider} extension in ${directory} is invalid: ${error instanceof ExtensionLoadError ? error.message : "it could not be read"}`);
       }
+      if (!loaded.enabled) throw failure(`${loaded.name} is disabled in ${join(directory, "config.json")}`);
+      if (!loaded.command) throw failure(`${loaded.name} runs no code (its extension.json has no run)`);
+      return {
+        install: { manifest: join(directory, "extension.json"), enabled: true, config: loaded.config, credentials: loaded.credentials },
+        manifest: { contract: 2 as const, id: loaded.id, version: loaded.version, command: loaded.command, name: loaded.name },
+        description: {
+          id: loaded.id, name: loaded.name, version: loaded.version, contract: 2 as const, directory,
+          handlers: loaded.manifest.handlers ?? [], sources: loaded.sources, origin: loaded.origin,
+        } satisfies ExtensionDescription,
+        directory,
+        stamp: loaded.stamp,
+        loaded,
+      };
     }
     return null;
   }
@@ -361,17 +315,63 @@ export class ResourceExtensionRuntime {
       );
     }
   }
+  /**
+   * One call: one process, one JSON request on stdin, one response on stdout.
+   * `resolve`, `read` and `changed` are the Resource operations (contract 1);
+   * `run` (an output or component handler) and `act` (an action) are contract
+   * 2's. `deadlineMs` is the manifest's (at most 5 minutes); the runtime's own
+   * deadline otherwise.
+   */
   async invoke(
     provider: string,
-    operation: "resolve" | "read" | "changed",
+    operation: "resolve" | "read" | "changed" | "run" | "act",
     input: unknown,
     signal?: AbortSignal,
+    deadlineMs?: number,
   ): Promise<ExtensionResult> {
+    return this.invokeInstalled(provider, await this.installation(provider), operation, input, signal, deadlineMs, true);
+  }
+
+  /**
+   * One call to the version the registry serves (`src/extension-registry.ts`):
+   * a folder whose manifest broke since keeps running its last good manifest
+   * and config, as `extensions.list` says. Code is still read fresh.
+   */
+  async invokeLoaded(
+    extension: LoadedExtension,
+    operation: "read" | "run" | "act",
+    input: unknown,
+    deadlineMs?: number,
+  ): Promise<ExtensionResult> {
+    if (!extension.command) throw failure(`${extension.name} runs no code (its extension.json has no run)`);
+    if (!extension.enabled) throw failure(`${extension.name} is disabled in ${join(extension.directory, "config.json")}`);
+    return this.invokeInstalled(extension.id, {
+      install: { manifest: join(extension.directory, "extension.json"), enabled: true, config: extension.config, credentials: extension.credentials },
+      manifest: { contract: 2 as const, id: extension.id, version: extension.version, command: extension.command, name: extension.name },
+      directory: extension.directory,
+      stamp: extension.stamp,
+    }, operation, input, undefined, deadlineMs, false);
+  }
+
+  private async invokeInstalled(
+    provider: string,
+    loaded: {
+      install: { manifest: string; enabled: boolean; config: Record<string, unknown>; credentials: Record<string, import("typebox").Static<typeof Credential> | { file: string }> };
+      manifest: { contract: 1 | 2; id: string; version: number; command: readonly string[]; name: string };
+      directory: string;
+      stamp: string;
+    },
+    operation: "resolve" | "read" | "changed" | "run" | "act",
+    input: unknown,
+    signal: AbortSignal | undefined,
+    deadlineMs: number | undefined,
+    recheck: boolean,
+  ): Promise<ExtensionResult> {
+    const deadline = Math.min(MAX_DEADLINE_MS, deadlineMs ?? this.timeoutMs);
     signal = AbortSignal.any([
       ...(signal ? [signal] : []),
-      AbortSignal.timeout(this.timeoutMs),
+      AbortSignal.timeout(deadline),
     ]);
-    const loaded = await this.installation(provider);
     const secrets: Record<string, string> = {};
     for (const [name, reference] of Object.entries(
       loaded.install.credentials,
@@ -423,11 +423,11 @@ export class ResourceExtensionRuntime {
       loaded.manifest.command,
       loaded.directory,
       request,
-      this.timeoutMs,
+      deadline,
       signal,
     );
     // Disable/config changes during a call invalidate its result before the catalog can commit it.
-    if ((await this.installation(provider)).stamp !== loaded.stamp)
+    if (recheck && (await this.installation(provider)).stamp !== loaded.stamp)
       throw failure("configuration changed during request; refresh to retry");
     let envelope: unknown;
     try {

@@ -1,3 +1,5 @@
 [test]
 # claude-mod/tests run under `claude plugin test`, which provides `claude-code/testing`.
 pathIgnorePatterns = ["claude-mod/**"]
+# Test services never read the owner's user extensions folder (test/preload.ts).
+preload = ["./test/preload.ts"]

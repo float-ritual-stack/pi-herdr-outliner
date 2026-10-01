@@ -4,6 +4,29 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+### Extensions wave B: watched folders and the four kinds (PIE-507)
+
+- Extension folders are watched: `<outline root>/extensions/<id>/` and
+  `~/.config/pi-herdr-outliner/extensions/<id>/` load, reload and unload with no
+  restart. A broken folder keeps serving its last good version and says what is
+  wrong, naming the file and the field. `extensions.list` reports every folder,
+  its state, its handlers, actions and tile kinds; an `extensions` event says when
+  it changed.
+- The four kinds, each with an example in `extensions/`: data put into a block
+  (`moon::`, beside `jira::`), inline output under a line (`horoscope::`), a rich
+  component composed from shared primitives with its own actions
+  (`fancy-horror::`), and a whole tile for the door's tile-kind registry
+  (`tarot.reading`). Handler lines share one grammar (argument, typed `--options`,
+  display options), run by `effects` (`read`, `spend`, `write`), and show in
+  `resources.projection.read` beside Jira's tickets; `r` runs them.
+  `extensions.render` gives a result as markdown, blockdown, html, json, csv or
+  terminal text; `extensions.act` runs an action (or the built-in `keep`), its
+  writes kept inside the block and attributed `ext:<id>`.
+- `outliner ext add <name|path>`, `ext remove <name>`, `ext ls` (from the running
+  service) and `ext act`. Detail draws handler outputs and its `r` refreshes a
+  note's tickets and extension lines. See
+  [docs/extensions/README.md](docs/extensions/README.md).
+
 ### Merged without an entry, Sep 22–30 (added in the PIE-502 catch-up)
 
 These shipped with README or PR notes but no changelog line. Newest first.

@@ -1,0 +1,27 @@
+{
+  "contract": 2,
+  "id": "horoscope",
+  "version": 1,
+  "name": "Horoscope",
+  "description": "Inline output: a made-up horoscope for a sign, under the line that asks for it.",
+  "run": ["bun", "horoscope.ts"],
+  "handlers": [
+    {
+      "key": "horoscope",
+      "kind": "output",
+      "effects": "read",
+      "description": "Today's horoscope for a sign",
+      "argument": {
+        "name": "sign",
+        "required": true,
+        "pattern": "^(aries|taurus|gemini|cancer|leo|virgo|libra|scorpio|sagittarius|capricorn|aquarius|pisces)$",
+        "description": "a zodiac sign, in lowercase"
+      },
+      "options": {
+        "day": { "type": "string", "pattern": "^(today|tomorrow)$", "default": "today", "description": "today or tomorrow" },
+        "short": { "type": "boolean", "scope": "display", "description": "one line (readers may show less)" }
+      },
+      "staleAfter": "1h"
+    }
+  ]
+}

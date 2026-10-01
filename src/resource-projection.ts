@@ -33,6 +33,8 @@ export type ResourceProjectionStatus =
   | "ready"
   /** A stored snapshot is shown, but the last refresh failed. */
   | "stale"
+  /** An extension's handler line that hasn't run: `reason` says when it will. */
+  | "not-run"
   /** Registered, but nothing has been fetched yet. */
   | "not-fetched"
   /** The key is known, but no Resource exists for it yet. */
@@ -59,9 +61,42 @@ export interface ResourceProjectionField {
   readonly value: string;
 }
 
+/**
+ * What an extension's handler line returned (capability `extensions.outputs`):
+ * an output's markdown, or a component's data and view with its markdown
+ * rendering. `markdown` is inert BlockDown: it never adds properties.
+ */
+export interface ExtensionProjectionOutput {
+  readonly markdown: string;
+  readonly ranAt: string;
+  readonly title?: string;
+  /** A component's data and its view in the shared primitives (src/component-primitives.ts). */
+  readonly component?: { readonly data: unknown; readonly view: unknown };
+  /** The block changed since this ran. */
+  readonly inputsChanged?: true;
+  /** The extension's version changed since this ran. */
+  readonly versionChanged?: true;
+}
+
 export interface ResourceProjection {
   readonly anchor: ResourceProjectionAnchor;
-  readonly provider: ResourceDirectiveProvider["provider"];
+  /** The provider (`jira`) or, for an extension's handler line, the extension's id. */
+  readonly provider: ResourceDirectiveProvider["provider"] | (string & {});
+  /**
+   * Which kind of extension line this is (capability `extensions.outputs`):
+   * absent for a Jira projection; `data`, `output` or `component` for a
+   * handler an extension folder serves.
+   */
+  readonly kind?: "data" | "output" | "component";
+  readonly extension?: {
+    readonly id: string;
+    readonly handler: string;
+    readonly effects: "read" | "spend" | "write";
+    /** Display options from the line (they never reach the extension). */
+    readonly display: Readonly<Record<string, boolean | number | string>>;
+    readonly version?: number;
+  };
+  readonly output?: ExtensionProjectionOutput;
   /** How readers name this kind of resource, e.g. "Jira". */
   readonly label: string;
   readonly propertyKey: string;
@@ -223,7 +258,7 @@ function storedProjection(
   resolvedFrom: ResourceProjection["resolvedFrom"],
 ): ResourceProjection {
   const keyed = { ...base, key, ...(resolvedFrom ? { resolvedFrom } : {}), fields: [] };
-  const lookup = source.resources.resolveAuthoredReference({ kind: base.provider, key });
+  const lookup = source.resources.resolveAuthoredReference({ kind: provider.provider, key });
   if (lookup.kind === "unavailable") return { ...keyed, status: "unavailable", reason: lookup.reason };
   if (lookup.kind === "unregistered") {
     // Saving the line (or opening the note) registers and fetches it in the background.

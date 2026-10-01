@@ -420,6 +420,52 @@ function extensionRecordRow(row: ExtensionRecordDbRow): ExtensionRecordRow {
   };
 }
 
+/** One handler line's stored result (`extension_outputs`). */
+export interface ExtensionOutputRow {
+  readonly blockId: string;
+  readonly callKey: string;
+  readonly extensionId: string;
+  readonly handlerKey: string;
+  readonly kind: "output" | "component";
+  readonly request: unknown;
+  /** The last good result; null before the first. */
+  readonly result: unknown;
+  readonly error: string | null;
+  readonly ranAt: string | null;
+  readonly attemptedAt: string;
+  readonly blockRevision: number;
+  readonly extensionVersion: number;
+}
+
+export interface ExtensionOutputWrite {
+  readonly blockId: string;
+  readonly callKey: string;
+  readonly extensionId: string;
+  readonly handlerKey: string;
+  readonly kind: "output" | "component";
+  readonly request: unknown;
+  /** Absent on a failure: the last good result stays. */
+  readonly result?: unknown;
+  readonly error?: string;
+  readonly attemptedAt: string;
+  readonly blockRevision: number;
+  readonly extensionVersion: number;
+}
+
+interface ExtensionOutputDbRow {
+  block_id: string; call_key: string; extension_id: string; handler_key: string; kind: "output" | "component";
+  request: string; result: string | null; error: string | null; ran_at: string | null; attempted_at: string;
+  block_revision: number; extension_version: number;
+}
+
+function extensionOutputRow(row: ExtensionOutputDbRow): ExtensionOutputRow {
+  return {
+    blockId: row.block_id, callKey: row.call_key, extensionId: row.extension_id, handlerKey: row.handler_key, kind: row.kind,
+    request: JSON.parse(row.request), result: row.result === null ? null : JSON.parse(row.result), error: row.error,
+    ranAt: row.ran_at, attemptedAt: row.attempted_at, blockRevision: row.block_revision, extensionVersion: row.extension_version,
+  };
+}
+
 export interface ExtensionRecordWriteInput {
   readonly extensionId: string;
   readonly label: string;
@@ -1675,6 +1721,55 @@ export class OutlinerStore {
       }
       return before.filter((key) => !asks.has(key));
     })();
+  }
+
+  /** Runs several writes as one: all of them commit, or none (an extension action's writes). */
+  atomically<T>(work: () => T): T {
+    return this.database.transaction(work)();
+  }
+
+  /** The extensions and keys a block asks for, every extension. */
+  extensionAsksOf(blockId: string): Array<{ extensionId: string; itemKey: string }> {
+    return (this.database.query("SELECT extension_id AS extensionId, item_key AS itemKey FROM extension_askers WHERE block_id = ?")
+      .all(blockId) as Array<{ extensionId: string; itemKey: string }>);
+  }
+
+  // ── Extension outputs (src/extension-calls.ts) ──────────────────────────
+  // What an output or component handler line last returned, kept per block
+  // and call (handler, argument, fetch options), so a reader shows it at once
+  // and a restart keeps it. It is never block text: `keep` writes blocks.
+
+  /** The stored results of a block's handler lines. */
+  extensionOutputs(blockId: string): ExtensionOutputRow[] {
+    return (this.database.query("SELECT * FROM extension_outputs WHERE block_id = ?").all(blockId) as ExtensionOutputDbRow[])
+      .map(extensionOutputRow);
+  }
+
+  /** Stores one call's result or failure. A failure keeps the last good result. */
+  putExtensionOutput(row: ExtensionOutputWrite): void {
+    this.database.transaction(() => {
+      const current = this.database.query("SELECT result, ran_at FROM extension_outputs WHERE block_id = ? AND call_key = ?")
+        .get(row.blockId, row.callKey) as { result: string | null; ran_at: string | null } | null;
+      const result = row.result !== undefined ? JSON.stringify(row.result) : current?.result ?? null;
+      const ranAt = row.result !== undefined ? row.attemptedAt : current?.ran_at ?? null;
+      this.database.query(`
+        INSERT INTO extension_outputs (block_id, call_key, extension_id, handler_key, kind, request, result, error, ran_at, attempted_at, block_revision, extension_version)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (block_id, call_key) DO UPDATE SET extension_id = excluded.extension_id, handler_key = excluded.handler_key,
+          kind = excluded.kind, request = excluded.request, result = excluded.result, error = excluded.error, ran_at = excluded.ran_at,
+          attempted_at = excluded.attempted_at, block_revision = excluded.block_revision, extension_version = excluded.extension_version
+      `).run(row.blockId, row.callKey, row.extensionId, row.handlerKey, row.kind, JSON.stringify(row.request), result,
+        row.error ?? null, ranAt, row.attemptedAt, row.blockRevision, row.extensionVersion);
+    })();
+  }
+
+  /** Forgets the results of lines a block no longer has. Returns how many went. */
+  pruneExtensionOutputs(blockId: string, keep: readonly string[]): number {
+    const rows = this.database.query("SELECT call_key FROM extension_outputs WHERE block_id = ?").all(blockId) as Array<{ call_key: string }>;
+    const gone = rows.map((row) => row.call_key).filter((key) => !keep.includes(key));
+    const remove = this.database.query("DELETE FROM extension_outputs WHERE block_id = ? AND call_key = ?");
+    for (const key of gone) remove.run(blockId, key);
+    return gone.length;
   }
 
   /** Whether a block has asked an extension for a key (removing its last line still settles the record). */
@@ -3761,6 +3856,21 @@ export class OutlinerStore {
         PRIMARY KEY (block_id, extension_id, item_key)
       );
       CREATE INDEX IF NOT EXISTS extension_askers_key ON extension_askers(extension_id, item_key);
+      CREATE TABLE IF NOT EXISTS extension_outputs (
+        block_id TEXT NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+        call_key TEXT NOT NULL,
+        extension_id TEXT NOT NULL,
+        handler_key TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('output', 'component')),
+        request TEXT NOT NULL,
+        result TEXT,
+        error TEXT,
+        ran_at TEXT,
+        attempted_at TEXT NOT NULL,
+        block_revision INTEGER NOT NULL,
+        extension_version INTEGER NOT NULL,
+        PRIMARY KEY (block_id, call_key)
+      );
       CREATE TABLE IF NOT EXISTS annotation_requests (
         request_id TEXT PRIMARY KEY,
         payload_hash TEXT,
@@ -4789,7 +4899,8 @@ export class OutlinerStore {
     siblings.forEach((sibling, index) => update.run(index, sibling.id));
   }
 
-  private isDescendant(candidateId: string, ancestorId: string): boolean {
+  /** Whether `candidateId` sits somewhere under `ancestorId`. */
+  isDescendant(candidateId: string, ancestorId: string): boolean {
     return this.database.transaction(() => {
       let current = this.getFromCurrentRead(candidateId);
       while (current?.parentId) {

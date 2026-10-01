@@ -1,25 +1,29 @@
 # Installed Resource processes (contracts 1 and 2)
 
-## Contract 2: an extension is a folder (wave A)
+## Contract 2: an extension is a folder
 
-Wave A of the extension design moves Jira onto the folder shape that wave B
-generalizes. An extension is a folder in the service host's user extensions
-folder, `$XDG_CONFIG_HOME/pi-herdr-outliner/extensions/<id>/`
+This page is the Resource process contract Jira's data path uses. The four kinds
+of extension, the whole manifest, the watched folders and the other operations
+(`run`, `act`) are in [the four kinds](README.md). An extension is a folder in
+`<outline root>/extensions/<id>/` or the service host's user extensions folder,
+`$XDG_CONFIG_HOME/pi-herdr-outliner/extensions/<id>/`
 (`OUTLINER_EXTENSIONS_DIR` overrides it), with:
 
 - `extension.json`: `{contract: 2, id, version, name, run, configSchema?, secrets?, handlers}`.
   `run` is an argument vector run in the folder; `bun` means the service's own Bun.
-  Each handler is `{key, kind: "resource", effects: "read"|"spend"|"write", keyPattern?, record?, staleAfter?, pollEvery?}`.
-  Fields wave B reads (`renderers`, `actions`, `tiles`) are allowed and ignored.
+  Jira's handler is `{key, kind: "resource", effects: "read"|"spend"|"write", keyPattern?, record?, staleAfter?, pollEvery?}`;
+  the other kinds (`data`, `output`, `component`), `actions` and `tiles` are in [the four kinds](README.md).
+  An unknown field is an error that names it.
 - `config.json`: `{config, secrets, sources, enabled?}`. Secrets are references
   (`env`, `keychainService`, or `file` with mode 0600), resolved at call time on
   the service host. `sources` are created on first use.
 - the code, `README.md` and a `config.example.json`.
 
-`outliner ext add <id>` copies a built-in from the repo's `extensions/` and
-writes `config.json` (from an existing `resource-extensions.json` entry when
-there is one). The folder is looked up before the legacy registry below, on
-every call, so code and config changes need no restart.
+`outliner ext add <id|path>` copies a built-in from the repo's `extensions/`
+(or any folder) and writes `config.json` (from an existing
+`resource-extensions.json` entry when there is one). The service watches the
+folders; a call reads its folder again, before the legacy registry below, so
+code and config changes need no restart.
 
 The wire is contract 1's, with `contract: 2` in the request and one more
 operation:
@@ -34,11 +38,10 @@ operation:
   `{items: [{entityId, locator}]}`: which registered keys changed recently, in
   one provider search. The service's poll uses it.
 
-Wave B adds: the folder watcher with candidate and active registries, outline
-folders (`<outline root>/extensions/`), handler tables derived from manifests
-(today `RESOURCE_DIRECTIVE_PROVIDERS` still names Jira), the generic
-remote-entity provider family, `ext doctor|migrate|rm`, `command` secrets, and
-renderers, actions and tiles served by `extensions.list`.
+Still to come: Jira's handler table derived from its manifest (today
+`RESOURCE_DIRECTIVE_PROVIDERS` still names Jira), a generic remote-entity
+provider family, `ext doctor|migrate`, `command` secrets, and renderers served
+by `extensions.list`.
 
 ## Contract 1
 

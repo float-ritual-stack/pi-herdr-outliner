@@ -464,6 +464,9 @@ const effects: DetailEffects = {
       path,
     });
   },
+  async refreshProjections(blockId) {
+    await client.request({ action: "resources.projection.refresh", blockId }, WEB_RESOURCE_REQUEST_TIMEOUT_MS);
+  },
   async refreshResource(resourceId) {
     return client.request<ResourceDescription>(
       {

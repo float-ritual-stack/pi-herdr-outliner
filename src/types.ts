@@ -1729,6 +1729,20 @@ export const OUTLINER_CAPABILITIES = [
    * older page of a page cut at its limit) (PIE-504).
    */
   "activity.actor",
+  /**
+   * Extension folders (PIE-507): `extensions.list` (every folder, its state and error, its handlers, actions
+   * and tile kinds), reloaded by a watcher with `extensions` events.
+   */
+  "extensions.list",
+  /**
+   * Extension handler lines (`horoscope:: virgo`): `resources.projection.read` returns them beside Jira's,
+   * with `kind` (`data`, `output`, `component`), `extension` and `output`; `resources.projection.refresh` runs them.
+   */
+  "extensions.outputs",
+  /** `extensions.render`: a handler line's result in a render target (markdown, blockdown, html, json, csv, terminal). */
+  "extensions.render",
+  /** `extensions.act`: run an extension's action (or the built-in `keep`); its writes are attributed `ext:<id>`. */
+  "extensions.act",
 ] as const;
 
 /**
@@ -2266,6 +2280,12 @@ export type OutlinerRequestAction =
   | { id: string; action: "drafts.answer"; requestId: string; clientId: string; answer?: DraftHolderAnswer; error?: string }
   /** A note's text as its live draft has it now, or as saved when no door holds one (capability `drafts.read`). */
   | { id: string; action: "drafts.read"; blockId: string }
+  /** Capability `extensions.list`. `reload` reads the folders now instead of waiting for the watcher. */
+  | { id: string; action: "extensions.list"; reload?: boolean }
+  /** Capability `extensions.render`: the results of a block's handler lines (or the one on `line`) in `target`. */
+  | { id: string; action: "extensions.render"; blockId: string; line?: number; target: string; fallback?: string }
+  /** Capability `extensions.act`: an extension's action on a block (and line), or on a tile with `args`. */
+  | { id: string; action: "extensions.act"; extension: string; extensionAction: string; blockId?: string; line?: number; args?: Record<string, string> }
   /** Compare-and-swap on spans of notes' text (capability `draft.patch`). */
   | ({ id: string; action: "draft.patch" } & DraftPatchInput)
   /** "Apply anyway": a proposal block's patch as an ordinary edit (capability `draft.proposal.apply`). */
@@ -2480,7 +2500,9 @@ export type OutlinerEventDomain =
   | "attention"
   | "browsing-context"
   /** A request to the door holding a live draft (`draft`), sent only to that client. */
-  | "draft";
+  | "draft"
+  /** The extension registry changed (`extensions.changed`): read `extensions.list` again. */
+  | "extensions";
 
 export interface OutlinerEvent {
   id: string;

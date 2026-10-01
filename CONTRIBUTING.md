@@ -110,9 +110,24 @@ source evidence or distinguish authored glyphs from controls.
   written). `src/extension-sync.ts` decides when: on save and open
   (`resources.projection.read` with `materialize`), on `resources.projection.refresh`,
   on any refresh (`ResourceCatalog.onRemoteEntityObserved`) and by the poll.
-  `src/extension-install.ts` is `outliner ext add|ls`; `ResourceExtensionRuntime`
-  loads contract 2 folders (`extension.json` + `config.json`) from the user
-  extensions folder before the legacy registry.
+  `ResourceExtensionRuntime` runs one process per call for every extension
+  operation, from the registry's folders before the legacy registry.
+- `src/extension-manifest.ts` is the one parser of an extension folder
+  (contract 2: `extension.json` and `config.json`) and its error wording; the
+  registry, the runtime and `outliner ext add` read folders through it.
+  `src/extension-registry.ts` owns which extensions an outline has: the outline
+  and user folders, watched, rebuilt from scratch on each change (last good copy
+  kept on a failure), handler keys bound, and `extensions.list` with the tile
+  kinds the door's registry consumes. `src/extension-handlers.ts` is the one
+  grammar of a handler line (`key:: argument --option`); `src/extension-calls.ts`
+  runs data, output and component handlers by `effects`, keeps their results
+  (the store's `extension_outputs`), answers their projections in the
+  `resources.projection.read` slot, renders targets and runs actions (writes
+  kept inside the block, attributed `ext:<id>`). `src/component-primitives.ts`
+  owns the shared primitive catalogue and the render targets with their
+  fallback chain; a client draws those primitives, never a component by name.
+  `src/extension-install.ts` is `outliner ext ls|add|remove|act`. The four kinds
+  and their contracts: [docs/extensions/README.md](docs/extensions/README.md).
 - `src/door-control.ts` is a client of ep0ch-door's control socket (the door's
   `docs/AGENT-INTERFACE.md`). The door owns what its actions do; the Claude mod's
   `show` only asks it for an agent's `open` when Claude runs in a door tile.

@@ -1,0 +1,19 @@
+{
+  "contract": 2,
+  "id": "moon",
+  "version": 1,
+  "name": "Moon",
+  "description": "Data: the moon on a date, put into a block as if you had copied it in.",
+  "run": ["bun", "moon.ts"],
+  "handlers": [
+    {
+      "key": "moon",
+      "kind": "data",
+      "effects": "read",
+      "description": "The moon's phase on a date",
+      "argument": { "name": "date", "description": "a date (YYYY-MM-DD)" },
+      "keyPattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "fields": ["phase", "illumination"]
+    }
+  ]
+}
