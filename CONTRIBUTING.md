@@ -123,7 +123,10 @@ source evidence or distinguish authored glyphs from controls.
   runs data, output and component handlers by `effects`, keeps their results
   (the store's `extension_outputs`), answers their projections in the
   `resources.projection.read` slot, renders targets and runs actions (writes
-  kept inside the block, attributed `ext:<id>`). `src/component-primitives.ts`
+  kept inside the block, attributed `ext:<id>` with who asked as `requestedBy`; an
+  update goes through `draft.patch`'s `edit` policy like an `@agent`'s, never its own
+  write path). `ext:<id>` actor ids are the runtime's alone: `server.ts` refuses a
+  client request that names one. `src/component-primitives.ts`
   owns the shared primitive catalogue and the render targets with their
   fallback chain; a client draws those primitives, never a component by name.
   `src/agent-requests.ts` owns `@name` request lines (PIE-501): which lines

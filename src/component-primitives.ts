@@ -1,4 +1,4 @@
-import { inertBlockdown } from "./extension-records";
+import { cleanExtensionText, inertBlockdown } from "./extension-records";
 
 /**
  * The shared primitive catalogue a rich component (kind 3 of the extension
@@ -85,7 +85,8 @@ function text(value: unknown, path: string, optional = false): string | undefine
   if (value === undefined && optional) return undefined;
   if (typeof value !== "string") fail(path, "must be text");
   if (value.length > MAX_TEXT) fail(path, `is longer than ${MAX_TEXT} characters`);
-  return value;
+  // Kept clean: terminal escapes and control characters never reach a reader (the door's own drawing, `terminal`).
+  return cleanExtensionText(value, true);
 }
 
 function finite(value: unknown, path: string): number {
@@ -222,7 +223,7 @@ export function validateComponent(value: unknown): ComponentOutput {
     for (const [target, body] of Object.entries(raw.targets as Record<string, unknown>)) {
       if (!RENDER_TARGETS.includes(target as RenderTarget)) throw new ComponentError(`targets.${target} is not a render target (${RENDER_TARGETS.join(", ")})`);
       if (typeof body !== "string" || Buffer.byteLength(body) > MAX_DATA_BYTES) throw new ComponentError(`targets.${target} must be text up to 256 KiB`);
-      targets[target as RenderTarget] = body;
+      targets[target as RenderTarget] = cleanExtensionText(body, true);
     }
   }
   return { data: raw.data ?? null, view, ...(targets ? { targets } : {}) };
@@ -365,7 +366,8 @@ function csv(output: ComponentOutput): string | null {
 
 function fromPrimitives(output: ComponentOutput, target: RenderTarget): string | null {
   switch (target) {
-    case "terminal": return terminalLines(output.view).join("\n");
+    // Clean even for a result kept before the service cleaned what it keeps.
+    case "terminal": return cleanExtensionText(terminalLines(output.view).join("\n"), true);
     case "markdown": return markdown(output.view);
     case "blockdown": return inertBlockdown(markdown(output.view));
     case "html": return `<div class="ext-component">${htmlOf(output.view)}</div>`;
@@ -380,7 +382,7 @@ function fromPrimitives(output: ComponentOutput, target: RenderTarget): string |
  */
 export function renderComponent(output: ComponentOutput, target: RenderTarget, fallback: RenderTarget = "json"): RenderedComponent {
   const own = output.targets?.[target];
-  if (own !== undefined) return { target, body: target === "blockdown" ? inertBlockdown(own) : own, via: "component", contentType: CONTENT_TYPES[target] };
+  if (own !== undefined) return { target, body: target === "blockdown" ? inertBlockdown(own) : cleanExtensionText(own, true), via: "component", contentType: CONTENT_TYPES[target] };
   const composed = fromPrimitives(output, target);
   if (composed !== null) return { target, body: composed, via: "primitives", contentType: CONTENT_TYPES[target] };
   const backup = fromPrimitives(output, fallback === target ? "json" : fallback) ?? JSON.stringify(output.data, null, 2);
@@ -393,7 +395,7 @@ export function renderMarkdownOutput(markdownText: string, target: RenderTarget)
   switch (target) {
     case "markdown":
     case "terminal":
-      return { target, body: markdownText, via: "primitives", contentType: CONTENT_TYPES[target] };
+      return { target, body: cleanExtensionText(markdownText, true), via: "primitives", contentType: CONTENT_TYPES[target] };
     case "blockdown":
       return { target, body: inertBlockdown(markdownText), via: "primitives", contentType: CONTENT_TYPES.blockdown };
     case "html":

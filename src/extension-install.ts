@@ -1,9 +1,10 @@
-import { chmod, cp, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, cp, lstat, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { ExtensionLoadError, readExtensionFolder } from "./extension-manifest";
+import { cleanExtensionText } from "./extension-records";
 import { BUILT_IN_EXTENSIONS, extensionRoots, type ExtensionsListResult } from "./extension-registry";
 import { defaultRegistryPath, userExtensionsDirectory, userExtensionsFolderInUse } from "./resource-extensions";
 
@@ -115,12 +116,15 @@ export async function addExtension(nameOrPath: string, options: { from?: string;
       removed.push(entry);
     }
   }
-  for (const entry of entries) {
+  // extension.json goes in last, so the service's watcher never reads a new manifest beside old code. A file
+  // replaces the old one in one rename, so the folder always has an extension.json while it updates.
+  for (const entry of [...entries.filter((name) => name !== "extension.json"), ...entries.filter((name) => name === "extension.json")]) {
     const staged = join(target, `.${entry}.new`);
     // A stale staged copy from an interrupted run, and a folder in the way of the rename, go first.
     await rm(staged, { recursive: true, force: true });
     await cp(join(source, entry), staged, { recursive: true });
-    await rm(join(target, entry), { recursive: true, force: true });
+    const there = await lstat(join(target, entry)).catch(() => null);
+    if (there && (there.isDirectory() || (await lstat(staged)).isDirectory())) await rm(join(target, entry), { recursive: true, force: true });
     await rename(staged, join(target, entry));
   }
   lines.push(`${updating ? "updated" : "installed"} ${id} in ${target}`);
@@ -182,7 +186,8 @@ export function formatExtensionsList(list: ExtensionsListResult): string[] {
     if (entry.error) lines.push(`  ${entry.state === "shadowed" ? "note" : "error"}: ${entry.error}`);
   }
   lines.push(list.trust);
-  return lines;
+  // A folder's name and an extension's error are its own words: printed clean.
+  return lines.map((line) => cleanExtensionText(line));
 }
 
 /** `ext ls` without a service: each folder read and checked here. */
@@ -204,13 +209,14 @@ export async function listExtensions(): Promise<string[]> {
   if (existsSync(defaultRegistryPath())) lines.push(`legacy registry: ${defaultRegistryPath()} (used when no folder has the extension)`);
   lines.push(`built-ins (outliner ext add <name>): ${(await builtIns()).join(", ")}`);
   lines.push("Extensions are trusted code, not a sandbox: they run as the service user.");
-  return lines;
+  return lines.map((line) => cleanExtensionText(line));
 }
 
 const USAGE = `usage: outliner ext ls
        outliner ext add <name|path> [--outline-folder <outline root>]
        outliner ext remove <name> [--outline-folder <outline root>]
-       outliner ext act <name> <action> [--block <id>] [--line N] [--arg key=value]…
+       outliner ext act <name> <action> [--block <id>] [--line N] [--arg key=value]… [--actor <agent id>]
+  ext act runs as the person who typed it; an agent passes --actor <its id>, recorded as who asked.
   Folders are watched: add and remove apply without a restart.
   Extensions are trusted code, not a sandbox: they run as the service user.`;
 
@@ -231,6 +237,14 @@ async function serviceClient(): Promise<ExtClient | null> {
   }
 }
 
+/**
+ * One line to the terminal. What an extension says (its messages, names and errors, a folder's name) is
+ * printed without terminal escapes or control characters, so it can't move the cursor or set the clipboard.
+ */
+function print(line: string): void {
+  console.log(cleanExtensionText(line));
+}
+
 export async function runExtCommand(args: readonly string[], connect: () => Promise<ExtClient | null> = serviceClient): Promise<number> {
   const [operation, ...rest] = args;
   try {
@@ -245,28 +259,28 @@ export async function runExtCommand(args: readonly string[], connect: () => Prom
       const lines = operation === "add"
         ? await addExtension(name, { ...(values.from ? { from: values.from } : {}), ...(outlineFolder ? { outlineFolder } : {}) })
         : await removeExtension(name, outlineFolder ? { outlineFolder } : {});
-      for (const line of lines) console.log(line);
+      for (const line of lines) print(line);
       // Say what the service made of it when one is running here.
       const client = await connect();
       if (client) {
         const list = await client.request<ExtensionsListResult>({ action: "extensions.list", reload: true });
         const id = operation === "add" ? lines[0]!.split(" ")[1]! : name;
         const entry = list.extensions.find((candidate) => candidate.id === id && candidate.state !== "shadowed");
-        if (operation === "add") console.log(entry ? `service: ${id} is ${entry.state}${entry.error ? `: ${entry.error}` : ""}` : `service: ${id} isn't in a folder this outline reads (${list.roots.map((root) => root.path).join(", ")})`);
-        else console.log(entry ? `service: still has ${id} (${entry.directory})` : `service: ${id} is gone`);
+        if (operation === "add") print(entry ? `service: ${id} is ${entry.state}${entry.error ? `: ${entry.error}` : ""}` : `service: ${id} isn't in a folder this outline reads (${list.roots.map((root) => root.path).join(", ")})`);
+        else print(entry ? `service: still has ${id} (${entry.directory})` : `service: ${id} is gone`);
       }
       return 0;
     }
     if (operation === "ls" || operation === "list") {
       const client = await connect();
       const lines = client ? formatExtensionsList(await client.request<ExtensionsListResult>({ action: "extensions.list", reload: true })) : await listExtensions();
-      for (const line of lines) console.log(line);
+      for (const line of lines) print(line);
       return 0;
     }
     if (operation === "act") {
       const { values, positionals } = parseArgs({
         args: [...rest], allowPositionals: true, strict: true,
-        options: { block: { type: "string" }, line: { type: "string" }, arg: { type: "string", multiple: true }, json: { type: "boolean" } },
+        options: { block: { type: "string" }, line: { type: "string" }, arg: { type: "string", multiple: true }, json: { type: "boolean" }, actor: { type: "string" } },
       });
       const [extension, action, ...extra] = positionals;
       if (!extension || !action || extra.length) throw new Error(USAGE);
@@ -282,18 +296,20 @@ export async function runExtCommand(args: readonly string[], connect: () => Prom
         ...(values.block ? { blockId: values.block } : {}),
         ...(values.line !== undefined ? { line: Number(values.line) } : {}),
         ...(Object.keys(argsMap).length ? { args: argsMap } : {}),
+        // Who asked: the writes stay the extension's, this is recorded beside them (requestedBy).
+        mutation: values.actor?.trim() ? { author: "agent", actorId: values.actor.trim() } : { author: "user" },
       });
       if (values.json) console.log(JSON.stringify(result));
       else {
-        if (result.message) console.log(result.message);
-        for (const id of result.written) console.log(`wrote ${id}`);
+        if (result.message) print(result.message);
+        for (const id of result.written) print(`wrote ${id}`);
       }
       return 0;
     }
     console.log(USAGE);
     return operation === undefined || operation === "help" ? 0 : 1;
   } catch (error) {
-    console.error(`error: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(cleanExtensionText(`error: ${error instanceof Error ? error.message : String(error)}`));
     return 1;
   }
 }

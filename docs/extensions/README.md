@@ -26,6 +26,19 @@ view of the outline and no database handle; every write it makes goes back throu
 which checks revisions, keeps it inside the block it acts on, and attributes it
 (`author: agent`, `actorId: ext:<id>`), so every surface shows who wrote it.
 
+`ext:<id>` is reserved: only the service's extension runtime writes as an extension. A client's
+write that names an `ext:` actor anywhere it says who writes (`mutation`, `provenance`) is refused
+(capability `mutations.ext-reserved`), since readers trust the prefix: an extension's write runs no
+`@agent`, and the publisher credits it to the extension. To have an extension write, ask it with
+`extensions.act`. A co-written id that names its saver first (`ep0ch-door:host+ext:tidy`) is the
+saver's write and is accepted.
+
+Defence in depth, not a sandbox: the service keeps what an extension returns free of terminal
+escapes and control characters (outputs, replies, messages, record text, manifest names, labels and
+descriptions, and what `outliner ext` prints), and scrubs a secret's exact value (and its base64)
+from every answer. That scrub matches exact strings only: an extension that re-encodes a secret
+(reversed, URL-encoded, split) gets it past the scrub. Trust the code you install.
+
 ## Where extensions live
 
 | Folder | Serves |
@@ -144,6 +157,11 @@ environment is only `PATH` and `LANG`; the working directory is the extension's 
 The answer is `{"ok": true, "value": …}` or `{"ok": false, "code": "not-found"}` (codes:
 `credentials-missing`, `unauthorized`, `forbidden`, `not-found`, `invalid-config`, `network`,
 `timeout`, `rate-limited`). A provider's own error text is never stored.
+
+An extension disabled, removed or edited (`extension.json` or `config.json`) while a call runs has
+that call's answer discarded: nothing it returned is kept or written, and the call fails with
+"was changed, disabled or removed while it ran". A secret from a file is read only when the file is
+yours alone (`chmod 600`); otherwise the call fails naming the file and its mode, never its content.
 
 | Operation | Called for | `input` | `value` |
 |---|---|---|---|
@@ -426,13 +444,27 @@ actions yet; `r` is its path today.
 - `act` returns `{ message?, writes? }`. Writes are
   `{ "op": "create", "parentId", "text" }` or `{ "op": "update", "blockId", "expectedRevision", "text" }`,
   at most 20. They must stay inside the block the action acts on; they apply together or not at
-  all; an update is revision-checked; each is `author: agent`, `actorId: ext:<id>`, under
-  `ext.<id>.<action>` in the change feed. After an action on a `read` handler's line writes, that
-  line runs again before the answer comes back.
+  all; each is `author: agent`, `actorId: ext:<id>`, under `ext.<id>.<action>` in the change feed.
+  After an action on a `read` handler's line writes, that line runs again before the answer comes back.
+- **An update is an agent's edit.** It is revision-checked against the saved note, then applied
+  through `draft.patch` with the `edit` policy, as an `@agent`'s edit is: only the changed lines are
+  the patch, a door's live draft of the note gets it (not the saved note under the person's typing),
+  and the guard refuses one that drops a `[page::…]` or a linked `^anchor` (nothing is written; the
+  error says what it would drop). When the person is typing in that passage it becomes a proposal
+  (`proposalId` in the answer) and the action's other writes aren't made.
+- **A created block's text is inert BlockDown**: a `key::` line or `[key::value]` in it stays words,
+  not a property, and terminal escapes go. No write may add an `@name` request line (extensions
+  can't ask agents).
+- **Who asked.** `extensions.act` takes `mutation` (capability `extensions.act.requester`): the
+  person (`{ "author": "user" }`) or an agent (`{ "author": "agent", "actorId": "loki" }`);
+  `author`/`provenance` as on `create` work too. The writes stay `ext:<id>`'s; each change in
+  `changes.since` (and its live event) carries `requestedBy` with who asked. `outliner ext act` asks
+  as the person, or as an agent with `--actor <id>`; a tile's program passes the person at its keys.
 - `keep` is built in for every output and component handler.
 
 ```json
-{ "action": "extensions.act", "extension": "fancy-horror", "extensionAction": "ward", "blockId": "…", "line": 1 }
+{ "action": "extensions.act", "extension": "fancy-horror", "extensionAction": "ward", "blockId": "…", "line": 1,
+  "mutation": { "author": "agent", "actorId": "loki" } }
 ```
 
 ## Agents in the note
@@ -550,7 +582,7 @@ same action with no tile open.
 2. `pomodoro.ts` answers `act` for `log` with
    `{ writes: [{ op: "create", parentId: target.blockId, text: "Pomodoro: 25 min, " + args.task }] }`.
 3. `tile.ts` draws the countdown; when it ends it sends one line to the outline socket:
-   `{"id":"…","outline":"pie","action":"extensions.act","extension":"pomodoro","extensionAction":"log","blockId":"<--block>","args":{"task":"…"}}`.
+   `{"id":"…","outline":"pie","action":"extensions.act","extension":"pomodoro","extensionAction":"log","blockId":"<--block>","args":{"task":"…"},"mutation":{"author":"user"}}`.
 4. The door lists `pomodoro.timer` as a tile kind. An agent can log a session with no tile:
    `outliner ext act pomodoro log --block <journal id> --arg task=review`.
 
@@ -603,8 +635,6 @@ Use made-up data. The runtime is the same one the live service uses.
 - **The same request twice in one note.** Requests are known by their words: a second `@tidy` line
   that says exactly what an earlier one in the note says shows that one's answer and isn't asked
   until `r` on it (or it's worded differently).
-- **Who asked for an action.** Its writes are attributed to the extension (`ext:<id>`); the agent
-  or person who called `extensions.act` isn't recorded with them yet.
 - **The publisher** shows data records (they are blocks) but not yet handler outputs; it will ask
   `extensions.render` for `html`.
 - **Generic Resource providers.** `kind: "resource"` is Jira's path; others use `data`.

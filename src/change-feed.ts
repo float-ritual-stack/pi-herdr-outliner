@@ -37,6 +37,7 @@ interface ChangeRow {
   actor_id: string | null;
   session_id: string | null;
   task_id: string | null;
+  requested_by: string | null;
   recorded_at: string;
 }
 
@@ -58,6 +59,11 @@ export interface SequenceChange {
 export interface ChangeAttribution {
   readonly action: string;
   readonly actor?: MutationProvenance;
+  /**
+   * Who asked for it, when that isn't the writer: an extension's action (`actor` `ext:<id>`) asked for by
+   * the person or an agent (`extensions.act`'s `mutation`).
+   */
+  readonly requestedBy?: MutationProvenance;
   /** Replaces the store's kind for request-level meanings (annotate, draft). */
   readonly kind?: OutlinerChangeKind;
   readonly collect: boolean;
@@ -65,7 +71,18 @@ export interface ChangeAttribution {
   closed: boolean;
 }
 
+function requester(raw: string | null): MutationProvenance | undefined {
+  if (raw === null) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as MutationProvenance;
+    return parsed && typeof parsed === "object" && typeof parsed.author === "string" ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function change(row: ChangeRow): OutlinerChange {
+  const requestedBy = requester(row.requested_by);
   return {
     sequence: row.sequence,
     changeId: row.change_id,
@@ -84,6 +101,7 @@ function change(row: ChangeRow): OutlinerChange {
         ...(row.task_id !== null ? { taskId: row.task_id } : {}),
       } satisfies MutationProvenance,
     } : {}),
+    ...(requestedBy ? { requestedBy } : {}),
     recordedAt: row.recorded_at,
   };
 }
@@ -135,13 +153,17 @@ export class ChangeFeed {
         session_id TEXT,
         task_id TEXT,
         recorded_at TEXT NOT NULL,
-        visible INTEGER NOT NULL DEFAULT 1
+        visible INTEGER NOT NULL DEFAULT 1,
+        requested_by TEXT
       );
       CREATE INDEX IF NOT EXISTS change_feed_sequence ON change_feed(sequence, change_id);
     `);
     const columns = database.query("PRAGMA table_info(change_feed)").all() as Array<{ name: string }>;
     if (!columns.some(column => column.name === "visible")) {
       database.exec("ALTER TABLE change_feed ADD COLUMN visible INTEGER NOT NULL DEFAULT 1");
+    }
+    if (!columns.some(column => column.name === "requested_by")) {
+      database.exec("ALTER TABLE change_feed ADD COLUMN requested_by TEXT");
     }
     database.query("DELETE FROM metadata WHERE key = ?").run(LEGACY_COMPLETE_KEY);
     // A workspace created before the feed has no history for earlier sequences.
@@ -158,11 +180,12 @@ export class ChangeFeed {
    * that inherited its context count as background changes.
    */
   attribution(
-    input: { action: string; actor?: MutationProvenance; kind?: OutlinerChangeKind; collect?: boolean },
+    input: { action: string; actor?: MutationProvenance; requestedBy?: MutationProvenance; kind?: OutlinerChangeKind; collect?: boolean },
   ): ChangeAttribution {
     return {
       action: input.action,
       ...(input.actor ? { actor: input.actor } : {}),
+      ...(input.requestedBy ? { requestedBy: input.requestedBy } : {}),
       ...(input.kind ? { kind: input.kind } : {}),
       collect: input.collect ?? false,
       changes: [],
@@ -219,6 +242,7 @@ export class ChangeFeed {
       } : {}),
       ...(input.previousParentId !== undefined ? { previousParentId: input.previousParentId } : {}),
       ...(actor ? { actor } : {}),
+      ...(open?.requestedBy ? { requestedBy: open.requestedBy } : {}),
     });
     if (open?.collect) open.changes.push(recorded);
     else if (this.onBackgroundChanges) {
@@ -251,8 +275,8 @@ export class ChangeFeed {
       const row = this.database.query(`
         INSERT INTO change_feed (
           sequence, action, kind, block_id, parent_id, has_parent, previous_parent_id,
-          has_previous_parent, revision, deleted, author, actor_id, session_id, task_id, recorded_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          has_previous_parent, revision, deleted, author, actor_id, session_id, task_id, requested_by, recorded_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING *
       `).get(
         input.sequence,
@@ -269,6 +293,7 @@ export class ChangeFeed {
         actor?.actorId ?? null,
         actor?.sessionId ?? null,
         actor?.taskId ?? null,
+        input.requestedBy ? JSON.stringify(input.requestedBy) : null,
         new Date().toISOString(),
       ) as ChangeRow;
       this.prune(row.change_id);

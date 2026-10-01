@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { basename, join } from "node:path";
 import { Type, IsSchema, type Static, type TSchema } from "typebox";
 import { Compile } from "typebox/compile";
+import { cleanExtensionText } from "./extension-records";
 
 /**
  * What an extension folder is (contract 2): `extension.json` plus an optional
@@ -288,6 +289,22 @@ function checkPattern(pattern: string | undefined, where: string): void {
 }
 
 /** The manifest's own rules beyond its schema: what needs a `run`, which keys are free, which patterns compile. */
+/** Words a manifest shows people (names, labels, descriptions): one clean line each, no terminal escapes. */
+const SHOWN = new Set(["name", "label", "description"]);
+
+function cleanShown(value: unknown, key = ""): unknown {
+  if (typeof value === "string") return SHOWN.has(key) ? cleanExtensionText(value.replace(/[\r\n\t]+/g, " ")).trim() : value;
+  if (Array.isArray(value)) return value.map((item) => cleanShown(item));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([name, item]) =>
+      // configSchema is the extension's own JSON schema; secrets map a name to the words that describe it.
+      [name, name === "configSchema" ? item : name === "secrets" && item && typeof item === "object"
+        ? Object.fromEntries(Object.entries(item).map(([secret, words]) => [secret, cleanShown(words, "description")]))
+        : cleanShown(item, name)]));
+  }
+  return value;
+}
+
 function checkManifest(manifest: ExtensionManifest): void {
   const keys = new Set<string>();
   for (const [index, handler] of (manifest.handlers ?? []).entries()) {
@@ -351,6 +368,24 @@ export function resolveArgv(argv: readonly string[]): string[] {
  * Reads one extension folder. Throws an `ExtensionLoadError` that names the
  * file and what is wrong with it; never a secret value (none are read here).
  */
+/**
+ * The folder's files as they are now, valid or not (the same hash `stamp` is); null when it has no
+ * `extension.json`. A call compares it before and after, so an edit while it ran discards its answer
+ * even when the registry still serves a last good copy.
+ */
+export async function folderStamp(directory: string): Promise<string | null> {
+  try {
+    const manifest = Bun.file(join(directory, "extension.json"));
+    if (!(await manifest.exists())) return null;
+    const manifestRaw = await boundedText(join(directory, "extension.json"));
+    const configPath = join(directory, "config.json");
+    const configRaw = (await Bun.file(configPath).exists()) ? await boundedText(configPath) : "{}";
+    return createHash("sha256").update(manifestRaw).update("\0").update(configRaw).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
 export async function readExtensionFolder(
   directory: string,
   origin: ExtensionOrigin,
@@ -365,7 +400,8 @@ export async function readExtensionFolder(
   }
   const problem = schemaProblem(ManifestV2, json);
   if (problem) throw new ExtensionLoadError(`extension.json: ${problem}`);
-  const manifest = json as ExtensionManifest;
+  const manifest = cleanShown(json) as ExtensionManifest;
+  if (!manifest.name) throw new ExtensionLoadError("extension.json: name is only control characters");
   checkManifest(manifest);
   if (manifest.id !== basename(directory)) {
     throw new ExtensionLoadError(`extension.json: id ${manifest.id} must match the folder's name (${basename(directory)})`);

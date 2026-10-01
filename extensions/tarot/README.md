@@ -18,7 +18,9 @@ d draws again · k keeps it · q closes
 - **Its actions are the extension's** (`draw`, `keep` in `extension.json`), run by the service
   (`tarot.ts`). The tile calls them over the outline socket (`extensions.act`); the door binds them as
   `ext.tarot.draw` and `ext.tarot.keep` (keys `d`, `k`); an agent calls the same actions with no tile
-  open: `outliner ext act tarot keep --block <id>`. A kept reading is a block attributed `ext:tarot`.
+  open: `outliner ext act tarot keep --block <id> --actor <its id>`. A kept reading is a block attributed
+  `ext:tarot`; the tile's calls say the person at its keys asked (`mutation: { author: "user" }`,
+  `requestedBy` in the change feed).
 - **Where it runs.** The command is a path on the service's host (`host` in the listing). A door on
   another machine shows the tile kind as unavailable rather than running something else.
 

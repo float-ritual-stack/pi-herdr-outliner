@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { DraftPatchInput, DraftPatchResult } from "./draft-patch";
 import type { DraftPatchSpan } from "./draft-patch-compare";
 import { durationMs, DEFAULT_DEADLINE_MS } from "./extension-manifest";
-import { extensionActorId, inertBlockdown } from "./extension-records";
+import { cleanExtensionText, extensionActorId, inertBlockdown } from "./extension-records";
 import type { ExtensionRegistry } from "./extension-registry";
 import { scanPropertyLiteralRanges } from "./properties";
 import type { ResourceProjection } from "./resource-projection";
@@ -104,9 +104,10 @@ function validateRespond(value: unknown): RespondValue {
   if (value.reply !== undefined && (typeof value.reply !== "string" || Buffer.byteLength(value.reply) > MAX_REPLY)) throw new Error("reply must be markdown up to 64 KiB");
   const patches = value.patches ?? [];
   if (!Array.isArray(patches) || patches.length > MAX_PATCHES) throw new Error(`patches must be a list of at most ${MAX_PATCHES}`);
+  // Kept clean: no terminal escapes or control characters reach a reader.
   return {
-    ...(typeof value.message === "string" ? { message: value.message } : {}),
-    ...(typeof value.reply === "string" ? { reply: value.reply } : {}),
+    ...(typeof value.message === "string" ? { message: cleanExtensionText(value.message) } : {}),
+    ...(typeof value.reply === "string" ? { reply: cleanExtensionText(value.reply, true) } : {}),
     patches: patches.map((patch, index) => {
       if (!isObject(patch) || typeof patch.observed !== "string" || !patch.observed || typeof patch.replacement !== "string") {
         throw new Error(`patches[${index}] must be { observed, replacement, before?, after? }`);
@@ -185,6 +186,41 @@ export class AgentRequests {
   }
 
   /**
+   * An extension wrote the block (its own record, an action's write, an agent's applied patch). That runs
+   * nothing, but the `@name` lines it holds now are what the next save is compared with: a line an
+   * extension's write left is never taken for one the person's next save added.
+   */
+  observe(blockId: string): void {
+    if (this.stopped) return;
+    const block = this.store.get(blockId);
+    if (!block) return;
+    this.remember(blockId, this.shapes(block));
+    // Requests whose lines the write took out are withdrawn, as after any save.
+    if (this.withdraw(blockId, this.lines(block).map((line) => line.requestKey))) this.deps.changed(blockId);
+  }
+
+  /**
+   * Rows and waiting timers of request lines a block no longer has go (rows of names no extension answers now
+   * stay: the folder may be coming back). Whether anything was known about the block's requests.
+   */
+  private withdraw(blockId: string, keys: readonly string[]): boolean {
+    const rows = this.store.agentRequests(blockId);
+    let waiting = false;
+    for (const [key, timer] of this.timers) {
+      const [timerBlock, requestKey] = key.split("\0");
+      if (timerBlock !== blockId) continue;
+      waiting = true;
+      if (!keys.includes(requestKey!)) {
+        clearTimeout(timer);
+        this.timers.delete(key);
+      }
+    }
+    if (!rows.length && !waiting) return false;
+    this.store.pruneAgentRequests(blockId, [...keys, ...rows.filter((row) => !this.registry.agent(row.agent)).map((row) => row.requestKey)]);
+    return true;
+  }
+
+  /**
    * A block was saved (not by an extension). A request line this save added
    * runs once the note has been quiet for a moment, when a person wrote it;
    * when an agent or an import did, it is recorded as waiting for `r`. Lines
@@ -206,19 +242,10 @@ export class AgentRequests {
     const before = new Set(created ? [] : this.store.agentRequestBaseline(blockId) ?? []);
     this.remember(blockId, shapes);
     const rows = this.store.agentRequests(blockId);
-    const waitingTimers = [...this.timers.keys()].some((key) => key.startsWith(`${blockId}\0`));
+    // A request still waiting for quiet that the note no longer has is withdrawn; rows follow the text.
+    const known = this.withdraw(blockId, keys);
     // Most saves: no request lines, nothing known, nothing waiting. No event either.
-    if (!lines.length && !rows.length && !waitingTimers) return;
-    // A request still waiting for quiet that the note no longer has is withdrawn.
-    for (const [key, timer] of this.timers) {
-      const [timerBlock, requestKey] = key.split("\0");
-      if (timerBlock === blockId && !keys.includes(requestKey!)) {
-        clearTimeout(timer);
-        this.timers.delete(key);
-      }
-    }
-    // Rows of names no extension answers now stay (the folder may be coming back); others follow the text.
-    this.store.pruneAgentRequests(blockId, [...keys, ...rows.filter((row) => !this.registry.agent(row.agent)).map((row) => row.requestKey)]);
+    if (!lines.length && !known) return;
     const answered = new Set(rows.map((row) => row.requestKey));
     const byPerson = actor?.author === "user";
     for (const line of lines) {

@@ -10,6 +10,7 @@ import {
   CredentialSchema,
   ExtensionLoadError,
   MAX_DEADLINE_MS,
+  folderStamp,
   readExtensionFolder,
   type ExtensionHandler,
   type ExtensionOrigin,
@@ -330,13 +331,19 @@ export class ResourceExtensionRuntime {
     signal?: AbortSignal,
     deadlineMs?: number,
   ): Promise<ExtensionResult> {
-    return this.invokeInstalled(provider, await this.installation(provider), operation, input, signal, deadlineMs, true);
+    const installed = await this.installation(provider);
+    // Disable/config changes during a call invalidate its result before the catalog can commit it.
+    return this.invokeInstalled(provider, installed, operation, input, signal, deadlineMs,
+      async () => (await this.installation(provider)).stamp === installed.stamp);
   }
 
   /**
    * One call to the version the registry serves (`src/extension-registry.ts`):
    * a folder whose manifest broke since keeps running its last good manifest
-   * and config, as `extensions.list` says. Code is still read fresh.
+   * and config, as `extensions.list` says. Code is still read fresh. Its
+   * folder is read again when the call answers: an extension disabled,
+   * removed or changed while it ran has its answer discarded (`stamp`), so
+   * nothing it returned is kept or written.
    */
   async invokeLoaded(
     extension: LoadedExtension,
@@ -346,12 +353,24 @@ export class ResourceExtensionRuntime {
   ): Promise<ExtensionResult> {
     if (!extension.command) throw failure(`${extension.name} runs no code (its extension.json has no run)`);
     if (!extension.enabled) throw failure(`${extension.name} is disabled in ${join(extension.directory, "config.json")}`);
+    const before = await folderStamp(extension.directory);
     return this.invokeInstalled(extension.id, {
       install: { manifest: join(extension.directory, "extension.json"), enabled: true, config: extension.config, credentials: extension.credentials },
       manifest: { contract: 2 as const, id: extension.id, version: extension.version, command: extension.command, name: extension.name },
       directory: extension.directory,
       stamp: extension.stamp,
-    }, operation, input, undefined, deadlineMs, false);
+    }, operation, input, undefined, deadlineMs, async () => {
+      const after = await folderStamp(extension.directory);
+      // Removed, or edited while it ran.
+      if (after === null || after !== before) return false;
+      if (after === extension.stamp) return true;
+      // Changed before the call and not reloaded yet: a broken manifest keeps its last good copy; a disabled one doesn't run.
+      try {
+        return (await readExtensionFolder(extension.directory, extension.origin)).enabled;
+      } catch {
+        return true;
+      }
+    });
   }
 
   private async invokeInstalled(
@@ -366,7 +385,8 @@ export class ResourceExtensionRuntime {
     input: unknown,
     signal: AbortSignal | undefined,
     deadlineMs: number | undefined,
-    recheck: boolean,
+    /** Whether the extension is still the one that was called, asked once it answers. */
+    unchanged: () => Promise<boolean>,
   ): Promise<ExtensionResult> {
     const deadline = Math.min(MAX_DEADLINE_MS, deadlineMs ?? this.timeoutMs);
     signal = AbortSignal.any([
@@ -380,11 +400,25 @@ export class ResourceExtensionRuntime {
       let value: string | undefined;
       if ("env" in reference) value = process.env[reference.env];
       else if ("file" in reference) {
+        // Say what is wrong with the file (where it is, its mode or size), never what is in it.
+        const path = reference.file.replace(/^~(?=\/)/, homedir());
+        const file = Bun.file(path);
+        let mode: number;
         try {
-          const file = Bun.file(reference.file.replace(/^~(?=\/)/, homedir()));
-          const mode = (await file.stat()).mode & 0o077;
-          if (mode === 0 && file.size <= 16 * 1024) value = (await file.text()).trim();
-        } catch {}
+          mode = (await file.stat()).mode;
+        } catch {
+          throw failure(`no ${loaded.manifest.name} credentials on this machine: the ${name} secret's file ${path} can't be read (missing, or not yours)`);
+        }
+        if (mode & 0o077) {
+          throw failure(`${loaded.manifest.name}'s ${name} secret file ${path} is readable by others (mode ${(mode & 0o777).toString(8).padStart(3, "0")}); chmod 600 it`);
+        }
+        if (file.size > 16 * 1024) throw failure(`${loaded.manifest.name}'s ${name} secret file ${path} is larger than 16 KiB; a secret file holds only the secret`);
+        try {
+          value = (await file.text()).trim();
+        } catch {
+          throw failure(`no ${loaded.manifest.name} credentials on this machine: the ${name} secret's file ${path} can't be read`);
+        }
+        if (!value) throw failure(`${loaded.manifest.name}'s ${name} secret file ${path} is empty`);
       }
       else if (process.platform === "darwin") {
         const command = [
@@ -427,9 +461,8 @@ export class ResourceExtensionRuntime {
       deadline,
       signal,
     );
-    // Disable/config changes during a call invalidate its result before the catalog can commit it.
-    if (recheck && (await this.installation(provider)).stamp !== loaded.stamp)
-      throw failure("configuration changed during request; refresh to retry");
+    if (!(await unchanged()))
+      throw failure(`${loaded.manifest.name} was changed, disabled or removed while it ran; its answer was discarded (refresh to retry)`);
     let envelope: unknown;
     try {
       envelope = JSON.parse(output);

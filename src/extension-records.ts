@@ -1,5 +1,6 @@
 import { parsePropertyRecords } from "./properties";
 import { isPropertyKey, propertyTokenPattern } from "./property-grammar";
+import { sanitizedTextParts } from "./terminal";
 
 /**
  * Extension records: a remote record (a Jira ticket first) kept as real blocks.
@@ -65,7 +66,21 @@ export function extensionActorId(extensionId: string): string {
 }
 
 export function isExtensionActor(actorId: string | undefined | null): boolean {
-  return typeof actorId === "string" && actorId.startsWith("ext:");
+  return typeof actorId === "string" && actorId.trim().startsWith("ext:");
+}
+
+/**
+ * Text an extension returned, made safe to keep and to print: terminal escape
+ * sequences (CSI, OSC, DCS and the rest, 7-bit and C1 alike) and other control
+ * characters go, through the one stripper readers use (`terminal.ts`). Tabs
+ * stay, and so do line breaks when `lines` (markdown, a body); a label or a
+ * message is one line.
+ */
+export function cleanExtensionText(text: string, lines = false): string {
+  const source = text.replace(/\r\n?/g, "\n");
+  return sanitizedTextParts(source, lines)
+    .map((part) => (part.end - part.start === 1 && source[part.start] === "\t" ? "\t" : part.text))
+    .join("");
 }
 
 const MAX_VALUE_UNITS = 200;
@@ -74,7 +89,7 @@ const FIELD_KEY = /^[a-z][a-z0-9_-]*$/;
 
 /** A property value: one line, no `]`, bounded. Empty means "leave the property out". */
 function propertyValue(value: string): string {
-  const single = value.replace(/[\u0000-\u001f\u007f]+/g, " ").replaceAll("]", ")").replace(/\s+/g, " ").trim();
+  const single = cleanExtensionText(value.replace(/[\r\n\t]/g, " ")).replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").replaceAll("]", ")").replace(/\s+/g, " ").trim();
   return single.length > MAX_VALUE_UNITS ? `${single.slice(0, MAX_VALUE_UNITS - 1)}…` : single;
 }
 
@@ -94,21 +109,22 @@ function inertLines(text: string): string {
 }
 
 function title(text: string): string {
-  const line = text.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim() || "(untitled)";
+  const line = cleanExtensionText(text.replace(/[\r\n\t]/g, " ")).replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").replace(/\s+/g, " ").trim() || "(untitled)";
   const bounded = line.length > MAX_TITLE_UNITS ? `${line.slice(0, MAX_TITLE_UNITS - 1)}…` : line;
   // A subject that starts like a heading, list item or property line would read as one.
   return escapeTokens(bounded.replace(/^([#>*+-]|\d+\.)/, "\\$1"));
 }
 
 function body(text: string): string {
-  return inertLines(escapeTokens(text.replace(/\r\n?/g, "\n"))).trim();
+  return inertLines(escapeTokens(cleanExtensionText(text, true))).trim();
 }
 
 /**
  * Text an extension wrote, made safe to put in a block: a `[key::value]` in it
  * stays text and a `key::` line start keeps its words without the meaning
- * (BlockDown with no properties of its own). Outputs kept as blocks and the
- * `blockdown` render target use it.
+ * (BlockDown with no properties of its own), with no terminal escapes or
+ * control characters. Outputs kept as blocks, an action's created blocks and
+ * the `blockdown` render target use it.
  */
 export function inertBlockdown(text: string): string {
   return body(text);

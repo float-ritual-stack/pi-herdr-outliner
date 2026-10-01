@@ -177,6 +177,34 @@ function normalizeFollowProvenance(mutation: MutationProvenance): MutationProven
   };
 }
 
+/**
+ * An `ext:<id>` actor a client names for itself, anywhere it declares who writes (`mutation`, `provenance`,
+ * `actor`, nested in a request's input too). Those ids are the extensions' own: only the service's extension
+ * runtime writes as one, and readers trust the prefix (no `@agent` run, publishing credit, the feed's
+ * extension filter). A co-written id (`ep0ch-door:host+ext:tidy`) names the writer first and is not one.
+ */
+function claimedExtensionActor(value: unknown, depth = 0): string | undefined {
+  if (!value || typeof value !== "object" || depth > 6) return undefined;
+  if (Array.isArray(value)) {
+    for (const item of value.slice(0, 1000)) {
+      const found = claimedExtensionActor(item, depth + 1);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  for (const [key, item] of Object.entries(value)) {
+    if ((key === "mutation" || key === "provenance" || key === "actor") && item && typeof item === "object") {
+      const actorId = (item as { actorId?: unknown }).actorId;
+      if (isExtensionActor(typeof actorId === "string" ? actorId : undefined)) return (actorId as string).trim();
+    }
+    if (key !== "text" && item && typeof item === "object") {
+      const found = claimedExtensionActor(item, depth + 1);
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
 function declaredActor(request: OutlinerRequest): MutationProvenance | undefined {
   const mutation = "mutation" in request ? request.mutation : undefined;
   if (mutation && typeof mutation === "object") {
@@ -306,6 +334,8 @@ export class OutlinerServer {
       ...(options.agentRequestQuietMs !== undefined ? { quietMs: options.agentRequestQuietMs } : {}),
     });
     this.extensionCalls = new ExtensionCalls(store, this.extensionRegistry, extensionRuntime, {
+      // An action's update goes where an @agent's edit goes: draft.patch, the edit policy's guard.
+      patch: (input) => this.draftPatches.patch(input),
       changed: (blockId) => this.broadcast({
         id: crypto.randomUUID(), domain: "resource-catalog", action: "extensions.output", sequence: this.store.sequence, blockId,
       }),
@@ -1558,8 +1588,13 @@ export class OutlinerServer {
           if (request.line !== undefined && (!Number.isSafeInteger(request.line) || request.line < 0)) throw new Error("line must be a line index");
           if (request.args !== undefined && (!request.args || typeof request.args !== "object" || Array.isArray(request.args) ||
             Object.values(request.args).some((value) => typeof value !== "string"))) throw new Error("args must map names to text");
+          const requestedBy = declaredActor(request);
+          if (requestedBy && (!["user", "agent", "system"].includes(requestedBy.author) || (requestedBy.author === "agent" && !requestedBy.actorId?.trim()))) {
+            throw new Error("extensions.act's mutation names who asks: { author: user } or { author: agent, actorId }");
+          }
           result = await this.extensionCalls.act({
             extension: request.extension, action: request.extensionAction,
+            ...(requestedBy ? { requestedBy } : {}),
             ...(request.blockId !== undefined ? { blockId: request.blockId } : {}),
             ...(request.line !== undefined ? { line: request.line } : {}),
             ...(request.args !== undefined ? { args: request.args } : {}),
@@ -2959,12 +2994,16 @@ export class OutlinerServer {
     for (const event of events) this.broadcast(event);
     for (const event of events) {
       if (event.domain === "content" && event.blockId) this.refreshAttentionForBlock(event.blockId);
-      // A saved provider line fetches its ticket in the background; the extension's own writes don't loop.
-      if (event.domain === "content" && event.blockId && (event.change?.kind === "create" || event.change?.kind === "edit") &&
-        !isExtensionActor(event.change.actor?.actorId)) {
-        this.extensionSync.blockChanged(event.blockId);
-        this.extensionCalls.blockChanged(event.blockId, event.change.actor, event.change.kind === "create");
-        this.agentRequests.blockChanged(event.blockId, event.change.actor, event.change.kind === "create");
+      // A saved provider line fetches its ticket in the background; the extension's own writes don't loop
+      // (they run nothing), but what they leave is still the request lines a later save is compared with.
+      if (event.domain === "content" && event.blockId && (event.change?.kind === "create" || event.change?.kind === "edit")) {
+        if (isExtensionActor(event.change.actor?.actorId)) {
+          this.agentRequests.observe(event.blockId);
+        } else {
+          this.extensionSync.blockChanged(event.blockId);
+          this.extensionCalls.blockChanged(event.blockId, event.change.actor, event.change.kind === "create");
+          this.agentRequests.blockChanged(event.blockId, event.change.actor, event.change.kind === "create");
+        }
       }
     }
     if (events.some(event => event.domain === "content")) this.inbox?.wake();
@@ -3051,6 +3090,11 @@ export class OutlinerServer {
       // The host routed this connection by its first line; it stays with that outline.
       if (this.hosted && request.outline !== undefined && request.outline !== this.outline?.name) {
         throw new Error(`This connection serves the outline "${this.outline?.name}"; open a new connection for "${String(request.outline)}"`);
+      }
+      const claimed = claimedExtensionActor(request);
+      if (claimed) {
+        throw new Error(`${claimed} is an extension's own actor id: only the service writes as an extension. ` +
+          "Write as yourself (author: agent with your own actorId); to have an extension write, ask it with extensions.act");
       }
       const subscribedClient = request.action === "events.subscribe"
         ? this.registerSubscriber(socket, request.client)

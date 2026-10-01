@@ -1,6 +1,7 @@
 // Kind 4, a whole tile: a terminal program the door runs in a tile of kind `tarot.reading`. It draws
 // itself and reaches the outline only through the service's actions (`extensions.act`), so what it
-// writes is attributed to ext:tarot, exactly as when an agent runs the same action.
+// writes is attributed to ext:tarot, exactly as when an agent runs the same action. Keys in the tile are
+// the person's, so each action says so (`mutation`, recorded as who asked: `requestedBy`).
 //
 // The door starts it with the command, cwd and env from `extensions.list` (`tileKinds`), adds its own
 // EP0CH_CONTROL, and passes the tile's saved args as `--name=value` (here `--block=<id>`).
@@ -33,6 +34,9 @@ function request<T>(body: Record<string, unknown>): Promise<T> {
     socket.write(`${JSON.stringify({ id: crypto.randomUUID(), ...(outline ? { outline } : {}), ...body })}\n`);
   });
 }
+
+/** Who asks: the person at the tile's keys. */
+const ASKER = { author: "user" } as const;
 
 let draws = 0;
 let status = args.block ? "d draws again · k keeps it · q closes" : "d draws again · q closes (open with a block to keep)";
@@ -69,10 +73,10 @@ async function key(input: string): Promise<void> {
       draws += 1;
       card = draw(`${new Date().toISOString().slice(0, 10)} ${draws}`);
       // The same draw through the service, so an agent's draw and this one agree.
-      const result = await request<{ message?: string }>({ action: "extensions.act", extension: "tarot", extensionAction: "draw", args: { draw: String(draws) } });
+      const result = await request<{ message?: string }>({ action: "extensions.act", extension: "tarot", extensionAction: "draw", args: { draw: String(draws) }, mutation: ASKER });
       status = result.message ?? status;
     } else if (input === "k" && args.block) {
-      const result = await request<{ message?: string }>({ action: "extensions.act", extension: "tarot", extensionAction: "keep", blockId: args.block, args: { draw: String(draws) } });
+      const result = await request<{ message?: string }>({ action: "extensions.act", extension: "tarot", extensionAction: "keep", blockId: args.block, args: { draw: String(draws) }, mutation: ASKER });
       status = result.message ?? "kept";
     }
   } catch (error) {

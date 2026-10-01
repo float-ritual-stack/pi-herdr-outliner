@@ -1753,6 +1753,16 @@ export const OUTLINER_CAPABILITIES = [
   /** `extensions.act`: run an extension's action (or the built-in `keep`); its writes are attributed `ext:<id>`. */
   "extensions.act",
   /**
+   * `extensions.act` takes `mutation` (who asks), recorded as `requestedBy` beside the extension's writes in
+   * `changes.since`. An action's update applies through `draft.patch` (`edit` policy); its created text is inert.
+   */
+  "extensions.act.requester",
+  /**
+   * `ext:<id>` actor ids are the extensions' own: a client's write (or `extensions.act` requester) that
+   * names one is refused. Only the service's extension runtime writes as an extension.
+   */
+  "mutations.ext-reserved",
+  /**
    * Agents addressed while you write (PIE-501): a person's `@name …` line runs the agent an extension declares;
    * its edit applies through `draft.patch` (`edit` policy), or its reply shows under the line. Projections of
    * kind `agent`; `resources.projection.refresh` on the line asks again.
@@ -2300,7 +2310,17 @@ export type OutlinerRequestAction =
   /** Capability `extensions.render`: the results of a block's handler lines (or the one on `line`) in `target`. */
   | { id: string; action: "extensions.render"; blockId: string; line?: number; target: string; fallback?: string }
   /** Capability `extensions.act`: an extension's action on a block (and line), or on a tile with `args`. */
-  | { id: string; action: "extensions.act"; extension: string; extensionAction: string; blockId?: string; line?: number; args?: Record<string, string> }
+  | {
+      id: string; action: "extensions.act"; extension: string; extensionAction: string; blockId?: string; line?: number; args?: Record<string, string>;
+      /**
+       * Capability `extensions.act.requester`: who asks (the person, or an agent with its actor id). The writes
+       * stay `ext:<id>`'s; the change feed records this beside them as `requestedBy`. `author`/`provenance`
+       * are read the same way, as on `create`.
+       */
+      mutation?: MutationProvenance;
+      author?: BlockAuthor;
+      provenance?: BlockProvenance;
+    }
   /** Compare-and-swap on spans of notes' text (capability `draft.patch`). */
   | ({ id: string; action: "draft.patch" } & DraftPatchInput)
   /** "Apply anyway": a proposal block's patch as an ordinary edit (capability `draft.proposal.apply`). */
@@ -2582,6 +2602,11 @@ export interface OutlinerChange {
   deleted?: boolean;
   /** Declared provenance of the request; absent when the request carried none. */
   actor?: MutationProvenance;
+  /**
+   * Who asked for the change when that isn't its writer: an extension's action (`actor` `ext:<id>`) run for
+   * the person or an agent (`extensions.act`'s `mutation`). Absent when the writer acted on its own.
+   */
+  requestedBy?: MutationProvenance;
   recordedAt: string;
 }
 

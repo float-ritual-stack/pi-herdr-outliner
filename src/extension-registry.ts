@@ -455,10 +455,18 @@ export class ExtensionRegistry {
     this.timer.unref?.();
   }
 
-  /** Watches each root recursively, or its nearest existing parent until it exists. Re-armed after every reload. */
+  /** What each root was last watched through: the root itself, or its nearest existing parent. */
+  private readonly armedAt = new Map<string, string>();
+
+  /**
+   * Watches each root recursively, or its nearest existing parent until it exists. Re-armed after every
+   * reload; when what a root is watched through changed (the folder appeared or went), it reloads once more,
+   * since what was made between the reload's read and this watch had no watcher to see it.
+   */
   private arm(): void {
     for (const watcher of this.watchers) watcher.close();
     this.watchers = [];
+    let moved = false;
     for (const root of this.options.roots) {
       let target = root.path;
       let recursive = true;
@@ -468,6 +476,9 @@ export class ExtensionRegistry {
         target = parent;
         recursive = false;
       }
+      const before = this.armedAt.get(root.path);
+      if (before !== undefined && before !== target) moved = true;
+      this.armedAt.set(root.path, target);
       try {
         const watcher = watch(target, { recursive, persistent: false }, () => this.schedule());
         watcher.on("error", () => this.schedule());
@@ -476,5 +487,6 @@ export class ExtensionRegistry {
         // A folder we can't watch is still read on the next reload another root triggers.
       }
     }
+    if (moved) this.schedule();
   }
 }
