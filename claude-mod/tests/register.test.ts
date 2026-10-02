@@ -568,8 +568,8 @@ describe('register', () => {
     })
 
     test("the person on middle and a door that doesn't know this tile: show lands where the door's opens land, not refused", async ($, on) => {
-      // The CLI asks the door from= first, then naming no tile (door-control); the door answers where it put it. The
-      // mod never names middle, so a door refusing an agent on the person's reader never sees that request.
+      // What this proves is the argv: --from alone, never --reader (the stub refuses one, as a door would with the
+      // person on middle). The CLI's ask-again naming no tile is door-control's, proved in test/door-control.test.ts.
       const session = sessionIn(on, WORKSPACE, run =>
         run.argv.includes('door-open')
           ? run.argv.includes('--reader') ? result(1, '', "error: middle has the person's keys; an agent doesn't open there\n") : result(0, '{"reader":"side","id":"x"}\n', '')

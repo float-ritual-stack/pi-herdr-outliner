@@ -86,7 +86,7 @@ A click, `show` and `door_open` share one open (`openNote` in
    door puts it where that tile's opens land (its link: the daily layout links
    the claude tile to its middle detail) and says which reader that was. A door
    older than `open from=`, or without that tile, is asked again naming no
-   reader, and puts it where its own `open` puts notes, which never takes the
+   tile, and puts it where its own `open` puts notes, which never takes the
    person's keys. The mod never names a reader (it used to ask for `middle`; a
    door refuses an agent that names the reader the person is on).
    - The door says who opened it (`claude-code`, or `OUTLINER_ACTOR` /
