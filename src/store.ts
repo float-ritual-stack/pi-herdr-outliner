@@ -2870,7 +2870,9 @@ export class OutlinerStore {
       let ranked: { row: PageAddressMatchRow; exact: boolean }[];
       if (query?.trim()) {
         // No id: an address is found by what it says, never by the uuid of the note it names.
-        const matches = rankTextSearchMatches(rows.map(row => ({ id: "", title: row.display_address, text: `${row.display_address}\n${titleOf(row)}`, row })), query.trim());
+        // A title's letters scattered in order (`text-fuzzy`) are too loose for an address: the address's own are kept.
+        const matches = rankTextSearchMatches(rows.map(row => ({ id: "", title: row.display_address, text: `${row.display_address}\n${titleOf(row)}`, row })), query.trim())
+          .filter(match => match.kind !== "text-fuzzy");
         if (context) {
           const sorted = sortByContext(matches.map(match => ({ match, block: byId.get(match.document.row.block_id)!, kind: match.kind })).filter(entry => entry.block), context);
           ranked = sorted.map(({ match }) => ({ row: match.document.row, exact: match.kind === "exact-title" }));
