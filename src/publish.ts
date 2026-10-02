@@ -1,4 +1,4 @@
-import { hostname } from "node:os";
+import { hostname, networkInterfaces } from "node:os";
 import { extname } from "node:path";
 import { Marked } from "marked";
 import type { OutlinerClient, OutlinerWatcher } from "./client";
@@ -367,6 +367,20 @@ export function parsePublicUrl(value: string | undefined): { basePath: string; o
   return { basePath: normalizeBasePath(url.pathname) || DEFAULT_PUBLIC_BASE_PATH, origin: url.origin };
 }
 
+/**
+ * The one address the public listener may bind: loopback, or an address one of
+ * this machine's interfaces has (its tailnet address, for a proxy elsewhere on
+ * the tailnet). Anything else, including every spelling of "all interfaces"
+ * (`0.0.0.0`, `::`, `::0`, `00.0.0.0`), is refused, so the listener is never on
+ * the LAN by accident.
+ */
+export function checkPublicBind(address: string, interfaces = networkInterfaces()): string {
+  const wanted = address.trim().toLowerCase();
+  const own = new Set(Object.values(interfaces).flatMap((list) => (list ?? []).map((entry) => entry.address.toLowerCase())));
+  if (wanted === "127.0.0.1" || wanted === "::1" || own.has(wanted)) return wanted;
+  throw new Error(`--public-bind must be 127.0.0.1, ::1 or one of this machine's own addresses (such as its tailnet address), never every interface: ${address}`);
+}
+
 /** Where the public listener is mounted when nothing says otherwise. */
 export const DEFAULT_PUBLIC_BASE_PATH = "/share";
 
@@ -377,7 +391,9 @@ export class Publisher {
   readonly publicBase: { basePath: string; origin?: string };
   private readonly maxBytes: number;
   private readonly log: (line: string) => void;
-  private readonly allowedHosts: Set<string>;
+  private readonly allowedHosts: ReadonlySet<string>;
+  /** The `--public-url` host: answered on the public listener only. */
+  private readonly publicHost: string | undefined;
   private policy: AttachmentPolicy | null = null;
   private readonly compiler: ArtifactCompiler | null;
   private index: { value: PublishedIndex; at: number } | null = null;
@@ -395,14 +411,14 @@ export class Publisher {
     this.log = options.log ?? (() => {});
     this.allowedHosts = new Set((options.allowedHosts ?? []).map((host) => host.trim().toLowerCase()).filter(Boolean));
     // The name anyone opens the public listener at (a custom domain behind Caddy, say) is a Host it answers.
-    if (this.publicBase.origin) this.allowedHosts.add(new URL(this.publicBase.origin).hostname.toLowerCase());
+    this.publicHost = this.publicBase.origin ? new URL(this.publicBase.origin).hostname.toLowerCase() : undefined;
     this.compiler = options.artifactCacheDirectory
       ? new ArtifactCompiler({ cacheDirectory: options.artifactCacheDirectory, log: this.log })
       : null;
   }
 
   /** Loopback, a tailnet name, or a host the operator allowed; the port is ignored. */
-  private hostAllowed(header: string | null): boolean {
+  private hostAllowed(header: string | null, audience: PublishAudience): boolean {
     if (!header) return false;
     let host: string;
     try {
@@ -411,7 +427,7 @@ export class Publisher {
       return false;
     }
     return host === "127.0.0.1" || host === "localhost" || host === "[::1]" ||
-      host.endsWith(".ts.net") || this.allowedHosts.has(host);
+      host.endsWith(".ts.net") || this.allowedHosts.has(host) || (audience === "public" && host === this.publicHost);
   }
 
   /**
@@ -543,7 +559,7 @@ export class Publisher {
     if (request.method !== "GET" && request.method !== "HEAD") {
       return respond("Read-only\n", "text/plain; charset=utf-8", 405, { allow: "GET, HEAD" });
     }
-    if (!this.hostAllowed(request.headers.get("host") ?? new URL(request.url).host)) {
+    if (!this.hostAllowed(request.headers.get("host") ?? new URL(request.url).host, audience)) {
       return respond("Host not allowed\n", "text/plain; charset=utf-8", 421);
     }
     const url = new URL(request.url);

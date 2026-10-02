@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OutlinerClient } from "../src/client";
 import { resolvePaths } from "../src/paths";
-import { assignPaths, parsePublicUrl, publishIntent, Publisher, renderSubtreeMarkdown, servePublisher, slugify, type PublishedIndex } from "../src/publish";
+import { assignPaths, checkPublicBind, parsePublicUrl, publishIntent, Publisher, renderSubtreeMarkdown, servePublisher, slugify, type PublishedIndex } from "../src/publish";
 import { canonicalPublishRoots, checkAttachment, type AttachmentPolicy } from "../src/publish-attachments";
 import { OutlinerServer } from "../src/server";
 import { OutlinerStore } from "../src/store";
@@ -922,8 +922,18 @@ test("a custom public domain: its links come from --public-url and its Host is a
     publisher.handle(new Request(`http://127.0.0.1${path}`, { headers: { host } }), "public");
   expect((await at("share.moth-garden.example")).status).toBe(200);
   expect((await at("elsewhere.example")).status).toBe(421);
+  // The custom domain is answered on the public listener only.
+  expect((await publisher.handle(new Request("http://127.0.0.1/index.json", { headers: { host: "share.moth-garden.example" } }))).status).toBe(421);
   const text = await (await publisher.handle(new Request("http://127.0.0.1/index.txt"))).text();
   expect(text).toContain("https://share.moth-garden.example/s/p/moth-walk");
   // Links inside a public page stay relative to the mount.
   expect(await (await at("share.moth-garden.example", "/s/p/moth-walk?view=html")).text()).toContain('href="/s/p/moth-walk"');
+});
+
+test("the public listener binds loopback or one of this machine's own addresses, never every interface", () => {
+  const interfaces = { lo: [{ address: "127.0.0.1" }], tailscale0: [{ address: "100.64.0.7" }, { address: "fd7a:115c:a1e0::7" }] } as unknown as ReturnType<typeof import("node:os").networkInterfaces>;
+  for (const ok of ["127.0.0.1", "::1", "100.64.0.7", "FD7A:115C:A1E0::7"]) expect(() => checkPublicBind(ok, interfaces)).not.toThrow();
+  for (const bad of ["0.0.0.0", "::", "::0", "0::", "0:0:0:0:0:0:0:0", "00.0.0.0", "000.000.000.000", "192.168.1.9", "localhost", ""]) {
+    expect(() => checkPublicBind(bad, interfaces)).toThrow(/never every interface/);
+  }
 });

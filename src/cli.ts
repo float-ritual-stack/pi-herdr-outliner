@@ -133,10 +133,8 @@ async function runPublishCommand(operation: string | undefined, args: string[]):
     if (publicPort !== undefined && (!Number.isInteger(publicPort) || publicPort < 0 || publicPort > 65535)) throw new Error("--public-port must be a port number");
     if (publicPort !== undefined && publicPort !== 0 && publicPort === port) throw new Error("--public-port must differ from --port");
     const publicUrl = values["public-url"] ?? process.env.OUTLINER_PUBLIC_URL;
-    const publicBind = (values["public-bind"] ?? process.env.OUTLINER_PUBLIC_BIND ?? "127.0.0.1").trim();
-    if (!/^(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9a-fA-F:]+)$/.test(publicBind) || publicBind === "0.0.0.0" || publicBind === "::") {
-      throw new Error("--public-bind must be one IP address of this machine (127.0.0.1, or its tailnet address), never every interface");
-    }
+    const { checkPublicBind } = await import("./publish");
+    const publicBind = checkPublicBind(values["public-bind"] ?? process.env.OUTLINER_PUBLIC_BIND ?? "127.0.0.1");
     const { Publisher, servePublisher, renderIndexText } = await import("./publish");
     const publisher = new Publisher({
       client: createOutlinerClient(resolveClientPaths()),
