@@ -139,3 +139,15 @@ test("a folder with its own hash database is not its ancestor's binding (every c
   expect(boundFolderOf(shed, env)).toBeUndefined();
   expect(boundFolderOf(garden, env)).toMatchObject({ folder: garden });
 });
+
+test("a folder with its own hash database under a host's recorded root is not that root's either", () => {
+  const { env, folder, hosted } = machine();
+  const camp = folder("bandit-camp");
+  const tent = folder("bandit-camp", "tent");
+  hosted("jam-shelf", camp);
+  const { database } = resolvePaths({ ...env, OUTLINER_WORKSPACE_ROOT: tent });
+  mkdirSync(dirname(database), { recursive: true });
+  writeFileSync(database, "");
+  expect(boundFolderOf(tent, env)).toBeUndefined();
+  expect(boundFolderOf(camp, env)).toMatchObject({ source: "host-root", outline: "jam-shelf" });
+});

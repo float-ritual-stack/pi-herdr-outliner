@@ -51,13 +51,9 @@ folders, separated by `:` or `,`. What the list means is
 
 | Mode | The list |
 |---|---|
-| `folder` (or unset) | Folders opted out: a session in one, or below it, feeds nothing even when bound. |
+| `folder` (unset with no list) | Folders opted out: a session in one, or below it, feeds nothing even when bound. |
 | `allowlist` | Strict mode, as before folder mode: only listed folders (and their subfolders) feed, bound or not; the nearest listed folder is the workspace, and the CLI resolves its outline as it always did. |
-
-A list written before folder mode (with no mode) was the allowlist; it is now
-read as opt-outs, so its folders feed nothing until you drop it
-(`install-claude-mod.ts --folder`: bound folders then feed on their own) or
-keep strict mode (`--allowlist`). It fails closed, never open.
+| unset, with a list | Nothing feeds anywhere, with one toast a session. The list may be an allowlist from before folder mode, and reading it either way would start feeding folders nobody chose. Set the mode, or drop the list (`install-claude-mod.ts --folder`: every bound folder then feeds its outline). |
 
 The option wins over the environment variable when it is set. Claude Code
 passes an unset option as an empty string, so an empty option always falls back
@@ -236,7 +232,7 @@ other copy of this mod and backing the file up first.
 
 | Installer | Does |
 |---|---|
-| `install-claude-mod.ts` | Loads the mod. The folder list and mode are kept; a list with no mode is named as opted out. |
+| `install-claude-mod.ts` | Loads the mod. The folder list and mode are kept; a list with no mode is named (it feeds nothing until the mode is set). |
 | `install-claude-mod.ts --exclude /folder` | Opts the folder out (repeatable; `PI_OUTLINER_MENTIONS_MODE=folder`). |
 | `install-claude-mod.ts /folder` (or `--allowlist /folder`) | Strict mode: only these folders feed (`PI_OUTLINER_MENTIONS_MODE=allowlist`). |
 | `install-claude-mod.ts --folder` | Folder mode, dropping an allowlist (strict mode's, or a list with no mode from before folder mode) and naming its folders bound to no outline. |

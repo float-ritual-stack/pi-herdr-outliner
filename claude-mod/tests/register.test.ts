@@ -252,13 +252,31 @@ describe('register', () => {
     expect(ingest.init?.env).toEqual({ OUTLINER_WORKSPACE_ROOT: listed })
   })
 
-  test('a list with no mode opts out: an allowlist from before folder mode fails closed', async ($, on) => {
-    const session = sessionIn(on, `${WORKSPACE}/src`, succeeding, WORKSPACE)
-    await session.begin(() => $.session.start({ ...START, cwd: `${WORKSPACE}/src` }))
+  test('a list with no mode feeds nothing anywhere, bound or listed, and says why once', async ($, on) => {
+    {
+      // A bound folder that isn't listed: it would feed under either reading of the list, so this is the case that matters.
+      const cwd = WORKSPACE
+      const session = sessionIn(on, cwd, succeeding, `${WORKSPACE}-listed`)
+      on('tool.register', ($, e) => ({ value: { tool: `mcp__pi-outliner__${e.name}` } }))
+      await session.begin(() => $.session.start({ ...START, cwd }))
+      await $.turn.complete(ANSWER)
+      await $.turn.complete({ ...ANSWER, turnId: 'turn-2' })
+      await session.clock.settle()
+      expect(session.bindings).toEqual([])
+      expect(session.runs).toEqual([])
+      expect(session.toasts).toHaveLength(1)
+      expect(session.toasts[0]).toContain('PI_OUTLINER_MENTIONS_MODE is unset')
+      const denied = await $.tool.call({ tool: 'mcp__pi-outliner__work_stage', item: 'PIE-8', stage: 'doing' })
+      expect(denied.deny).toContain('PI_OUTLINER_MENTIONS_MODE is unset')
+    }
+  })
+
+  test("OUTLINER_REMOTE=0 (this machine) is not a remote socket: the bound folder feeds", async ($, on) => {
+    const session = sessionIn(on, WORKSPACE, succeeding, '', { OUTLINER_REMOTE: '0' })
+    await session.begin(() => $.session.start(START))
     await $.turn.complete(ANSWER)
     await session.clock.settle()
-    expect(session.bindings).toEqual([])
-    expect(session.runs).toEqual([])
+    expect(session.runs.filter(run => run.argv.includes('ingest'))).toHaveLength(1)
   })
 
   test("a remote socket in Claude's environment: nothing is fed, and it says why once", async ($, on) => {

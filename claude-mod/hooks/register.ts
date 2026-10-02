@@ -47,7 +47,7 @@ import {
  * nothing is linked) and its Work-ID prefixes. A render hook only reads, so
  * this is loaded beside it, not in it.
  */
-type ReferenceContext = { workspace: Workspace | null; prefixes: string[] }
+type ReferenceContext = { workspace: Workspace | null; prefixes: string[]; why?: string }
 let references: ReferenceContext | undefined
 /** The load in flight, so a tool call made while the session starts waits for it rather than being refused. */
 let loadingReferences: Promise<void> | undefined
@@ -156,7 +156,7 @@ export function register(on: On, options: PluginOptions): void {
       if (typeof command === 'string') return { deny: command }
       if (!references) await loadReferences($, option)
       const workspace = references?.workspace
-      if (!workspace) return { deny: NOT_BOUND }
+      if (!workspace) return { deny: references?.why ? `No Outliner outline for this session: ${references.why}` : NOT_BOUND }
       try {
         return { result: await runWorkCommand($, workspace, command, await actorFor($, {})) }
       } catch (error) {
@@ -172,7 +172,7 @@ export function register(on: On, options: PluginOptions): void {
       if (typeof command === 'string') return { deny: command }
       if (!references) await loadReferences($, option)
       const workspace = references?.workspace
-      if (!workspace) return { deny: NOT_BOUND }
+      if (!workspace) return { deny: references?.why ? `No Outliner outline for this session: ${references.why}` : NOT_BOUND }
       // outline_changes' `actor` filters by agent; every other tool's names who the write is attributed to.
       const actor = await actorFor($, tool.name === 'outline_changes' ? {} : input)
       try {
@@ -336,11 +336,11 @@ async function sessionWorkspace($: EngineInterface, options: PluginOptions): Pro
     $.session.cwd(),
   ])
   const listed = effectiveWorkspaces(options.workspaces, listedEnv, home)
-  const mode = mentionsModeOf(options.mode, modeEnv)
+  const mode = mentionsModeOf(options.mode, modeEnv, listed)
   if (mode === 'allowlist' || workspaceForCwd(cwd, listed) !== null) return sessionWorkspaceOf(cwd, mode, listed, null)
   // A remote socket in Claude's environment would take every CLI run elsewhere than the folder's binding.
   const [remote, socket] = await Promise.all([$.env.get('OUTLINER_REMOTE'), $.env.get('OUTLINER_SOCKET_PATH')])
-  if (remote?.trim() || socket?.trim()) {
+  if (remote?.trim() === '1' || socket?.trim()) {
     throw Error("OUTLINER_REMOTE / OUTLINER_SOCKET_PATH in Claude's environment would send it elsewhere than this folder's outline; unset them, or use strict mode (PI_OUTLINER_MENTIONS_MODE=allowlist)")
   }
   const root = await outlinerRootOf($)
@@ -491,7 +491,14 @@ function loadReferences($: EngineInterface, option: PluginOptions): Promise<void
 
 async function readReferences($: EngineInterface, option: PluginOptions): Promise<void> {
   try {
-    const workspace = await sessionWorkspace($, option)
+    let workspace: Workspace | null
+    try {
+      workspace = await sessionWorkspace($, option)
+    } catch (error) {
+      // Why no outline could be found: the tools' refusal says it.
+      references = { workspace: null, prefixes: [], why: error instanceof Error ? error.message : String(error) }
+      return
+    }
     if (!workspace) {
       references = { workspace: null, prefixes: [] }
       return

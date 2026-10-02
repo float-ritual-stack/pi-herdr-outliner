@@ -54,6 +54,8 @@ describe('mention-message', () => {
   test('the mode: folder unless allowlist is asked for; the option wins over the environment', async () => {
     expect(mentionsModeOf('', undefined)).toBe('folder')
     expect(mentionsModeOf(undefined, ' ')).toBe('folder')
+    expect(mentionsModeOf('', 'folder', ['/work/garden'])).toBe('folder')
+    expect(() => mentionsModeOf('', undefined, ['/work/garden'])).toThrow('PI_OUTLINER_MENTIONS_MODE is unset')
     expect(mentionsModeOf('', 'allowlist')).toBe('allowlist')
     expect(mentionsModeOf('folder', 'allowlist')).toBe('folder')
     expect(mentionsModeOf(' allowlist ', undefined)).toBe('allowlist')

@@ -42,6 +42,7 @@ test('the mode is folder unless allowlist is asked for; a list never implies one
  expect(mentionsModeOf('', 'allowlist')).toBe('allowlist');
  expect(mentionsModeOf('folder','allowlist')).toBe('folder');
  expect(()=>mentionsModeOf('','everywhere')).toThrow('neither folder nor allowlist');
+ expect(()=>mentionsModeOf('',undefined,['/work/old'])).toThrow('PI_OUTLINER_MENTIONS_MODE is unset');
 });
 
 test("bound-folder's answer binds only a folder holding the cwd, pinned to the outline it names",()=>{
@@ -148,7 +149,7 @@ test('folder mode: a reply in an unbound folder reaches no outline',async()=>{
 },15000);
 
 test('folder mode: an opted-out bound folder reaches no outline, and its binding is never asked for',async()=>{
- for(const [optionsOf,envOf] of [[()=>({}),root=>({PI_OUTLINER_MENTIONS_WORKSPACES:join(root,'projects')})],[root=>({workspaces:`${root}/`}),()=>({})]]){
+ for(const [optionsOf,envOf] of [[()=>({}),root=>({PI_OUTLINER_MENTIONS_MODE:'folder',PI_OUTLINER_MENTIONS_WORKSPACES:join(root,'projects')})],[root=>({workspaces:`${root}/`,mode:'folder'}),()=>({})]]){
   const {runs,entries}=await completeTurnIn(root=>join(root,'projects','mod'),optionsOf,envOf);
   expect(runs.some(run=>run.argv.includes('bound-folder')||run.argv.includes('ingest'))).toBe(false);
   expect(entries).toEqual([]);
@@ -160,6 +161,13 @@ test("folder mode: OUTLINER_REMOTE in Claude's environment feeds nothing and say
  expect(runs.some(run=>run.argv.includes('bound-folder')||run.argv.includes('ingest'))).toBe(false);
  expect(entries).toEqual([]);
  expect(toasts[0]).toContain('OUTLINER_REMOTE');
+},15000);
+
+test('a list with no mode feeds nothing, even in a bound folder, and says why',async()=>{
+ const {runs,entries,toasts}=await completeTurnIn(root=>join(root,'projects','mod'),()=>({}),()=>({PI_OUTLINER_MENTIONS_WORKSPACES:'/work/old-allowlist'}));
+ expect(runs.some(run=>run.argv.includes('bound-folder')||run.argv.includes('ingest'))).toBe(false);
+ expect(entries).toEqual([]);
+ expect(toasts[0]).toContain('PI_OUTLINER_MENTIONS_MODE is unset');
 },15000);
 
 test('strict allowlist mode: a listed folder feeds the outline as before, and an unlisted bound one does not',async()=>{

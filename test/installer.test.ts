@@ -229,7 +229,7 @@ test("Claude mod installer leaves a list from before folder mode opted out until
     await writeFile(settingsPath, JSON.stringify({ env: { PI_OUTLINER_MENTIONS_WORKSPACES: `${bound}:/scratch/unbound` } }));
     const kept = await runClaudeModInstaller(directory);
     expect(kept.exitCode).toBe(0);
-    expect(kept.stdout).toContain("with no mode: those folders are opted out");
+    expect(kept.stdout).toContain("with no mode, so the mod feeds nothing anywhere");
     expect(kept.stdout).toContain("--folder");
     let env = JSON.parse(await readFile(settingsPath, "utf8")).env;
     expect(env.PI_OUTLINER_MENTIONS_WORKSPACES).toBe(`${bound}:/scratch/unbound`);

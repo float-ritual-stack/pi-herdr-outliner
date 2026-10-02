@@ -13,10 +13,10 @@ import {boundFolderOf} from '../src/paths';
 //                                                mode's, or a list from before folder mode)
 //   install-claude-mod.ts [--allowlist] FOLDER…  strict mode: only these folders feed
 //
-// A list with no PI_OUTLINER_MENTIONS_MODE is opted out. One written before
-// folder mode was the allowlist, so its folders now feed nothing (it fails
-// closed); the installer says so, and --folder drops it, naming the listed
-// folders bound to no outline.
+// A list with no PI_OUTLINER_MENTIONS_MODE (one written before folder mode was
+// the allowlist) makes the mod feed nothing anywhere until the mode is set; the
+// installer says so, and --folder drops it, naming the listed folders bound to
+// no outline.
 const usage='Usage: install-claude-mod.ts [--exclude FOLDER]... | --folder | [--allowlist] FOLDER...';
 const excluded:string[]=[];
 const allowed:string[]=[];
@@ -93,7 +93,7 @@ if(allowed.length){
  write('folder',[...new Set([...listed,...excluded.map(folder=>resolve(folder))])]);
  if(env.PI_OUTLINER_MENTIONS_WORKSPACES)notes.push(`Opted out: ${env.PI_OUTLINER_MENTIONS_WORKSPACES}.`);
 }else if(listed.length&&!setMode){
- notes.push(`PI_OUTLINER_MENTIONS_WORKSPACES lists ${listed.join(', ')} with no mode: those folders are opted out. If it was your allowlist from before folder mode, run again with --folder to drop it (bound folders feed on their own), or with --allowlist to keep strict mode.`);
+ notes.push(`PI_OUTLINER_MENTIONS_WORKSPACES lists ${listed.join(', ')} with no mode, so the mod feeds nothing anywhere. If it was your allowlist from before folder mode, run again with --folder to drop it (every bound folder then feeds its outline), or with --allowlist <folder> to keep strict mode; to opt them out, set PI_OUTLINER_MENTIONS_MODE=folder.`);
 }else if(listed.length){
  notes.push(`Opted out: ${listed.join(', ')}.`);
 }
