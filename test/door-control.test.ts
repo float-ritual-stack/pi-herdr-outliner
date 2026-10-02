@@ -50,6 +50,13 @@ describe("showing a block in ep0ch-door", () => {
     }
   });
 
+  test("from alone (the Claude mod): the person on middle, a door without the tile lands it where its opens land, never naming middle", async () => {
+    // The door refuses an agent that names the reader the person is on (ep0ch-door round 3); this caller never does.
+    door = await fakeDoor(request => (request.args.from ? { ok: false, error: "no tile claude-gone; tiles: #1 tree, #2 middle, #3 side, focused, or a block id" } : request.reader ? { ok: false, error: "middle has the person's keys; an agent doesn't open there" } : { ok: true, result: { reader: "side", id: BLOCK } }));
+    expect(await openInDoor(door.path, BLOCK, { actor: "claude-code", from: "claude-gone" })).toEqual({ reader: "side", id: BLOCK });
+    expect(door.requests.map(request => [request.args.from ?? null, request.reader ?? null])).toEqual([["claude-gone", null], [null, null]]);
+  });
+
   test("with a reader too, a door older than from= is asked for that reader, then for none", async () => {
     door = await fakeDoor(request => (request.args.from ? { ok: false, error: "open takes no from; it takes id" } : request.reader ? { ok: true, result: { reader: "5", id: BLOCK } } : { ok: true, result: { reader: "2" } }));
     expect(await openInDoor(door.path, BLOCK, { actor: "claude-code", from: "claude", reader: "middle" })).toEqual({ reader: "5", id: BLOCK });

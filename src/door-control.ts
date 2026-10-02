@@ -61,8 +61,9 @@ export function doorRequest(path: string, request: Record<string, unknown>, time
  * asked: `from` when the door doesn't know that tile ("no tile <name> …")
  * or is older than `from` ("open takes no from"), then `reader` when the
  * door has no such reader ("no reader <name> …"), then neither: where the
- * door's own open puts notes. So a caller passes both while doors older than
- * `from=` are about (the Claude mod: `--from $EP0CH_TILE --reader middle`).
+ * door's own open puts notes. The Claude mod passes `from` alone: a door
+ * refuses an agent that names the reader the person reads (ep0ch-door round 3),
+ * while where its opens land never takes their keys.
  * Any other refusal (the reader holds an edit, the screen can't open notes) is
  * the answer, so the note never lands in whatever reader the person has
  * focused instead.

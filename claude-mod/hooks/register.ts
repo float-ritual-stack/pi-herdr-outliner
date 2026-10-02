@@ -607,9 +607,10 @@ async function openNow($: EngineInterface, workspace: Workspace | null, uri: str
   if (control) {
     const { id, title } = await resolve()
     const from = doorTileOf({ ...(tile ? { EP0CH_TILE: tile } : {}), ...(tileId ? { EP0CH_TILE_ID: tileId } : {}) })
-    // `--reader middle` only for a door older than `open from=` (ep0ch-door #61), which lands it where this mod
-    // always did; a door that knows `from=` never reads it. Drop it once every door has `from=`.
-    const opened = await outliner(['door-open', id, '--control', control, '--actor', actor, ...(from ? ['--from', from] : []), '--reader', 'middle'])
+    // From this tile, its opens' link; a door that doesn't know the tile (or is older than `from=`) is asked again
+    // naming none, and lands it where its opens land. Never a reader by name: an agent naming the reader the person
+    // reads is refused (ep0ch-door round 3), and where opens land never takes their keys.
+    const opened = await outliner(['door-open', id, '--control', control, '--actor', actor, ...(from ? ['--from', from] : [])])
     if (opened.exitCode === 0) {
       let reader: unknown
       try { reader = JSON.parse(opened.stdout)?.reader } catch { reader = undefined }

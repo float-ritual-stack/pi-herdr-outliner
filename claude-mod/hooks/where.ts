@@ -77,8 +77,8 @@ export function whereText(summary: string): string {
  * The tile `door-open --from` names: EP0CH_TILE, the name the door's links and
  * the daily layout use (it survives a door restart for an agent kept in its
  * Herdr pane), else the tile's id (`t<n>`) when the name is empty. The door
- * takes either; one it doesn't know falls back to `--reader middle`, then to
- * where its own open puts notes (src/door-control.ts).
+ * takes either; one it doesn't know falls back to where its own open puts
+ * notes (src/door-control.ts), which never takes the person's keys.
  */
 export function doorTileOf(env: { EP0CH_TILE?: string; EP0CH_TILE_ID?: string }): string | null {
   const name = env.EP0CH_TILE?.trim()

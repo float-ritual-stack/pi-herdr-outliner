@@ -557,13 +557,33 @@ describe('register', () => {
       const shown = await $.tool.call({ tool: 'mcp__pi-outliner__show', reference: '[[Daily notes]]' })
       expect(shown).toMatchObject({ result: "Showing Daily notes in the door's centre reader." })
       const opened = doorOpenOf(session.runs)!
-      // --reader middle is only for a door older than from= (door-control asks it only then).
-      expect(opened.argv.slice(-10)).toEqual([
-        'door-open', BLOCK, '--control', DOOR.EP0CH_CONTROL, '--actor', 'claude-code', '--from', 'claude', '--reader', 'middle',
+      // From its own tile, never a reader by name (door-control asks again naming none when the door lacks the tile).
+      expect(opened.argv.slice(-8)).toEqual([
+        'door-open', BLOCK, '--control', DOOR.EP0CH_CONTROL, '--actor', 'claude-code', '--from', 'claude',
       ])
+      expect(opened.argv).not.toContain('--reader')
       expect(opened.init?.cwd).toBe(WORKSPACE)
       expect(splitOf(session.runs)).toBeUndefined()
       expect(session.runs.some(run => run.argv.includes('link'))).toBe(false)
+    })
+
+    test("the person on middle and a door that doesn't know this tile: show lands where the door's opens land, not refused", async ($, on) => {
+      // The CLI asks the door from= first, then naming no tile (door-control); the door answers where it put it. The
+      // mod never names middle, so a door refusing an agent on the person's reader never sees that request.
+      const session = sessionIn(on, WORKSPACE, run =>
+        run.argv.includes('door-open')
+          ? run.argv.includes('--reader') ? result(1, '', "error: middle has the person's keys; an agent doesn't open there\n") : result(0, '{"reader":"side","id":"x"}\n', '')
+          : succeeding(run),
+      '', { ...DOOR, EP0CH_TILE: 'claude-gone' })
+      on('tool.register', ($, e) => ({ value: { tool: `mcp__pi-outliner__${e.name}` } }))
+      await session.begin(() => $.session.start(START))
+
+      const shown = await $.tool.call({ tool: 'mcp__pi-outliner__show', reference: '[[Daily notes]]' })
+      expect(shown).toMatchObject({ result: "Showing Daily notes in the door's side reader." })
+      const opened = doorOpenOf(session.runs)!
+      expect(opened.argv.slice(-2)).toEqual(['--from', 'claude-gone'])
+      expect(opened.argv).not.toContain('--reader')
+      expect(splitOf(session.runs)).toBeUndefined()
     })
 
     test('show is attributed like every other write: OUTLINER_ACTOR before EP0CH_AGENT', async ($, on) => {
@@ -616,8 +636,8 @@ describe('register', () => {
       await session.clock.settle()
 
       const opened = doorOpenOf(session.runs)!
-      expect(opened.argv.slice(-10)).toEqual([
-        'door-open', BLOCK, '--control', DOOR.EP0CH_CONTROL, '--actor', 'claude-code', '--from', 't21', '--reader', 'middle',
+      expect(opened.argv.slice(-8)).toEqual([
+        'door-open', BLOCK, '--control', DOOR.EP0CH_CONTROL, '--actor', 'claude-code', '--from', 't21',
       ])
       expect(splitOf(session.runs)).toBeUndefined()
       expect(session.toasts).toEqual([])

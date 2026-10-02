@@ -242,7 +242,7 @@ describe('door tools', () => {
     const opened = await $.tool.call({ tool: 'mcp__pi-outliner__door_open', id: `((${NOTE}))` })
     expect(opened).toMatchObject({ result: "Showing Seed swap plan in the door's middle reader." })
     const open = session.runs.find(run => run.argv.includes('door-open'))!
-    expect(open.argv.slice(3)).toEqual(['door-open', NOTE, '--control', CONTROL, '--actor', 'loki', '--from', 'claude', '--reader', 'middle'])
+    expect(open.argv.slice(3)).toEqual(['door-open', NOTE, '--control', CONTROL, '--actor', 'loki', '--from', 'claude'])
   })
 
   test("a door's refusal comes back as the tool's error; a reference is resolved before opening", async ($, on) => {
