@@ -1,6 +1,14 @@
 import { describe, expect, test, tier } from 'claude-code/testing'
 
-import { effectiveWorkspaces, failureReasonOf, workspacesOf } from '../hooks/mention-message'
+import {
+  boundWorkspaceOf,
+  effectiveWorkspaces,
+  failureReasonOf,
+  mentionsModeOf,
+  sessionWorkspaceOf,
+  workspaceEnvOf,
+  workspacesOf,
+} from '../hooks/mention-message'
 
 tier('user')
 
@@ -41,5 +49,47 @@ describe('mention-message', () => {
     expect(effectiveWorkspaces(undefined, '/env')).toEqual(['/env'])
     expect(effectiveWorkspaces(' , ', '/env')).toEqual(['/env'])
     expect(effectiveWorkspaces('', undefined)).toEqual([])
+  })
+
+  test('the mode: folder unless allowlist is asked for, or folders are listed with no mode; the option wins', async () => {
+    expect(mentionsModeOf('', undefined)).toBe('folder')
+    expect(mentionsModeOf(undefined, ' ', [])).toBe('folder')
+    expect(mentionsModeOf('', undefined, ['/work/garden'])).toBe('allowlist')
+    expect(mentionsModeOf('', 'folder', ['/work/garden'])).toBe('folder')
+    expect(mentionsModeOf('', 'allowlist')).toBe('allowlist')
+    expect(mentionsModeOf('folder', 'allowlist')).toBe('folder')
+    expect(mentionsModeOf(' allowlist ', undefined)).toBe('allowlist')
+    expect(() => mentionsModeOf('', 'strict')).toThrow('"strict" is neither folder nor allowlist')
+  })
+
+  test("bound-folder's answer: a bound folder containing the cwd, or nothing", async () => {
+    const client = '{"bound":true,"source":"client","folder":"/work/garden","configPath":"/c/client.json","mode":"host","outline":"garden"}'
+    expect(boundWorkspaceOf(client, '/work/garden/src')).toEqual({ root: '/work/garden' })
+    expect(boundWorkspaceOf('{"bound":true,"source":"host-root","folder":"/work/jam/notes/","outline":"jam-shelf"}', '/work/jam/notes'))
+      .toEqual({ root: '/work/jam/notes', outline: 'jam-shelf' })
+    expect(boundWorkspaceOf('{"bound":false,"folder":"/tmp/scratch"}', '/tmp/scratch')).toBeNull()
+    // A folder that doesn't hold the session, a sibling prefix, a relative folder or an unknown source binds nothing.
+    expect(boundWorkspaceOf(client, '/home/sam')).toBeNull()
+    expect(boundWorkspaceOf(client, '/work/garden-other')).toBeNull()
+    expect(boundWorkspaceOf('{"bound":true,"source":"client","folder":"garden"}', '/work/garden')).toBeNull()
+    expect(boundWorkspaceOf('{"bound":true,"source":"guess","folder":"/work/garden","outline":"garden"}', '/work/garden')).toBeNull()
+    expect(boundWorkspaceOf('{"bound":true,"source":"host-root","folder":"/work/garden"}', '/work/garden')).toBeNull()
+    expect(boundWorkspaceOf('Unknown command', '/work/garden')).toBeNull()
+  })
+
+  test("the session's workspace: opt-outs first, then the binding; strict mode lists only", async () => {
+    const bound = { root: '/work/garden' }
+    expect(sessionWorkspaceOf('/work/garden/src', 'folder', [], bound)).toEqual(bound)
+    expect(sessionWorkspaceOf('/tmp/scratch', 'folder', [], null)).toBeNull()
+    expect(sessionWorkspaceOf('/work/garden/src', 'folder', ['/work/garden/src'], bound)).toBeNull()
+    expect(sessionWorkspaceOf('/work/garden/src', 'folder', ['/work'], bound)).toBeNull()
+    expect(sessionWorkspaceOf('/work/garden/src', 'folder', ['/work/gard'], bound)).toEqual(bound)
+    expect(sessionWorkspaceOf('/work/garden/src', 'allowlist', ['/work/garden'], null)).toEqual({ root: '/work/garden' })
+    expect(sessionWorkspaceOf('/work/garden/src', 'allowlist', [], bound)).toBeNull()
+  })
+
+  test("a workspace's CLI environment names the outline only for a host's recorded root", async () => {
+    expect(workspaceEnvOf({ root: '/work/garden' })).toEqual({ OUTLINER_WORKSPACE_ROOT: '/work/garden' })
+    expect(workspaceEnvOf({ root: '/work/jam/notes', outline: 'jam-shelf' })).toEqual({ OUTLINER_WORKSPACE_ROOT: '/work/jam/notes', OUTLINER_OUTLINE: 'jam-shelf' })
   })
 })

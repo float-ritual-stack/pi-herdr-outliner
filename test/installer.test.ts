@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { writeClientConfig } from "../src/paths";
 
 for (const source of [undefined, "", 'model = "example"\n']) {
   test(`mentions installer handles ${source === undefined ? "missing" : source === "" ? "empty" : "existing"} config`, async () => {
@@ -132,9 +133,11 @@ command = "float.pi-outliner.obsolete"
   }
 });
 
-async function runClaudeModInstaller(configDir: string, ...workspaces: string[]) {
-  const child = Bun.spawn([process.execPath, join(import.meta.dir, "../scripts/install-claude-mod.ts"), ...workspaces], {
-    env: { ...process.env, CLAUDE_CONFIG_DIR: configDir }, stdout: "pipe", stderr: "pipe",
+async function runClaudeModInstaller(configDir: string, ...args: string[]) {
+  // A scratch state and config root: the installer asks which listed folders are bound to an outline.
+  const child = Bun.spawn([process.execPath, join(import.meta.dir, "../scripts/install-claude-mod.ts"), ...args], {
+    env: { ...process.env, CLAUDE_CONFIG_DIR: configDir, OUTLINER_STATE_DIR: join(configDir, "outliner-state"), XDG_CONFIG_HOME: join(configDir, "xdg") },
+    stdout: "pipe", stderr: "pipe",
   });
   const [exitCode, stdout, stderr] = await Promise.all([
     child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
@@ -153,10 +156,11 @@ test("Claude mod installer replaces other copies of the mod and keeps unrelated 
     await writeFile(join(worktreeCopy, ".claude-plugin/plugin.json"), '{"name":"pi-outliner"}');
     await mkdir(join(unrelated, ".claude-plugin"), { recursive: true });
     await writeFile(join(unrelated, ".claude-plugin/plugin.json"), '{"name":"other"}');
-    const original = { theme: "dark", env: { KEEP: "1", CLAUDE_CODE_PLUGIN_DIRS: `${unrelated}:${worktreeCopy}`, PI_OUTLINER_MENTIONS_WORKSPACES: "/a" } };
+    const original = { theme: "dark", env: { KEEP: "1", CLAUDE_CODE_PLUGIN_DIRS: `${unrelated}:${worktreeCopy}` } };
     await writeFile(settingsPath, JSON.stringify(original));
 
-    const first = await runClaudeModInstaller(directory, "/b", "/a");
+    // No folder needed: each session follows the outline its folder is bound to.
+    const first = await runClaudeModInstaller(directory);
     expect(first.exitCode).toBe(0);
     const installed = JSON.parse(await readFile(settingsPath, "utf8"));
     expect(installed.theme).toBe("dark");
@@ -164,14 +168,13 @@ test("Claude mod installer replaces other copies of the mod and keeps unrelated 
       KEEP: "1",
       CLAUDE_CODE_PLUGIN_DIRS: `${unrelated}:${modDir}`,
       CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: "1",
-      PI_OUTLINER_MENTIONS_WORKSPACES: "/a:/b",
     });
     const backups = (await readdir(directory)).filter(name => name.startsWith("settings.json.before-claude-mod-"));
     expect(backups).toHaveLength(1);
     expect(JSON.parse(await readFile(join(directory, backups[0]!), "utf8"))).toEqual(original);
 
     const text = await readFile(settingsPath, "utf8");
-    const again = await runClaudeModInstaller(directory, "/b");
+    const again = await runClaudeModInstaller(directory);
     expect(again.stdout).toContain("already installed");
     expect(await readFile(settingsPath, "utf8")).toBe(text);
   } finally {
@@ -179,17 +182,59 @@ test("Claude mod installer replaces other copies of the mod and keeps unrelated 
   }
 });
 
-test("Claude mod installer creates settings and refuses relative workspaces", async () => {
+test("Claude mod installer opts folders out, keeps strict mode on request, and refuses relative folders", async () => {
   const directory = await mkdtemp(join(tmpdir(), "claude-mod-installer-"));
   const configDir = join(directory, "claude");
+  const envOf = async () => JSON.parse(await readFile(join(configDir, "settings.json"), "utf8")).env;
   try {
-    const relative = await runClaudeModInstaller(configDir, "work");
+    const relative = await runClaudeModInstaller(configDir, "--exclude", "work");
     expect(relative.exitCode).not.toBe(0);
     expect(relative.stderr).toContain("must be absolute");
-    expect((await runClaudeModInstaller(configDir, "/w")).exitCode).toBe(0);
-    const env = JSON.parse(await readFile(join(configDir, "settings.json"), "utf8")).env;
-    expect(env.PI_OUTLINER_MENTIONS_WORKSPACES).toBe("/w");
+
+    expect((await runClaudeModInstaller(configDir, "--exclude", "/scratch/private", "--exclude", "/scratch/other/")).exitCode).toBe(0);
+    let env = await envOf();
+    expect(env.PI_OUTLINER_MENTIONS_MODE).toBe("folder");
+    expect(env.PI_OUTLINER_MENTIONS_WORKSPACES).toBe("/scratch/private:/scratch/other");
     expect(env.CLAUDE_CODE_PLUGIN_DIRS).toBe(join(import.meta.dir, "../claude-mod"));
+    // A later run without folders keeps the opt-outs.
+    expect((await runClaudeModInstaller(configDir)).stdout).toContain("already installed");
+
+    // Strict mode: folders given bare (the old form) or with --allowlist; the opt-outs never become allowed folders.
+    const strict = await runClaudeModInstaller(configDir, "/w");
+    expect(strict.exitCode).toBe(0);
+    expect(strict.stdout).toContain("Dropped the opted-out folders");
+    env = await envOf();
+    expect([env.PI_OUTLINER_MENTIONS_MODE, env.PI_OUTLINER_MENTIONS_WORKSPACES]).toEqual(["allowlist", "/w"]);
+    expect((await runClaudeModInstaller(configDir, "--allowlist", "/v")).exitCode).toBe(0);
+    expect((await envOf()).PI_OUTLINER_MENTIONS_WORKSPACES).toBe("/w:/v");
+    // A run without folders keeps an explicit strict mode; opting out needs --folder first.
+    expect((await runClaudeModInstaller(configDir)).stdout).toContain("Strict mode kept");
+    expect((await runClaudeModInstaller(configDir, "--exclude", "/x")).exitCode).not.toBe(0);
+    expect((await runClaudeModInstaller(configDir, "--folder")).exitCode).toBe(0);
+    env = await envOf();
+    expect([env.PI_OUTLINER_MENTIONS_MODE, env.PI_OUTLINER_MENTIONS_WORKSPACES]).toEqual([undefined, undefined]);
+    expect((await runClaudeModInstaller(configDir, "--exclude", "/x", "/y")).exitCode).not.toBe(0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Claude mod installer moves a list from before folder mode to folder mode, naming the folders bound to no outline", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "claude-mod-installer-"));
+  const settingsPath = join(directory, "settings.json");
+  const bound = join(directory, "garden");
+  try {
+    await mkdir(bound, { recursive: true });
+    writeClientConfig({ XDG_CONFIG_HOME: join(directory, "xdg"), OUTLINER_STATE_DIR: join(directory, "outliner-state") }, { mode: "host", workspaceRoot: bound, outline: "fred-notes" });
+    await writeFile(settingsPath, JSON.stringify({ env: { PI_OUTLINER_MENTIONS_WORKSPACES: `${bound}:/scratch/unbound` } }));
+    const moved = await runClaudeModInstaller(directory);
+    expect(moved.exitCode).toBe(0);
+    expect(moved.stdout).toContain("Folder mode");
+    expect(moved.stdout).toContain("feed nothing: /scratch/unbound.");
+    expect(moved.stdout).not.toContain(`nothing: ${bound}`);
+    const env = JSON.parse(await readFile(settingsPath, "utf8")).env;
+    expect(env.PI_OUTLINER_MENTIONS_WORKSPACES).toBeUndefined();
+    expect(env.PI_OUTLINER_MENTIONS_MODE).toBeUndefined();
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -222,18 +267,26 @@ test("install.sh installs the Claude mod from the managed plugin root only when 
     expect((await run()).exitCode).toBe(0);
     expect(await Bun.file(settingsPath).exists()).toBe(false);
 
-    const required = await run("--claude-mod");
-    expect(required.exitCode).not.toBe(0);
-    expect(required.stderr).toContain("--claude-workspace");
+    // The mod step needs no folder: each session follows its folder's binding.
+    const loaded = await run("--claude-mod");
+    expect(loaded.exitCode).toBe(0);
+    let env = JSON.parse(await readFile(settingsPath, "utf8")).env;
+    expect(env.CLAUDE_CODE_PLUGIN_DIRS).toBe(join(root, "claude-mod"));
+    expect(env.PI_OUTLINER_MENTIONS_WORKSPACES).toBeUndefined();
 
     expect((await run("--claude-workspace", "relative")).exitCode).not.toBe(0);
-    expect(await Bun.file(settingsPath).exists()).toBe(false);
+    expect((await run("--claude-exclude", "relative")).exitCode).not.toBe(0);
+    expect((await run("--claude-workspace", "/work/one", "--claude-exclude", "/work/two")).exitCode).not.toBe(0);
 
+    expect((await run("--claude-exclude", "/work/private notes")).exitCode).toBe(0);
+    env = JSON.parse(await readFile(settingsPath, "utf8")).env;
+    expect([env.PI_OUTLINER_MENTIONS_MODE, env.PI_OUTLINER_MENTIONS_WORKSPACES]).toEqual(["folder", "/work/private notes"]);
+
+    // --claude-workspace is strict mode: only those folders feed.
     const installed = await run("--claude-workspace", "/work/one", "--claude-workspace", "/work/two words");
     expect(installed.exitCode).toBe(0);
-    const env = JSON.parse(await readFile(settingsPath, "utf8")).env;
-    expect(env.PI_OUTLINER_MENTIONS_WORKSPACES).toBe("/work/one:/work/two words");
-    expect(env.CLAUDE_CODE_PLUGIN_DIRS).toBe(join(root, "claude-mod"));
+    env = JSON.parse(await readFile(settingsPath, "utf8")).env;
+    expect([env.PI_OUTLINER_MENTIONS_MODE, env.PI_OUTLINER_MENTIONS_WORKSPACES]).toEqual(["allowlist", "/work/one:/work/two words"]);
 
     const text = await readFile(settingsPath, "utf8");
     expect((await run("--claude-workspace", "/work/three", "--no-claude-mod")).exitCode).toBe(0);

@@ -29,6 +29,7 @@ PLAIN_UI=0
 GUM_ENABLED=0
 CLAUDE_MOD="auto"
 CLAUDE_WORKSPACES=""
+CLAUDE_EXCLUDES=""
 TEMP_CONFIG=""
 
 say() {
@@ -124,10 +125,12 @@ Options:
   --ref REF              Git ref to install (default: main)
   --config PATH          Herdr config.toml path
   --no-config            Install the plugin without changing Herdr keys
+  --claude-mod           Require the Claude Code mod step: each Claude session
+                         feeds the outline its folder is bound to
+  --claude-exclude PATH  Load the Claude Code mod and opt PATH out (repeatable)
   --claude-workspace PATH
-                         Load the Claude Code mod and feed Recent Mentions
-                         from Claude sessions in PATH (repeatable)
-  --claude-mod           Require the Claude Code mod step
+                         Strict mode: only Claude sessions in PATH feed an
+                         outline, bound or not (repeatable)
   --no-claude-mod        Skip the Claude Code mod step
   --plain               Disable Gum styling and interactive widgets
   -y, --yes              Install missing dependencies and accept defaults
@@ -192,6 +195,17 @@ while [ "$#" -gt 0 ]; do
         *) fail "--claude-workspace requires an absolute path" ;;
       esac
       CLAUDE_WORKSPACES="$CLAUDE_WORKSPACES
+$2"
+      [ "$CLAUDE_MOD" = "no" ] || CLAUDE_MOD="yes"
+      shift 2
+      ;;
+    --claude-exclude)
+      [ "$#" -ge 2 ] || fail "--claude-exclude requires an absolute path"
+      case "$2" in
+        /*) ;;
+        *) fail "--claude-exclude requires an absolute path" ;;
+      esac
+      CLAUDE_EXCLUDES="$CLAUDE_EXCLUDES
 $2"
       [ "$CLAUDE_MOD" = "no" ] || CLAUDE_MOD="yes"
       shift 2
@@ -560,23 +574,18 @@ plugin_root() {
       if (roots.length === 1 && typeof roots[0] === "string") console.log(roots[0]);' "$PLUGIN_ID" 2>/dev/null
 }
 
-# Claude Code loads claude-mod/ from the installed plugin root and feeds Recent
-# Mentions from the named workspaces. Offered only where Claude Code exists.
+# Claude Code loads claude-mod/ from the installed plugin root. Each session
+# feeds the outline its folder is bound to; an unbound folder feeds nothing.
+# Offered only where Claude Code exists.
 install_claude_mod() {
   [ "$CLAUDE_MOD" != "no" ] || return 0
   if [ "$CLAUDE_MOD" = "auto" ]; then
     command -v claude >/dev/null 2>&1 || return 0
     can_prompt || return 0
-    confirm "Install the Claude Code mod so Claude replies feed Recent Mentions?" || return 0
+    confirm "Install the Claude Code mod so Claude replies feed Recent Mentions in the outline their folder is bound to?" || return 0
   fi
-  if [ -z "$CLAUDE_WORKSPACES" ]; then
-    can_prompt || fail "--claude-mod needs --claude-workspace PATH when it cannot prompt"
-    CLAUDE_WORKSPACES=$(prompt_key "Outliner workspace for Claude Recent Mentions" "$PWD")
-    case "$CLAUDE_WORKSPACES" in
-      /*) ;;
-      *) fail "Claude workspace must be an absolute path: $CLAUDE_WORKSPACES" ;;
-    esac
-  fi
+  [ -z "$CLAUDE_WORKSPACES" ] || [ -z "$CLAUDE_EXCLUDES" ] ||
+    fail "--claude-workspace (strict mode) and --claude-exclude (folder mode) don't mix"
   root=$(plugin_root)
   [ -n "$root" ] || fail "could not locate the installed $PLUGIN_ID plugin root"
   if [ ! -f "$root/scripts/install-claude-mod.ts" ]; then
@@ -590,6 +599,9 @@ install_claude_mod() {
   set -f
   for workspace in $CLAUDE_WORKSPACES; do
     set -- "$@" "$workspace"
+  done
+  for excluded in $CLAUDE_EXCLUDES; do
+    set -- "$@" --exclude "$excluded"
   done
   set +f
   IFS=$old_ifs

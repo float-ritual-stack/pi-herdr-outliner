@@ -323,13 +323,16 @@ Use `--yes` for a non-interactive install with existing or default shortcuts,
 `sh install.sh --help` for all options.
 
 When Claude Code is installed, an interactive run also offers the
-[Claude Code mod](claude-mod/README.md), which sends completed Claude replies to
-Recent Mentions. It asks for the Outliner workspace (default: the current
-directory), then updates the `env` block of `~/.claude/settings.json`: function
-hooks on, the installed `claude-mod/` in `CLAUDE_CODE_PLUGIN_DIRS` in place of
-any other copy, and the workspace added to `PI_OUTLINER_MENTIONS_WORKSPACES`.
-The file is backed up first. Pass `--claude-workspace /absolute/project`
-(repeatable) to install it without prompting, or `--no-claude-mod` to skip it.
+[Claude Code mod](claude-mod/README.md). It updates the `env` block of
+`~/.claude/settings.json`: function hooks on, and the installed `claude-mod/`
+in `CLAUDE_CODE_PLUGIN_DIRS` in place of any other copy. The file is backed up
+first. There is no workspace to configure: each Claude session follows its
+folder, and the nearest folder bound to an outline (its `client.json`, or an
+outline root the host serves) gets its Recent Mentions, links and tools. A
+session in an unbound folder feeds nothing. Pass `--claude-mod` to install it
+without prompting, `--claude-exclude /absolute/folder` (repeatable) to opt a
+folder out, `--claude-workspace /absolute/project` (repeatable) for strict
+mode (only those folders feed, bound or not), or `--no-claude-mod` to skip it.
 
 ### Install manually from GitHub
 
@@ -2476,8 +2479,9 @@ jam-shelf") with that folder as its root; **Outliner: choose this folder's
 outline** switches a folder to another, and its "New outline here" takes a free
 `-2` suffix rather than attach. Herdr actions invoked from an outliner pane stay
 on that pane's outline. Reads (`list`, `read`, `doctor`) never create an
-outline. Claude's `PI_OUTLINER_MENTIONS_WORKSPACES` entries are folders; their
-outline comes from the same rule. The single-outline service (`bun run server`)
+outline. The Claude mod follows a session's folder by rule 1 only (or an
+outline root the host records; `outliner bound-folder` says which): it never
+takes a guess, so an unbound folder feeds no outline. The single-outline service (`bun run server`)
 does not start for a folder that belongs to the host.
 
 ### Outline names

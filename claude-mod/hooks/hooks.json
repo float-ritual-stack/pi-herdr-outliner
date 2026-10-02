@@ -1,4 +1,4 @@
 {
-  "description": "Recent Mentions (forwards each completed main-loop answer in a configured Outliner workspace to mentions.ingest), clickable references, the show tool, workboard and outline tools over the installed Outliner CLI, door tools in an ep0ch-door tile, and where the session runs (ep0ch where) as context",
+  "description": "Recent Mentions (forwards each completed main-loop answer in a folder bound to an outline to that outline's mentions.ingest), clickable references, the show tool, workboard and outline tools over the installed Outliner CLI, door tools in an ep0ch-door tile, and where the session runs (ep0ch where) as context",
   "modules": ["./register.ts"]
 }

@@ -46,7 +46,7 @@ function sessionIn(on: On, answer: (run: Run) => ProcessRunResult | undefined, e
   const runs: Run[] = []
   const registered: string[] = []
   const clock = mock.clock(on)
-  mock.env(on, { PI_OUTLINER_MENTIONS_WORKSPACES: `${WORKSPACE}/`, ...env })
+  mock.env(on, { PI_OUTLINER_MENTIONS_WORKSPACES: '', ...env })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.id', () => ({ value: 'session-1' }))
   on('session.cwd', () => ({ value: cwd }))
@@ -59,6 +59,13 @@ function sessionIn(on: On, answer: (run: Run) => ProcessRunResult | undefined, e
     const given = answer(e)
     if (given) return { value: given }
     if (e.argv[0] === 'herdr') return { value: result(0, HERDR_LISTING) }
+    // The garden folder is bound to an outline (its client.json); every other folder is unbound.
+    if (e.argv.includes('bound-folder')) {
+      const folder = e.argv.at(-1)!
+      return { value: result(0, folder === WORKSPACE || folder.startsWith(`${WORKSPACE}/`)
+        ? `{"bound":true,"source":"client","folder":"${WORKSPACE}","mode":"host","outline":"garden"}\n`
+        : `{"bound":false,"folder":"${folder}"}\n`) }
+    }
     if (e.argv.includes('work-id-status')) return { value: result(0, '{"prefix":"PIE","observedPrefixes":["PIE"]}') }
     if (e.argv[0] === 'ep0ch' && e.argv[1] === 'help') return { value: result(0, 'usage:\n  ep0ch where [--json]  where this runs\n') }
     if (e.argv[0] === 'ep0ch' && e.argv[1] === 'where') return { value: result(0, '{"summary":"door:4242/desk/t1:claude","typing":false}\n') }
@@ -183,11 +190,11 @@ describe('outline tools', () => {
     expect(work.argv.slice(-6)).toEqual(['--author', 'agent', '--actor', 'cowboy', '--session', 'session-1'])
   })
 
-  test('outside the configured workspaces, outline tools change nothing', async ($, on) => {
+  test('in a folder bound to no outline, outline tools change nothing', async ($, on) => {
     const session = sessionIn(on, () => undefined, {}, '/elsewhere')
     await session.begin(() => $.session.start({ ...START, cwd: '/elsewhere' }))
     const denied = await $.tool.call({ tool: 'mcp__pi-outliner__outline_read', ref: NOTE })
-    expect(denied.deny).toContain('not in a configured Outliner workspace')
+    expect(denied.deny).toContain('not bound to an Outliner outline')
     expect(session.agentRuns()).toEqual([])
   })
 })

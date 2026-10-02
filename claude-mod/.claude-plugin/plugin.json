@@ -1,13 +1,20 @@
 {
   "name": "pi-outliner",
   "version": "0.1.0",
-  "description": "Pi Outliner integration for Claude Code: typed outline, workboard and door tools for agents (read, find, edit, comment, changes, draft.patch, ep0ch act), clickable references, and completed responses that mention [[pages]], ((block ids)) or Work IDs in the Outliner's Recent Mentions navigator.",
+  "description": "Pi Outliner integration for Claude Code, following the outline the session folder is bound to: typed outline, workboard and door tools for agents (read, find, edit, comment, changes, draft.patch, ep0ch act), clickable references, and completed responses that mention [[pages]], ((block ids)) or Work IDs in the Outliner's Recent Mentions navigator.",
   "author": { "name": "evan" },
   "userConfig": {
     "workspaces": {
       "type": "string",
-      "title": "Outliner workspaces",
-      "description": "Absolute project directories whose sessions and subdirectories feed Recent Mentions, separated by ':' or ','. The nearest configured ancestor selects the workspace. Empty: PI_OUTLINER_MENTIONS_WORKSPACES applies; neither set, nothing is ingested.",
+      "title": "Outliner folders (opt-outs, or the strict allowlist)",
+      "description": "Absolute folders, separated by ':' or ','. Mode folder: sessions in them (and their subfolders) feed no outline, even when bound to one. Mode allowlist, or no mode set: only they feed (strict mode, as before folder mode). Empty: PI_OUTLINER_MENTIONS_WORKSPACES applies.",
+      "required": false,
+      "default": ""
+    },
+    "mode": {
+      "type": "string",
+      "title": "How a session finds its outline",
+      "description": "folder: each session feeds the outline its folder's nearest bound ancestor names (its client.json, or an outline root the host serves); an unbound folder feeds nothing, and listed folders are opted out. allowlist: only the listed folders feed, as before. Empty: PI_OUTLINER_MENTIONS_MODE applies; neither set, folder, unless folders are listed (an old allowlist).",
       "required": false,
       "default": ""
     }

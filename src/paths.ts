@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
@@ -224,6 +224,49 @@ export function resolveFolderOutline(folderInput: string, env: NodeJS.ProcessEnv
     return { kind: "unnamed", folder, reason: `The outline "${outline}" belongs to ${recorded || "a folder its record does not say"}, not ${candidate.folder}. ${how}.` };
   }
   return { kind: "guess", folder: candidate.folder, outline, from: candidate.from };
+}
+
+/**
+ * A folder explicitly bound to an outline: a `client.json` (`nearestFolderBinding`),
+ * or the root an outline host records for one of its outlines (`outlines/<name>.json`
+ * beside its database). `outline` is the outline it names, when it names one.
+ */
+export type BoundFolder =
+  | { source: "client"; folder: string; configPath: string; mode: OutlinerClientConfig["mode"]; outline?: string }
+  | { source: "host-root"; folder: string; outline: string };
+
+/**
+ * The nearest folder, from `folder` up, explicitly bound to an outline: rule 1
+ * of `resolveFolderOutline`, or a host outline's recorded root. The deeper of
+ * the two wins; at the same folder, `client.json`. Never a guess (rules 2-4),
+ * and never `OUTLINER_OUTLINE` or `OUTLINER_CONFIG_PATH`: an unbound folder is
+ * undefined. Two outlines recording the nearest root bind nothing. Reads only.
+ *
+ * Whatever follows a folder on its own (the Claude mod's Recent Mentions and
+ * links) asks this, so a folder nobody bound never reaches an outline.
+ */
+export function boundFolderOf(folderInput: string, env: NodeJS.ProcessEnv = process.env): BoundFolder | undefined {
+  const folder = resolve(folderInput);
+  const binding = nearestFolderBinding(folder, env);
+  const stateRoot = resolveStateRoot(env);
+  let entries: string[];
+  try { entries = readdirSync(outlineHostPaths(stateRoot).outlines); } catch { entries = []; }
+  const served = new Map<string, string[]>();
+  for (const entry of entries) {
+    const name = entry.endsWith(".json") ? entry.slice(0, -".json".length) : "";
+    if (!OUTLINE_NAME_PATTERN.test(name) || !existsSync(hostedOutlinePaths(stateRoot, name).database)) continue;
+    let root: string | undefined;
+    try { root = hostedOutlineRoot(stateRoot, name); } catch { root = undefined; }
+    if (root === undefined || !(folder === root || folder.startsWith(root === "/" ? "/" : `${root}/`))) continue;
+    served.set(root, [...(served.get(root) ?? []), name]);
+  }
+  const nearestRoot = [...served.keys()].sort((a, b) => b.length - a.length)[0];
+  if (binding && (nearestRoot === undefined || binding.folder.length >= nearestRoot.length)) {
+    const outline = binding.config.mode === "local" ? undefined : binding.config.outline;
+    return { source: "client", folder: binding.folder, configPath: binding.configPath, mode: binding.config.mode, ...(outline ? { outline } : {}) };
+  }
+  const names = nearestRoot === undefined ? [] : served.get(nearestRoot)!;
+  return names.length === 1 ? { source: "host-root", folder: nearestRoot!, outline: names[0]! } : undefined;
 }
 
 function readableWorkspaceName(workspaceRoot: string): string {

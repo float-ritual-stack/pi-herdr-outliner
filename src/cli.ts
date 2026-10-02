@@ -11,7 +11,7 @@ import {
 } from "./block-focus";
 import { createOutlinerClient, OutlinerRequestError, type RequestInput } from "./client";
 import { requireClientIdForRole } from "./client-target";
-import { outlineHostPaths, resolveClientConfigRoot, resolveClientPaths, resolveStateRoot, stateDirPaths } from "./paths";
+import { boundFolderOf, outlineHostPaths, resolveClientConfigRoot, resolveClientPaths, resolveStateRoot, stateDirPaths } from "./paths";
 import { listKnownOutlines, type KnownOutline } from "./known-outlines";
 import { outlineHostClient } from "./outline-host-client";
 import { renameOutline, setOutlineRoot } from "./outline-names";
@@ -44,6 +44,29 @@ while (process.argv[2] === "--outline" || process.argv[2]?.startsWith("--outline
   if (!value || value.startsWith("-")) throw new Error("--outline requires an outline name");
   process.env.OUTLINER_OUTLINE = value;
   process.argv.splice(2, argument === "--outline" ? 2 : 1);
+}
+/**
+ * `bound-folder [folder]`: the nearest folder, from `folder` (default: this
+ * one) up, explicitly bound to an outline (`boundFolderOf`), as one JSON line:
+ * `{ bound: true, source, folder, outline?, … }`, or `{ bound: false, folder }`.
+ * Never a guessed outline. Reads only; needs no service. The Claude mod asks it
+ * which outline a session's folder feeds.
+ */
+if (process.argv[2] === "bound-folder") {
+  const [folderArgument, ...extra] = process.argv.slice(3);
+  if (extra.length || folderArgument?.startsWith("-")) {
+    console.error("error: bound-folder expects: [folder]");
+    process.exit(2);
+  }
+  try {
+    const folder = resolve(folderArgument ?? process.cwd());
+    const bound = boundFolderOf(folder);
+    console.log(JSON.stringify(bound ? { bound: true, ...bound } : { bound: false, folder }));
+    process.exit(0);
+  } catch (error) {
+    console.error(`error: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
 }
 if(process.argv[2]==='doctor'){
  const report=await inspectWorkspaceConnection();

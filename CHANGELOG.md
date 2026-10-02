@@ -22,6 +22,21 @@ This file records notable user-facing changes. The project remains active dogfoo
   (no longer read). **View → Tree/Preview/Detail chrome** switches it.
 - Tree and Preview at a 65×20 pane: 10 content rows with the former full chrome,
   18 now; chrome rows around Tree with Preview below went from 11 to 3.
+### The Claude mod follows the folder you run Claude in (PIE-526)
+
+- A Claude session's Recent Mentions, links and outline tools use the outline
+  its folder is bound to: the nearest folder with a `client.json`, or an
+  outline root the host serves. No allowlist to configure, and a folder bound
+  to no outline feeds nothing (never the host's default outline).
+- `outliner bound-folder [folder]` prints that binding as JSON (never a guess).
+- `PI_OUTLINER_MENTIONS_WORKSPACES` (and the mod's `workspaces` option) opts
+  folders out under `PI_OUTLINER_MENTIONS_MODE=folder`. `allowlist` keeps the
+  old behaviour, and a list with no mode is still read as the allowlist it was.
+- `install-claude-mod.ts` needs no folder: run alone it loads the mod and moves
+  an old allowlist to folder mode, naming listed folders bound to no outline.
+  `--exclude` opts a folder out; folders given bare (or `--allowlist`) are
+  strict mode. `install.sh` gains `--claude-exclude`; `--claude-workspace` is
+  strict mode, and `--claude-mod` no longer asks for a folder.
 
 ### Anyone with the link: `[publish::public]` (PIE-518)
 

@@ -7,21 +7,51 @@ the Outliner's `mentions.ingest` contract. It works the same way as the Codex St
 UUIDs in the answer then show up in Tree/Detail `?` → **Recent mentions**.
 
 - Only main-loop answers are sent. Subagent runs, interruptions, refusals and errors are skipped.
-- A session in a configured workspace or its subdirectories feeds that workspace.
-  The nearest configured ancestor wins, so a separately configured nested project
-  retains its own database. Similar path prefixes do not match. Paths are normalized
-  lexically; symlink aliases and sibling Git worktrees need explicit configuration.
-- Each entry is an absolute folder. The outline it feeds is resolved by the
-  Outliner CLI from that folder's `client.json`, as for every other client (bind
-  a folder with the **choose-outline** action). Any other entry, such as a
-  relative path or `folder=name`, is an error shown as a toast, never skipped.
+
+## Which outline: the session's folder
+
+There is nothing to configure. A session uses the outline its folder is bound
+to, found the way every Outliner client finds it: the nearest folder, from the
+session's cwd up, that is **bound**, by a `client.json` (bind a folder with the
+**choose-outline** action) or as the root an outline host records for one of
+its outlines. The installed CLI answers (`outliner bound-folder <cwd>`), so the
+mod never keeps a resolver of its own.
+
+- A nested binding is nearer than its parent's, so a project bound to its own
+  outline keeps it. Similar path prefixes do not match.
+- **A folder bound to no outline feeds nothing**: no mentions, no links, and the
+  outline tools refuse. The CLI's folder-name guess and the host's default
+  outline are never used, so an unrelated session never reaches your outline.
+- Mentions, links, `show`, the workboard and outline tools all use that folder
+  and its outline. For a root only the host records, the mod passes the
+  outline's name (`OUTLINER_OUTLINE`), since no `client.json` names it.
+- The folder is found when the session starts (links and tools) and again after
+  each answer (mentions), so binding a folder mid-session starts its mentions.
 - Herdr discovers the Outliner (`herdr plugin list --plugin float.pi-outliner`),
   and the mod calls the installed CLI's `mentions ingest`. It never starts a service.
-  Failures show as one toast and leave the answer untouched.
+  Failures show as one toast and leave the answer untouched. An Outliner older
+  than `bound-folder` feeds nothing and says so once per session.
+
+### Opting out, and strict mode
+
+`PI_OUTLINER_MENTIONS_WORKSPACES` (or the `workspaces` option) lists absolute
+folders, separated by `:` or `,`. What the list means is
+`PI_OUTLINER_MENTIONS_MODE` (or the `mode` option):
+
+| Mode | The list |
+|---|---|
+| `folder` | Folders opted out: a session in one, or below it, feeds nothing even when bound. |
+| `allowlist` | Strict mode, as before folder mode: only listed folders (and their subfolders) feed, bound or not; the nearest listed folder is the workspace, and its outline comes from its `client.json`. |
+| unset | `folder`, unless folders are listed: a list with no mode was written before folder mode, when it was the allowlist, so it is still read as one. Rerun the installer to move to folder mode. |
+
+The option wins over the environment variable when it is set. Claude Code
+passes an unset option as an empty string, so an empty option always falls back
+to the variable. An entry that isn't an absolute folder (a relative path, or
+`folder=name`), or an unknown mode, is an error shown as a toast, never skipped.
 
 ## Clickable references and Claude's Outliner pane
 
-In the same workspaces, Work IDs (the workspace's prefixes), `[[pages]]` and
+In a bound folder, Work IDs (its outline's prefixes), `[[pages]]` and
 `((block references))` in Claude's replies are drawn as links. In an ep0ch-door
 tile a click opens the note in that door ([Where a note opens](#where-a-note-opens)).
 In Herdr a plain click shows the target in **Claude's own Outliner Detail**: a pane split below the
@@ -93,7 +123,7 @@ then doesn't have to guess from the repo name or a window title.
 
 ## Workboard tools
 
-In the same workspaces Claude also gets `work_create`, `work_stage`, `work_set`,
+In a bound folder Claude also gets `work_create`, `work_stage`, `work_set`,
 `work_deliver`, `work_complete`, `work_body` and `note_section`. Each one runs the
 installed CLI's `work` / `note` command (see the
 [roadmap operations reference](../pi-extension/skills/outliner-workflow/references/roadmap-items.md#agent-commands))
@@ -110,7 +140,7 @@ one left in validate on an item that is already done.
 
 ## Outline tools
 
-In the same workspaces Claude gets typed tools for everything an agent does to
+In a bound folder Claude gets typed tools for everything an agent does to
 the outline, so it never writes a script around `list --subtree`, `update` or a
 comment socket. Each runs the installed CLI's `agent <operation>` command
 (`src/agent-tools.ts`) with the tool's input as JSON on stdin, in the session's
@@ -170,28 +200,35 @@ When Claude runs in an ep0ch-door tile (`EP0CH_CONTROL` set), it also gets
 - `ep0ch` reads an argument starting with `@` as a file, so the tool sends one
   such value through stdin (`key=@-`) and refuses a second.
 - `door_open` resolves a `[[page]]` or Work ID in the session's outline first;
-  a block id opens without a configured workspace. `show` (above) is the way to
+  a block id opens in a folder bound to no outline too. `show` (above) is the way to
   put a note beside Claude wherever it runs.
 
 ## Use
 
 Function hooks are early access and need `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`.
 
-The installer sets up everything below: `install.sh --claude-workspace /absolute/project`,
-or, from a checkout, `bun scripts/install-claude-mod.ts /absolute/project`.
+The installer sets up everything below: `install.sh --claude-mod`, or, from a
+checkout, `bun scripts/install-claude-mod.ts`. It needs no folder.
 
 ```sh
-PI_OUTLINER_MENTIONS_WORKSPACES=/absolute/project \
-  claude --plugin-dir /path/to/checkout/claude-mod
+claude --plugin-dir /path/to/checkout/claude-mod
 ```
 
-To load it in every session, set both variables and
+To load it in every session, set `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` and
 `CLAUDE_CODE_PLUGIN_DIRS=/path/to/checkout/claude-mod` in the `env` block of
-`~/.claude/settings.json`. The `workspaces` option (`pluginConfigs["pi-outliner"]`,
-or `/config`) takes precedence over the environment variable when it names at
-least one path. Claude Code passes an unset option as an empty string, so an
-empty option always falls back to the environment variable. To turn ingestion
-off, remove the path from both. Separate several paths with `:` or `,`.
+`~/.claude/settings.json`; that is what the installer writes, replacing any
+other copy of this mod and backing the file up first.
+
+| Installer | Does |
+|---|---|
+| `install-claude-mod.ts` | Loads the mod in folder mode. A list from before folder mode (no mode set) is dropped, and the listed folders bound to no outline are named: bind them, or use strict mode. Opt-outs and an explicit strict mode are kept. |
+| `install-claude-mod.ts --exclude /folder` | Opts the folder out (repeatable; `PI_OUTLINER_MENTIONS_MODE=folder`). |
+| `install-claude-mod.ts /folder` (or `--allowlist /folder`) | Strict mode: only these folders feed (`PI_OUTLINER_MENTIONS_MODE=allowlist`). |
+| `install-claude-mod.ts --folder` | Leaves strict mode for folder mode, dropping the allowlist. |
+
+`install.sh` passes `--claude-exclude` as `--exclude` and `--claude-workspace`
+as strict-mode folders. To stop the mod, remove its folder from
+`CLAUDE_CODE_PLUGIN_DIRS`.
 
 ## Develop
 

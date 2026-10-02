@@ -16,11 +16,11 @@ type Run = { argv: readonly string[]; init?: ProcessRunInit }
 const result = (exitCode: number, stdout = '', stderr = ''): ProcessRunResult =>
   ({ exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false })
 
-/** A session whose `ep0ch where` answers from `where` (throwing: not on PATH), outside any configured Outliner workspace. */
+/** A session whose `ep0ch where` answers from `where` (throwing: not on PATH), in no Outliner workspace (strict mode, nothing listed). */
 function sessionWith(on: On, env: Record<string, string>, where: (run: Run) => ProcessRunResult, help: (run: Run) => ProcessRunResult = () => result(0, HELP), whereMs = 0) {
   const runs: Run[] = []
   const clock = mock.clock(on)
-  mock.env(on, { PI_OUTLINER_MENTIONS_WORKSPACES: '', ...env })
+  mock.env(on, { PI_OUTLINER_MENTIONS_MODE: 'allowlist', PI_OUTLINER_MENTIONS_WORKSPACES: '', ...env })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('tool.register', ($, e) => ({ value: { tool: `mcp__pi-outliner__${e.name}` } }))
   on('session.id', () => ({ value: 'session-1' }))

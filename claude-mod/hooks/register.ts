@@ -1,11 +1,16 @@
 import type { EngineInterface, On, PluginOptions } from 'claude-code'
 
 import {
+  boundWorkspaceOf,
   effectiveWorkspaces,
   failureReasonOf,
   isIngestible,
   type MentionMessage,
   mentionMessageOf,
+  mentionsModeOf,
+  sessionWorkspaceOf,
+  type Workspace,
+  workspaceEnvOf,
   workspaceForCwd,
 } from './mention-message'
 import {
@@ -38,18 +43,22 @@ import {
 
 /**
  * What drawing a reply needs, read once per session: the Outliner workspace the
- * session belongs to (null: none configured, nothing is linked) and its Work-ID
- * prefixes. A render hook only reads, so this is loaded beside it, not in it.
+ * session belongs to (null: its folder is bound to no outline, or opted out;
+ * nothing is linked) and its Work-ID prefixes. A render hook only reads, so
+ * this is loaded beside it, not in it.
  */
-type ReferenceContext = { workspace: string | null; prefixes: string[] }
+type ReferenceContext = { workspace: Workspace | null; prefixes: string[] }
 let references: ReferenceContext | undefined
 let isLoadingReferences = false
 /**
- * The environment an Outliner CLI run or pane gets for one workspace: its
- * folder only. The CLI and the pane resolve the outline from the folder's
- * client.json themselves, so every client lands on the same outline.
+ * The environment an Outliner CLI run gets for one workspace: its bound
+ * folder, whose client.json the CLI resolves the outline from itself (so every
+ * client lands on the same outline), and the outline's name for a root only
+ * the host records.
  */
-const envFor = (workspace: string) => ({ OUTLINER_WORKSPACE_ROOT: workspace })
+const envFor = workspaceEnvOf
+/** Each reason the session's workspace could not be found is toasted once. */
+const toldWorkspaceFailures = new Set<string>()
 /** The pane id Herdr gave the last Detail this session split, until it registers. */
 let splitScratchPane: string | undefined
 /** Shows run one at a time, so concurrent clicks and tool calls split one pane. */
@@ -61,14 +70,18 @@ let showQueue: Promise<unknown> = Promise.resolve()
 let whereLoad: Promise<string | null> | undefined
 
 /**
- * Registers Recent Mentions: each completed main-loop answer in a configured
- * workspace goes to the Outliner, as the Codex Stop hook sends Codex's.
+ * Registers Recent Mentions: each completed main-loop answer in a folder bound
+ * to an outline goes to that outline, as the Codex Stop hook sends Codex's.
  *
- * Workspaces come from the `workspaces` option, or, left empty, from
- * `PI_OUTLINER_MENTIONS_WORKSPACES` (for a `CLAUDE_CODE_PLUGIN_DIRS` setup,
- * whose settings `env` block can carry it). Neither set: nothing is ingested.
- * The engine hands an unset string option over as '', so empty and unset are
- * one case: an empty option cannot override the environment.
+ * The session's workspace is its folder's nearest bound ancestor, resolved by
+ * the installed CLI the way every client resolves it (`sessionWorkspace`). An
+ * unbound folder feeds nothing. The `workspaces` option, or, left empty,
+ * `PI_OUTLINER_MENTIONS_WORKSPACES`, lists folders: with the `mode` option or
+ * `PI_OUTLINER_MENTIONS_MODE` set to `folder` they are opted out; set to
+ * `allowlist`, or unset beside a list (a config from before folder mode), they
+ * are the only folders that feed (the strict mode). The engine hands an unset string
+ * option over as '', so empty and unset are one case: an empty option cannot
+ * override the environment.
  *
  * The answer passes on untouched. Delivery runs off the turn's dispatch, so a
  * slow or absent service never delays the prompt; a failure is one toast.
@@ -79,7 +92,7 @@ let whereLoad: Promise<string | null> | undefined
  * own Detail in Herdr, else a toast with the `((id))` to copy.
  */
 export function register(on: On, options: PluginOptions): void {
-  const option = options.workspaces
+  const option = options
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
@@ -143,7 +156,7 @@ export function register(on: On, options: PluginOptions): void {
       if (typeof command === 'string') return { deny: command }
       if (!references) await loadReferences($, option)
       const workspace = references?.workspace
-      if (!workspace) return { deny: 'This session is not in a configured Outliner workspace.' }
+      if (!workspace) return { deny: NOT_BOUND }
       try {
         return { result: await runWorkCommand($, workspace, command, await actorFor($, {})) }
       } catch (error) {
@@ -159,7 +172,7 @@ export function register(on: On, options: PluginOptions): void {
       if (typeof command === 'string') return { deny: command }
       if (!references) await loadReferences($, option)
       const workspace = references?.workspace
-      if (!workspace) return { deny: 'This session is not in a configured Outliner workspace.' }
+      if (!workspace) return { deny: NOT_BOUND }
       // outline_changes' `actor` filters by agent; every other tool's names who the write is attributed to.
       const actor = await actorFor($, tool.name === 'outline_changes' ? {} : input)
       try {
@@ -224,27 +237,30 @@ export function register(on: On, options: PluginOptions): void {
     // A module reloaded mid-session never sees its session.start.
     if (!references) $.clock.after(0, () => void loadReferences($, option))
     if (!isIngestible(e)) return result
-    let workspaces: string[]
-    try {
-      workspaces = effectiveWorkspaces(option, await $.env.get('PI_OUTLINER_MENTIONS_WORKSPACES'), await $.env.get('HOME'))
-    } catch (error) {
-      $.ui.toast(`Outliner recent mentions unavailable: ${error instanceof Error ? error.message : String(error)}`, { timeoutMs: 6000 })
-      return result
-    }
-    if (workspaces.length === 0) return result
-    const [id, cwd] = await Promise.all([$.session.id(), $.session.cwd()])
-    const message = mentionMessageOf(e, { id, cwd }, workspaces)
-    if (message) {
-      $.clock.after(0, () => {
-        deliver($, message).catch((error: unknown) => {
-          const reason = error instanceof Error ? error.message : String(error)
-          $.ui.toast(`Outliner recent mentions unavailable: ${reason}`, { timeoutMs: 6000 })
-        })
+    // Off the turn's dispatch: finding the folder's outline runs the CLI, and a slow one never delays the answer.
+    $.clock.after(0, () => void (async () => {
+      let workspace: Workspace | null
+      try {
+        workspace = await sessionWorkspace($, option)
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error)
+        if (toldWorkspaceFailures.has(reason)) return
+        toldWorkspaceFailures.add(reason)
+        $.ui.toast(`Outliner recent mentions unavailable: ${reason}`, { timeoutMs: 6000 })
+        return
+      }
+      const message = mentionMessageOf(e, { id: await $.session.id() }, workspace)
+      if (!message || !workspace) return
+      await deliver($, message, workspace).catch((error: unknown) => {
+        const reason = error instanceof Error ? error.message : String(error)
+        $.ui.toast(`Outliner recent mentions unavailable: ${reason}`, { timeoutMs: 6000 })
       })
-    }
+    })())
     return result
   })
 }
+
+const NOT_BOUND = "This session's folder is not bound to an Outliner outline (bind it with the choose-outline action), or it is opted out."
 
 const PLUGIN_ID = 'float.pi-outliner'
 
@@ -306,18 +322,51 @@ async function outlinerRootOf($: EngineInterface): Promise<string | null> {
 }
 
 /**
- * Posts one message through the installed CLI's `mentions ingest`. The event
- * workspace selects the database, never this process's cwd; an existing
- * connection override in the environment is kept, and no service is started.
+ * The workspace a session feeds and works in, or null (`sessionWorkspaceOf`).
+ * In folder mode the installed CLI's `bound-folder` says which folder, from
+ * the session's cwd up, is bound to an outline; an opted-out folder never
+ * asks. A disabled Outliner is null; a CLI that cannot answer (one older than
+ * `bound-folder`) throws with why, and nothing is fed.
  */
-async function deliver($: EngineInterface, message: MentionMessage): Promise<void> {
+async function sessionWorkspace($: EngineInterface, options: PluginOptions): Promise<Workspace | null> {
+  const [listedEnv, modeEnv, home, cwd] = await Promise.all([
+    $.env.get('PI_OUTLINER_MENTIONS_WORKSPACES'),
+    $.env.get('PI_OUTLINER_MENTIONS_MODE'),
+    $.env.get('HOME'),
+    $.session.cwd(),
+  ])
+  const listed = effectiveWorkspaces(options.workspaces, listedEnv, home)
+  const mode = mentionsModeOf(options.mode, modeEnv, listed)
+  if (mode === 'allowlist' || workspaceForCwd(cwd, listed) !== null) return sessionWorkspaceOf(cwd, mode, listed, null)
+  const root = await outlinerRootOf($)
+  if (!root) return null
+  const ran = await $.process.run(
+    ['/bin/sh', `${root}/scripts/run-bun.sh`, `${root}/src/cli.ts`, 'bound-folder', cwd],
+    { cwd, timeoutMs: 30_000 },
+  )
+  if (ran.exitCode !== 0) {
+    const reason = failureReasonOf(ran.stderr)
+    throw Error(/Unknown command: bound-folder/.test(reason)
+      ? "the installed Outliner is too old to find this folder's outline (no bound-folder); update it"
+      : `bound-folder failed${reason ? `: ${reason}` : ''}`)
+  }
+  return sessionWorkspaceOf(cwd, mode, listed, boundWorkspaceOf(ran.stdout, cwd))
+}
+
+/**
+ * Posts one message through the installed CLI's `mentions ingest`. The
+ * session's workspace selects the outline, never this process's cwd; an
+ * existing connection override in the environment is kept, and no service is
+ * started.
+ */
+async function deliver($: EngineInterface, message: MentionMessage, workspace: Workspace): Promise<void> {
   const root = await outlinerRootOf($)
   if (root === null) return
   const ingested = await $.process.run(
     ['/bin/sh', `${root}/scripts/run-bun.sh`, `${root}/src/cli.ts`, 'mentions', 'ingest'],
     {
-      cwd: message.workspaceRoot,
-      env: envFor(message.workspaceRoot),
+      cwd: workspace.root,
+      env: envFor(workspace),
       stdin: JSON.stringify(message),
       timeoutMs: 30_000,
     },
@@ -335,7 +384,7 @@ async function deliver($: EngineInterface, message: MentionMessage): Promise<voi
  */
 async function runWorkCommand(
   $: EngineInterface,
-  workspace: string,
+  workspace: Workspace,
   command: { args: string[]; stdin?: string },
   actor: string,
 ): Promise<string> {
@@ -357,14 +406,14 @@ async function actorFor($: EngineInterface, input: Record<string, unknown>): Pro
  * write's provenance (`--session`). Resolves to its output; a refusal throws
  * with the CLI's reason.
  */
-async function runOutlinerCli($: EngineInterface, workspace: string, args: string[], stdin?: string): Promise<string> {
+async function runOutlinerCli($: EngineInterface, workspace: Workspace, args: string[], stdin?: string): Promise<string> {
   const root = await outlinerRootOf($)
   if (!root) throw Error('the Outliner plugin is disabled')
   const sessionId = await $.session.id()
   const ran = await $.process.run(
     ['/bin/sh', `${root}/scripts/run-bun.sh`, `${root}/src/cli.ts`, ...args, '--session', sessionId],
     {
-      cwd: workspace,
+      cwd: workspace.root,
       env: envFor(workspace),
       ...(stdin === undefined ? {} : { stdin }),
       timeoutMs: 60_000,
@@ -384,7 +433,7 @@ async function runDoorTool(
   name: string,
   input: Record<string, unknown>,
   control: string,
-  option: unknown,
+  option: PluginOptions,
 ): Promise<string> {
   const ep0ch = async (argv: string[], stdin?: string) => {
     const ran = await $.process.run(argv, { env: { EP0CH_CONTROL: control }, ...(stdin === undefined ? {} : { stdin }), timeoutMs: 15_000 })
@@ -427,15 +476,15 @@ async function runDoorTool(
 
 /**
  * Reads the session's workspace and Work-ID prefixes into `references`. A
- * session outside the configured workspaces links nothing; a service that
- * cannot answer leaves pages and block references linked, bare IDs not.
+ * session whose folder is bound to no outline, or opted out, links nothing; a
+ * service that cannot answer leaves pages and block references linked, bare
+ * IDs not.
  */
-async function loadReferences($: EngineInterface, option: unknown): Promise<void> {
+async function loadReferences($: EngineInterface, option: PluginOptions): Promise<void> {
   if (isLoadingReferences) return
   isLoadingReferences = true
   try {
-    const workspaces = effectiveWorkspaces(option, await $.env.get('PI_OUTLINER_MENTIONS_WORKSPACES'), await $.env.get('HOME'))
-    const workspace = workspaceForCwd(await $.session.cwd(), workspaces)
+    const workspace = await sessionWorkspace($, option)
     if (!workspace) {
       references = { workspace: null, prefixes: [] }
       return
@@ -445,7 +494,7 @@ async function loadReferences($: EngineInterface, option: unknown): Promise<void
     if (!root) return
     const status = await $.process.run(
       ['/bin/sh', `${root}/scripts/run-bun.sh`, `${root}/src/cli.ts`, 'work-id-status'],
-      { cwd: workspace, env: envFor(workspace), timeoutMs: 30_000 },
+      { cwd: workspace.root, env: envFor(workspace), timeoutMs: 30_000 },
     )
     if (status.exitCode !== 0) return
     const { prefix, observedPrefixes } = JSON.parse(status.stdout) as { prefix?: unknown; observedPrefixes?: unknown }
@@ -500,13 +549,13 @@ function shownText({ title, place, reader }: Shown, reference: string): string {
  * at a time, so concurrent clicks and tool calls split one pane. Resolves to
  * the title and where it went; throws with the reason otherwise.
  */
-function openNote($: EngineInterface, workspace: string | null, uri: string, actor: string): Promise<Shown> {
+function openNote($: EngineInterface, workspace: Workspace | null, uri: string, actor: string): Promise<Shown> {
   const shown = showQueue.then(() => openNow($, workspace, uri, actor))
   showQueue = shown.catch(() => {})
   return shown
 }
 
-async function openNow($: EngineInterface, workspace: string | null, uri: string, actor: string): Promise<Shown> {
+async function openNow($: EngineInterface, workspace: Workspace | null, uri: string, actor: string): Promise<Shown> {
   const [control, tile, tileId, paneId, herdrWorkspace] = await Promise.all([
     $.env.get('EP0CH_CONTROL'),
     $.env.get('EP0CH_TILE'),
@@ -521,7 +570,7 @@ async function openNow($: EngineInterface, workspace: string | null, uri: string
     if (!root) throw Error('the Outliner plugin is disabled')
     return $.process.run(
       ['/bin/sh', `${root}/scripts/run-bun.sh`, `${root}/src/cli.ts`, ...args],
-      { cwd: workspace ?? await $.session.cwd(), ...(workspace ? { env: envFor(workspace) } : {}), timeoutMs: 30_000 },
+      { cwd: workspace?.root ?? await $.session.cwd(), ...(workspace ? { env: envFor(workspace) } : {}), timeoutMs: 30_000 },
     )
   }
   let target: { id: string; title?: string } | undefined
@@ -529,7 +578,7 @@ async function openNow($: EngineInterface, workspace: string | null, uri: string
     if (target) return target
     if (!workspace) {
       const id = outlinerBlockIdOf(uri)
-      if (!id) throw Error('this session is not in a configured Outliner workspace to resolve it in; give a block id')
+      if (!id) throw Error("this session's folder is not bound to an Outliner outline to resolve it in; give a block id")
       return (target = { id })
     }
     const resolved = await outliner(['resolve', uri])
@@ -558,7 +607,7 @@ async function openNow($: EngineInterface, workspace: string | null, uri: string
   if (paneId && herdrWorkspace && workspace) {
     return { title: await showInHerdrPane($, outliner, workspace, uri), place: 'pane' }
   }
-  why += paneId && herdrWorkspace ? ', and not in a configured Outliner workspace for a Herdr pane' : ', nor in Herdr'
+  why += paneId && herdrWorkspace ? ", and its folder is not bound to an Outliner outline for a Herdr pane" : ', nor in Herdr'
   const label = outlinerLabelOf(uri)
   let ref: string
   try {
@@ -573,7 +622,7 @@ async function openNow($: EngineInterface, workspace: string | null, uri: string
 async function showInHerdrPane(
   $: EngineInterface,
   outliner: (args: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>,
-  workspace: string,
+  workspace: Workspace,
   uri: string,
 ): Promise<string> {
   const [sessionId, paneId, herdrWorkspace] = await Promise.all([
@@ -618,7 +667,7 @@ async function showInHerdrPane(
   if (resolved.exitCode !== 0) throw Error(failureReasonOf(resolved.stderr) || 'the target did not resolve')
   const { id, title, fragmentId } = JSON.parse(resolved.stdout) as { id: string; title?: string; fragmentId?: string }
   const opened = await $.process.run(
-    detailSplitArgv({ paneId, workspace, sessionId, blockId: id, ...(fragmentId ? { fragmentId } : {}) }),
+    detailSplitArgv({ paneId, workspace: workspace.root, ...(workspace.outline ? { outline: workspace.outline } : {}), sessionId, blockId: id, ...(fragmentId ? { fragmentId } : {}) }),
     { timeoutMs: 15_000 },
   )
   if (opened.exitCode !== 0) throw Error(failureReasonOf(opened.stderr) || 'Herdr could not open a Detail')
@@ -631,7 +680,7 @@ async function showInHerdrPane(
 }
 
 /** A click on a reference: opened by `openNote`, or a toast saying why not. */
-async function openReference($: EngineInterface, workspace: string, href: string): Promise<void> {
+async function openReference($: EngineInterface, workspace: Workspace, href: string): Promise<void> {
   const uri = outlinerUriOf(href)
   if (!uri) return
   try {

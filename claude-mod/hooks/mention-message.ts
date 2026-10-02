@@ -13,11 +13,12 @@ export type MentionMessage = {
 }
 
 /**
- * The workspaces option as configured: one absolute folder or several,
+ * A folder list as configured (the `workspaces` option or
+ * `PI_OUTLINER_MENTIONS_WORKSPACES`): one absolute folder or several,
  * separated by ':' or ','. Trailing slashes are dropped so `/a/b/` matches a
- * cwd of `/a/b`. An entry names a folder only: which outline it feeds is
- * resolved by the Outliner CLI from that folder's `client.json`, the same way
- * for every client. Any other entry is an error, never skipped.
+ * cwd of `/a/b`. An entry names a folder only; any other entry is an error,
+ * never skipped. In folder mode the list opts folders out; in allowlist mode
+ * it is the only folders that feed an outline (`mentionsModeOf`).
  */
 export function workspacesOf(value: unknown, home?: string): string[] {
   const parts = Array.isArray(value) ? value : typeof value === 'string' ? value.split(/[:,]/) : []
@@ -35,13 +36,82 @@ export function workspacesOf(value: unknown, home?: string): string[] {
 }
 
 /**
- * The option when it names at least one workspace, otherwise the environment
+ * The option when it names at least one folder, otherwise the environment
  * variable. Claude Code passes an unset string option as '', so an empty
  * option cannot be told from an unset one and never overrides the environment.
  */
 export function effectiveWorkspaces(option: unknown, environment: string | undefined, home?: string): string[] {
   const configured = workspacesOf(option, home)
   return configured.length > 0 ? configured : workspacesOf(environment, home)
+}
+
+/**
+ * How a session's folder finds its outline:
+ *
+ * - `folder`: the nearest folder bound to an outline, the way every Outliner
+ *   client resolves it (`bound-folder`: a `client.json`, or an outline root the
+ *   host serves). The folder list opts folders out. An unbound folder feeds
+ *   nothing; it never falls back to a default outline.
+ * - `allowlist`: only the listed folders, as before folder mode (the strict mode).
+ */
+export type MentionsMode = 'folder' | 'allowlist'
+
+/**
+ * The `mode` option when set, otherwise `PI_OUTLINER_MENTIONS_MODE`. Neither
+ * set: `folder`, unless folders are listed. A list with no mode is a config
+ * written before folder mode, when the list was the allowlist, so it keeps
+ * meaning that (rerunning the installer moves it to folder mode). Any other
+ * value is an error, never read as one of them.
+ */
+export function mentionsModeOf(option: unknown, environment: string | undefined, listed: readonly string[] = []): MentionsMode {
+  const typed = typeof option === 'string' && option.trim() !== '' ? option.trim() : (environment ?? '').trim()
+  if (typed === '') return listed.length > 0 ? 'allowlist' : 'folder'
+  if (typed === 'folder' || typed === 'allowlist') return typed
+  throw Error(`Outliner mentions mode "${typed}" is neither folder nor allowlist`)
+}
+
+/**
+ * The folder a session's Outliner CLI runs start from, and, for an outline
+ * root the host serves, that outline's name (a folder's own `client.json`
+ * names it for the CLI; a recorded root does not).
+ */
+export type Workspace = { root: string; outline?: string }
+
+/** The environment an Outliner CLI run gets for a workspace: its folder, and its outline when only the host knows it. */
+export function workspaceEnvOf(workspace: Workspace): Record<string, string> {
+  return { OUTLINER_WORKSPACE_ROOT: workspace.root, ...(workspace.outline ? { OUTLINER_OUTLINE: workspace.outline } : {}) }
+}
+
+/**
+ * The bound folder in `bound-folder`'s answer for `cwd`, or null: unbound, or
+ * an answer that is not one (a folder that does not contain `cwd` is not).
+ */
+export function boundWorkspaceOf(stdout: string, cwd: string): Workspace | null {
+  let answer: unknown
+  try { answer = JSON.parse(stdout) } catch { return null }
+  if (!answer || typeof answer !== 'object') return null
+  const { bound, source, folder, outline } = answer as Record<string, unknown>
+  if (bound !== true || typeof folder !== 'string') return null
+  const root = absolutePath(folder)
+  if (root === null || workspaceForCwd(cwd, [root]) !== root) return null
+  if (source === 'host-root') return typeof outline === 'string' && outline !== '' ? { root, outline } : null
+  return source === 'client' ? { root } : null
+}
+
+/**
+ * The workspace a session in `cwd` feeds, or null. In folder mode a listed
+ * folder (or one inside it) is opted out, and otherwise the bound folder wins;
+ * in allowlist mode the nearest listed folder, bound or not.
+ */
+export function sessionWorkspaceOf(
+  cwd: string,
+  mode: MentionsMode,
+  listed: readonly string[],
+  bound: Workspace | null,
+): Workspace | null {
+  const nearestListed = workspaceForCwd(cwd, listed)
+  if (mode === 'allowlist') return nearestListed === null ? null : { root: nearestListed }
+  return nearestListed === null ? bound : null
 }
 
 /**
@@ -91,20 +161,19 @@ export function workspaceForCwd(cwd: string, workspaces: readonly string[]): str
 }
 
 /**
- * The message for one completed turn, or null when the turn or its workspace
- * is not ingested. The turn id is the message identity, so a repeated delivery
- * of the same turn deduplicates in the service.
+ * The message for one completed turn in a session feeding `workspace`, or
+ * null when the turn is not ingested or the session feeds none. The turn id
+ * is the message identity, so a repeated delivery of the same turn
+ * deduplicates in the service.
  */
 export function mentionMessageOf(
   e: TurnCompleteInput,
-  session: { id: string; cwd: string },
-  workspaces: readonly string[],
+  session: { id: string },
+  workspace: Workspace | null,
 ): MentionMessage | null {
-  if (!isIngestible(e)) return null
-  const workspaceRoot = workspaceForCwd(session.cwd, workspaces)
-  if (workspaceRoot === null) return null
+  if (!isIngestible(e) || workspace === null) return null
   return {
-    workspaceRoot,
+    workspaceRoot: workspace.root,
     agent: 'claude',
     sessionId: session.id,
     messageId: e.turnId,
