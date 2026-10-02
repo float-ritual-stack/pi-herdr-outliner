@@ -19,7 +19,7 @@ const result=await runHerdrScenario({name:'virtual-branch-attention',async prepa
   const important=await annotate(an,'[priority::high]\nNeeds attention');await annotate(bn,'Ordinary comment');
   const view=await create('Attention view\n[type::virtual-branch] [query::fixture=379] [child-depth::2] [expanded::false] [expand-when::type=annotation annotation-status=open priority=high]');
   const compact=await create('Other compact view\n[type::virtual-branch] [query::fixture=379] [child-depth::2] [expanded::false]');
-  await s.setKeybindings({'tree.root.focus':['Alt+F'],'tree.virtual-branch.reset-expansion':['Alt+Z']});await s.keys(tree,'ctrl+r');await s.waitVisible(tree,'Outliner keymap reloaded');
+  await s.setKeybindings({'tree.root.focus':['Alt+F'],'tree.virtual-branch.reset-expansion':['Alt+Z']});await s.keys(tree,'ctrl+r');await s.waitVisible(tree,'Keymap and bars reloaded');
   const focus=async(v:Block)=>{await s.revealTree(tree,v.id);await s.keys(tree,'alt+f');await s.waitVisible(tree,`Focused branch: ${v.text.split('\n')[0]}`);};
   await focus(view);await s.waitVisible(tree,'Comment on');
   let frame=await s.visible(tree);assert(!frame.includes('Hidden sibling detail'));assert(!frame.includes('Review transfer'));await s.checkpoint('01-attention-path');

@@ -145,7 +145,7 @@ test('local Preview reveals canonical passage and general threads without openin
     const legacyFrame=renderDocumentPreview(reader.state!,{x:0,y:0,width:100,height:16},'help');
     pointer.render(legacyFrame.lines,legacyFrame,reader.state);
     await reader.key({name:'v'},100,13,noDetail,'v');
-    for(const density of ['compact','expanded'] as const){
+    for(const density of ['compact','full'] as const){
       const unavailable=renderDocumentPreview(reader.state!,{x:0,y:0,width:100,height:16},'help',undefined,density);
       expect(unavailable.controls?.some(control=>control.action==='preview.comment')).not.toBe(true);
       expect(unavailable.lines.join('\n')).not.toContain('c comment');

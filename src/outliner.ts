@@ -1,5 +1,5 @@
 import {PaneDisplay} from "./pane-display";
-import {ViewPreferences} from "./view-preferences";
+import {OutlinerUiConfig} from "./ui-config";
 import {focusActiveCapture} from "./capture-owner";
 import {TextViewerInput} from './text-viewer-input';
 import {openExternalUrl} from "./open-external";
@@ -39,6 +39,7 @@ import {
   treeDisclosureAtClick,
   parseTreeWheel,
   treeLinkAtClick,
+  treeLinkAtPoint,
   treeClickActivates,
   treeRowAtClick,
   type TreeMouseTarget,
@@ -49,7 +50,7 @@ import { waitForCompatibleService } from "./service-compatibility";
 
 initTheme(undefined, false);
 const paths = resolveClientPaths();
-const viewPreferences = new ViewPreferences();
+const uiConfig = OutlinerUiConfig.load();
 const paneDisplay = new PaneDisplay(draw);
 reportCurrentPaneWorkspace(paths.workspaceRoot);
 const client = createOutlinerClient(paths);
@@ -76,6 +77,18 @@ let renderedFrameLines: string[] = [];
 const previewInput = new DocumentPreviewInput();
 const viewerInput = new TextViewerInput();
 let renderedMouseTargets: readonly (TreeMouseTarget | null | undefined)[] = [];
+let paneOwnsRightClick = rightClickOwnership === "outliner";
+
+/** While a menu is open the pane takes right-clicks (they pin), then hands them back to Herdr. */
+function syncRightClickOwnership(): void {
+  const wanted = rightClickOwnership === "outliner" || controller.view().mode === "action-menu";
+  if (wanted === paneOwnsRightClick || stopping) return;
+  paneOwnsRightClick = wanted;
+  setImmediate(() => {
+    try { configureCurrentPaneRightClick(wanted ? "outliner" : "herdr"); }
+    catch (error) { enqueueWork(() => controller.handleError(error)); }
+  });
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -100,11 +113,12 @@ function draw(): void {
   controller.setViewportStart(result.scrollStartEntryIndex, result.expandedPage);
   if(result.breadcrumbStart !== undefined) controller.setBreadcrumbStart(result.breadcrumbStart);
   process.stdout.write(renderedFrameLines.join("\n"));
+  syncRightClickOwnership();
 }
 
 async function stop(): Promise<void> {
   if (stopping) return;
-  if (rightClickOwnership === "outliner") {
+  if (paneOwnsRightClick) {
     try {
       configureCurrentPaneRightClick("herdr");
     } catch {
@@ -131,8 +145,7 @@ if(initialRoot && ![initialRoot.rowId,initialRoot.canonicalId,initialRoot.label]
 const controller = createTreeController({
   previewSelectionInput:previewInput,
   inspectProperties: blockId => { openDetailPane({workspaceRoot: paths.workspaceRoot, browsingContextId: crypto.randomUUID(), propertyInspectorBlockId: blockId}); },
-  density: () => viewPreferences.density,
-  setDensity: value => viewPreferences.setDensity(value),
+  uiConfig,
   copyText:text=>process.stdout.write(osc52ClipboardWrite(text)),
       openExternal: openExternalUrl,
   openKeyInspector: () => keyInspector.open(),
@@ -224,8 +237,9 @@ function handleMouseSequence(sequence: string): void {
   if (controller.view().mode === "inbox" && controller.view().inbox?.handleActivityMouse(sequence)) return;
   if (controller.view().mode === "goto") { enqueueWork(() => controller.handleGotoMouse(sequence)); return; }
   const secondaryClick = parseTreeSecondaryClick(sequence);
-  if (secondaryClick && rightClickOwnership === "outliner") {
-    enqueueWork(() => controller.handleAction("tree.menu.open", secondaryClick));
+  if (secondaryClick) {
+    const link = treeLinkAtPoint(renderedFrameLines, secondaryClick);
+    enqueueWork(() => controller.handleSecondaryClick(secondaryClick, link));
     return;
   }
   const wheelDirection = parseTreeWheel(sequence);

@@ -56,7 +56,7 @@ const result = await runHerdrScenario({
 
     await session.setKeybindings({ "tree.reorder.up": ["Shift+ArrowUp"], "tree.reorder.down": ["Shift+ArrowDown"] });
     await session.keys(treePane, "ctrl+r");
-    await session.waitVisible(treePane, "Outliner keymap reloaded");
+    await session.waitVisible(treePane, "Keymap and bars reloaded");
     await session.keys(treePane, "shift+down");
     await ranked([second.id, first.id]);
     await session.setKeybindings({ "tree.reorder.down": ["Shift+ArrowDown"], "tree.detail.below": ["Shift+ArrowDown"] });
@@ -77,7 +77,7 @@ const result = await runHerdrScenario({
       canonicalOrder: await siblings(), branchOrder: await rankOrder(), noExtraClients: true });
     await session.setKeybindings({});
     await session.keys(treePane, "ctrl+r");
-    await session.waitVisible(treePane, "Outliner keymap reloaded");
+    await session.waitVisible(treePane, "Keymap and bars reloaded");
 
     for (const [key, direction] of [["alt+shift+down", "down"], ["alt+shift+right", "right"]] as const) {
       await session.keys(treePane, key);

@@ -39,11 +39,11 @@ const result = await runHerdrScenario({
       const headerOffset = (frame: string) => {
         const lines = frame.split("\n");
         const heading = lines.findIndex(line => /[●○] Preview · FOCUS FIRST/.test(line));
-        const title = lines.findIndex(line => line.includes("Outliner  "));
+        const title = lines.findIndex(line => /[●○] Tree/.test(line));
         if (heading < 0 || title < 0) return null;
         return {
           row: heading - title,
-          column: visibleWidth(lines[heading]!.slice(0, lines[heading]!.indexOf("Preview"))) - visibleWidth(lines[title]!.slice(0, lines[title]!.indexOf("Outliner  "))),
+          column: visibleWidth(lines[heading]!.slice(0, lines[heading]!.indexOf("Preview"))) - visibleWidth(lines[title]!.slice(0, lines[title]!.search(/[●○] Tree/))),
         };
       };
       const expectedOffset = headerOffset(paneFrame);

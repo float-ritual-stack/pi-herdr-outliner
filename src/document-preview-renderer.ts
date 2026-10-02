@@ -2,7 +2,7 @@ import {CHECKLIST_CHOICES} from "./checklist-session";
 import {parsePreviewRegionActionUri} from "./detail-preview-regions";
 import {BufferComposer,BUFFER_COMPOSER_HEIGHT,bufferComposerEditorBody} from './buffer-composer';
 import {layoutDetailEditor} from './detail-editor-layout';
-import type {ReaderDensity} from "./reader-chrome";
+import {renderPaneBar, type ChromeLevel, type PaneBarButton} from "./reader-chrome";
 import {withInternalLinks, stripRenderedLinks, measureRenderedLinks, type RenderedLink} from './rendered-links';
 import {getMarkdownTheme} from '@earendil-works/pi-coding-agent';
 import {truncateToWidth, visibleWidth} from '@earendil-works/pi-tui';
@@ -11,8 +11,13 @@ import {renderDetailReadPreview, type DetailReadPreviewDocument} from './detail-
 import type {DocumentPreviewState} from './document-preview';
 import {sanitizeDynamicText} from './terminal';
 
-// [‹][›][Open] must remain reachable even in a narrow reader.
-export const PREVIEW_NAVIGATION_WIDTH=12;
+/** A pane bar for this preview: its pinned buttons and its `[⋯]` menu. */
+export interface DocumentPreviewBar {
+  buttons: readonly PaneBarButton[];
+  menuAction?: string;
+  /** The host pane's hint row shows notices, so the preview keeps no row for them. */
+  noticeInHint?: boolean;
+}
 export interface PreviewRect {x:number;y:number;width:number;height:number}
 export interface DocumentPreviewFrame {
   rect: PreviewRect;
@@ -63,7 +68,7 @@ export function documentPreviewLines(document:DetailReadPreviewDocument,width:nu
   return entry.lines;
 }
 /** Render one allocated document rectangle. All input geometry comes from this frame. */
-export function renderDocumentPreview(preview:DocumentPreviewState,rect:PreviewRect,help:string,toolbar?:string, density: ReaderDensity = "expanded", menuAction?: string):DocumentPreviewFrame {
+export function renderDocumentPreview(preview:DocumentPreviewState,rect:PreviewRect,help:string,toolbar?:string, chrome: ChromeLevel = "full", bar?: DocumentPreviewBar):DocumentPreviewFrame {
   if(preview.checklistPicker){
     const picker=preview.checklistPicker;
     const room=Math.max(1,rect.height-2);
@@ -80,7 +85,7 @@ export function renderDocumentPreview(preview:DocumentPreviewState,rect:PreviewR
   if(preview.comment){
     const draft=preview.comment;
     const readerHeight=Math.max(0,rect.height-BUFFER_COMPOSER_HEIGHT);
-    const reader=readerHeight?renderDocumentPreview({...preview,comment:undefined},{...rect,height:readerHeight},help,toolbar,density,menuAction):null;
+    const reader=readerHeight?renderDocumentPreview({...preview,comment:undefined},{...rect,height:readerHeight},help,toolbar,chrome,bar):null;
     const composerHeight=Math.min(BUFFER_COMPOSER_HEIGHT,Math.max(1,rect.height));
     const body=bufferComposerEditorBody(rect.width,composerHeight);
     const layout=layoutDetailEditor(draft.buffer.lines,draft.buffer.row,draft.buffer.column,body);
@@ -93,12 +98,13 @@ export function renderDocumentPreview(preview:DocumentPreviewState,rect:PreviewR
     return {rect,content:reader?.content??{...rect,height:0},lines,totalRows:reader?.totalRows??0,offset:reader?.offset??preview.offset,
       links:[],controls:[]};
   }
-  if (density === "compact") return renderCompactPreview(preview, rect, menuAction);
+  if (chrome === "compact" || bar) return renderBarPreview(preview, rect, chrome, bar ?? {buttons: []}, help);
   const content={...rect,y:rect.y+2,height:Math.max(1,rect.height-3)};
   const rendered=documentPreviewLines(preview.document,content.width);
   const offset=Math.max(0,Math.min(preview.offset,Math.max(0,rendered.length-content.height)));
   const controls:NonNullable<DocumentPreviewFrame['controls']>=[];
-  let navigation=toolbar&&visibleWidth(toolbar)<=rect.width-PREVIEW_NAVIGATION_WIDTH?toolbar:'';
+  // [‹][›][Open] must remain reachable even in a narrow reader.
+  let navigation=toolbar&&visibleWidth(toolbar)<=rect.width-12?toolbar:'';
   let column=visibleWidth(navigation);
   for(const [label,action] of [['‹','back'],['›','forward'],['Open','open'],...(preview.document.commentTarget?[['Comment','comment']]:[])]){
     const text=`[${label}]`;
@@ -117,33 +123,39 @@ export function renderDocumentPreview(preview:DocumentPreviewState,rect:PreviewR
 }
 export function pointInPreview(rect:PreviewRect,column:number,row:number):boolean{return column>=rect.x&&column<rect.x+rect.width&&row>=rect.y&&row<rect.y+rect.height;}
 
-function renderCompactPreview(preview: DocumentPreviewState, rect: PreviewRect, menuAction?: string): DocumentPreviewFrame {
-  const notice = preview.notice ? sanitizeDynamicText(preview.notice) : "";
-  const content = {...rect, y: rect.y + 1, height: Math.max(0, rect.height - 1 - Number(Boolean(notice)))};
+function previewHelpLine(preview: DocumentPreviewState, help: string): string {
+  const commentKey=preview.bindings?.comment??'c',selectKey=preview.bindings?.select??'v';
+  if (preview.activeLink) return parsePreviewRegionActionUri(preview.activeLink)?.type==='checklist.open'?'Enter status · Space toggle · Ctrl+Z undo':`Enter follow · ${sanitizeDynamicText(preview.activeLinkLabel??preview.activeLink)}`;
+  return `${preview.document.commentTarget&&commentKey!=='unbound'?`${commentKey} comment · `:""}${selectKey} select · [/] threads · Tab links${help?` · ${help}`:""}`;
+}
+
+/**
+ * The preview under a pane bar: one bar row (title, pinned buttons, `[⋯]`), the document,
+ * and in full chrome a shortcut row. Selecting a passage swaps the pins for its own two buttons.
+ */
+function renderBarPreview(preview: DocumentPreviewState, rect: PreviewRect, chrome: ChromeLevel, bar: DocumentPreviewBar, help: string): DocumentPreviewFrame {
+  const notice = preview.notice && !bar.noticeInHint ? sanitizeDynamicText(preview.notice) : "";
+  const footer = chrome === "full" ? 1 : Number(Boolean(notice));
+  const content = {...rect, y: rect.y + 1, height: Math.max(0, rect.height - 1 - footer)};
   const rendered = documentPreviewLines(preview.document, content.width);
   const offset = Math.max(0, Math.min(preview.offset, Math.max(0, rendered.length - content.height)));
-  const controls: NonNullable<DocumentPreviewFrame["controls"]> = [];
-  // Unavailable history controls are omitted so they never take title space.
-  const commentKey=preview.bindings?.comment==='unbound'?'Comment':preview.bindings?.comment??'c';
-  const actions = ((preview.selecting||preview.passageSelected) ? [[commentKey,"preview.comment",!!preview.document.commentTarget],["Esc","preview.selection.cancel",true]] as const : [["‹", "preview.back", preview.canBack], ["›", "preview.forward", preview.canForward],
-    ["Open", "preview.open", true], [commentKey, "preview.comment", !!preview.document.commentTarget], ...(menuAction ? [["⋯", menuAction, true]] : [])] as const)
-    .filter(([, , enabled]) => enabled);
-  const controlWidth = actions.reduce((sum, [label]) => sum + String(label).length + 2, 0);
-  const titleWidth = Math.max(0, rect.width - controlWidth - 1);
-  let strip = titleWidth ? truncateToWidth(preview.selecting ? "Select passage · Shift+arrows" : preview.passageSelected ? "Passage selected" : `${preview.focused ? "●" : "○"} Preview · ${sanitizeDynamicText(preview.title)}`, titleWidth) + " " : "";
-  let column = visibleWidth(strip);
-  for (const [label, action] of actions) {
-    const text = `[${label}]`;
-    if (column + text.length > rect.width) break;
-    controls.push({rect: {x: rect.x + column, y: rect.y, width: text.length, height: 1}, action: String(action)});
-    strip += text;
-    column += text.length;
-  }
+  const commentKey = preview.bindings?.comment==='unbound'?'Comment':preview.bindings?.comment??'c';
+  const selection = preview.selecting || preview.passageSelected;
+  const buttons: PaneBarButton[] = selection
+    ? [...(preview.document.commentTarget ? [{actionId: "preview.comment", text: `[${commentKey}]`}] : []), {actionId: "preview.selection.cancel", text: "[Esc]"}]
+    : [...bar.buttons];
+  // The pane's identity stays first; a selection says what it is after it.
+  const identity = `${preview.focused ? "●" : "○"} Preview · ${preview.selecting ? "Select passage · Shift+arrows" : preview.passageSelected ? "Passage selected" : sanitizeDynamicText(preview.title)}`;
+  const strip = renderPaneBar(rect.width, identity, buttons, selection ? undefined : bar.menuAction);
+  const controls: NonNullable<DocumentPreviewFrame["controls"]> = strip.controls.map(control => ({
+    rect: {x: rect.x + control.x, y: rect.y, width: control.width, height: 1}, action: control.action,
+  }));
   const links = documentPreviewLinks(preview.document, content.width)
     .filter(link => link.row >= offset && link.row < offset + content.height)
     .map(link => ({uri: link.uri, rect: {x: content.x + link.column, y: content.y + link.row - offset, width: link.width, height: 1}}));
-  const lines = [strip, ...rendered.slice(offset, offset + content.height)];
-  while (lines.length < rect.height - Number(Boolean(notice))) lines.push("");
-  if (notice) lines.push(notice);
+  const lines = [strip.line, ...rendered.slice(offset, offset + content.height)];
+  while (lines.length < rect.height - footer) lines.push("");
+  if (chrome === "full") lines.push(notice || `\x1b[2m${previewHelpLine(preview, help)}\x1b[22m`);
+  else if (notice) lines.push(notice);
   return {rect, content, lines: lines.slice(0,rect.height).map(line => shade(line,rect.width)), offset, totalRows: rendered.length, documentFrame:cache.get(preview.document)!.frame, links, controls};
 }

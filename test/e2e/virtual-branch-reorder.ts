@@ -54,9 +54,9 @@ const result = await runHerdrScenario({
     const density = async (label: string) => {
       await s.keys(tree, "?"); await s.text(tree, label); await s.keys(tree, "enter");
     };
-    await density("Expanded layout");
+    await density("Tree chrome");
     await s.waitVisible(tree, "View index › ◇ Candidate list › ◇ BRAVO candidate");
-    await density("Compact layout");
+    await density("Tree chrome");
     await s.waitFor("compact Tree", () => s.visible(tree), text => !text.includes("View index › ◇"));
     await s.keys(tree, "alt+down");
     await s.waitVisible(tree, "Moved down within virtual branch");

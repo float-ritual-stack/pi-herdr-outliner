@@ -8,7 +8,10 @@ import type {Block,BrowsingContextState} from '../../src/types';
 import type {InboxStatus} from '../../src/inbox-types';
 import {runHerdrScenario} from './herdr-runner';
 let sourceId='',outputId='',rawId='',original='';
-const result=await runHerdrScenario({name:'capture-history',async prepare(projectRoot,paths){
+const result=await runHerdrScenario({name:'capture-history',
+ // Preview's Open is a menu action; this journey pins it to the bar.
+ uiConfig:{bar:{preview:['tree.preview.right','tree.preview.bottom','tree.preview.auto','tree.preview.close','tree.reader.open']}},
+ async prepare(projectRoot,paths){
  await mkdir(paths.stateDir,{recursive:true});
  const store=new OutlinerStore(paths.database,{workspaceRoot:projectRoot}),server=new OutlinerServer(store,paths.socket),client=new OutlinerClient(paths.socket);
  try{
@@ -55,7 +58,7 @@ const result=await runHerdrScenario({name:'capture-history',async prepare(projec
  await s.revealTree(panes.tree,sourceId);
  await s.waitVisible(panes.tree,'● Preview');await s.keys(panes.tree,'alt+p');await s.waitVisible(panes.tree,'○ Preview');
  await s.setKeybindings({'tree.authored-links.toggle':['Alt+J']});
- await s.keys(panes.tree,'ctrl+r');await s.waitVisible(panes.tree,'Outliner keymap reloaded');
+ await s.keys(panes.tree,'ctrl+r');await s.waitVisible(panes.tree,'Keymap and bars reloaded');
  await s.keys(panes.tree,'alt+j');await s.waitVisible(panes.tree,'Resources');
  await s.waitVisible(panes.tree,'Before this rewrite');
  await s.checkpoint('authored-history-resources');

@@ -166,7 +166,7 @@ const result = await runHerdrScenario({
       await session.focus(panes.tree);
       if (composed) await session.client.request({action: "ui.command.send", command: {command: "focus", targetRegion: "tree", targetClientId: tree.clientId}});
       await session.keys(panes.tree, "ctrl+r");
-      await session.waitVisible(panes.tree, "Outliner keymap reloaded");
+      await session.waitVisible(panes.tree, "Keymap and bars reloaded");
       await inspectDetail(docs[2]!.id);
       const before = await session.registrations();
       await session.keys(panes.tree, "alt+t");
@@ -189,9 +189,14 @@ const result = await runHerdrScenario({
       await session.revealTree(pane, pointerDoc.id);
       await session.keys(pane, "alt+shift+p");
       await session.waitVisible(pane, "COPY ONLY PREVIEW TEXT");
-      const pointerFrame = await session.waitFor("Tree Preview visible beside hierarchy", terminal.visible, frame => Math.max(...frame.split("\n").map(visibleWidth)) >= 590 && frame.split("\n").some(line => line.includes("COPY ONLY PREVIEW TEXT") && !line.includes("↵")) && frame.includes("TREE POINTER SOURCE"));
+      // Other panes share the terminal row, so judge only the pane segment holding the passage.
+      const previewPassage = (line: string) => {
+        const at = line.lastIndexOf("COPY ONLY PREVIEW TEXT");
+        return at >= 0 && !line.slice(line.lastIndexOf("│", at) + 1).includes("↵");
+      };
+      const pointerFrame = await session.waitFor("Tree Preview visible beside hierarchy", terminal.visible, frame => Math.max(...frame.split("\n").map(visibleWidth)) >= 590 && frame.split("\n").some(previewPassage) && frame.includes("TREE POINTER SOURCE"));
       const lines = pointerFrame.split("\n");
-      const row = lines.findIndex(line => line.includes("COPY ONLY PREVIEW TEXT") && !line.includes("↵"));
+      const row = lines.findIndex(previewPassage);
       const column = visibleWidth(lines[row]!.slice(0, lines[row]!.lastIndexOf("COPY ONLY PREVIEW TEXT")));
       const beforePointer = (await session.registrations()).find(c => c.clientId === independent.clientId)!;
       const beforeSelection = await session.client.request({action: "browsing-context.get", contextId: independent.contextId});

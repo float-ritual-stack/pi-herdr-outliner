@@ -7,7 +7,8 @@ import {annotationFrameCells,annotationFrameMatcher,annotationTargetMatcher} fro
 import type {TuiCopySelection} from '@earendil-works/pi-tui/dist/tui-alt-screen';
 import {presentReaderHeadings, sanitizeReaderDocument} from './document-presentation';
 import {concatDocuments, documentProvenanceKey, generatedDocument, observeDocument, sliceDocument, sourceDocument, type MappedDocument, type ObservedDocument} from './document-provenance';
-import type {ReaderDensity} from "./reader-chrome";
+import type {ChromeLevel, PaneBarButton} from "./reader-chrome";
+import type {OutlinerActionHint} from "./outliner-actions";
 import {checklistFoldIdentities, checklistControls, embeddedChecklistControls, type ChecklistControl} from "./checklist-controls";
 import { parsePropertyRecords } from "./properties";
 import {documentFolds, revealFoldedLine, type DocumentFold} from './document-folds';
@@ -244,7 +245,10 @@ interface CachedDetailDraftProjection extends DetailDraftProjection {
 }
 
 export interface DetailPiPreviewOptions {
-  density?(): ReaderDensity;
+  chrome?(): ChromeLevel;
+  /** This reader's pinned bar buttons and its generated hint row (compact chrome). */
+  bar?(): readonly PaneBarButton[];
+  hints?(): {entries: readonly OutlinerActionHint[]; menuKey: string; prefix?: string};
   titleInFrame?(): boolean;
   destinationLabel?(): string;
   surfaceLabel?(): string;
@@ -1294,7 +1298,8 @@ class DetailPreviewHeader implements Component {
   render(width: number): string[] {
     const header: DetailHeaderOptions = {
       linkBreadcrumbs: this.linksEnabled,
-      density: this.options.splitActive?.() ? "expanded" : this.options.density?.() ?? "compact",
+      chrome: this.options.splitActive?.() ? "full" : this.options.chrome?.() ?? "compact",
+      bar: this.options.bar?.() ?? [],
       titleInFrame: this.options.titleInFrame?.(),
       propertyKeys: this.options.headerPropertyKeys,
       destinationLabel: this.options.destinationLabel?.(),
@@ -1333,7 +1338,8 @@ class DetailPreviewFooter implements Component {
       "preview",
       this.options.helpText?.() ?? PREVIEW_HELP,
       this.options.chooserHelpText?.(),
-      this.options.splitActive?.() ? "expanded" : this.options.density?.() ?? "compact",
+      this.options.splitActive?.() ? "full" : this.options.chrome?.() ?? "compact",
+      this.options.hints?.(),
     );
   }
 
@@ -1437,8 +1443,8 @@ export class DetailPiPreviewLayout extends VStack {
       inspectorMarkdown,
       backlinkMarkdown,
       () => state.propertyInspector.presentation === "dedicated",
-      () => Boolean(state.context.selected) && !(options.splitActive?.() ?? false) && ((options.density?.() ?? "compact") === "expanded" || state.propertyInspector.expanded),
-      () => !(options.splitActive?.() ?? false) && ((options.density?.() ?? "compact") === "expanded" || state.backlinks.expanded),
+      () => Boolean(state.context.selected) && !(options.splitActive?.() ?? false) && ((options.chrome?.() ?? "compact") === "full" || state.propertyInspector.expanded),
+      () => !(options.splitActive?.() ?? false) && ((options.chrome?.() ?? "compact") === "full" || state.backlinks.expanded),
       (lines,width) => this.highlightBodyFocus(lines,width),
     );
     const scrollView = new ScrollView(body, {
@@ -1473,7 +1479,7 @@ export class DetailPiPreviewLayout extends VStack {
   }
 
   private showInspector(): boolean {
-    return this.state.propertyInspector.presentation === "dedicated" || this.state.propertyInspector.expanded || (this.options.density?.() ?? "compact") === "expanded";
+    return this.state.propertyInspector.presentation === "dedicated" || this.state.propertyInspector.expanded || (this.options.chrome?.() ?? "compact") === "full";
   }
 
   private inspectorLines(width: number): string[] {
@@ -1481,7 +1487,7 @@ export class DetailPiPreviewLayout extends VStack {
   }
 
   private showBacklinks(): boolean {
-    return this.state.backlinks.expanded || (this.options.density?.() ?? "compact") === "expanded";
+    return this.state.backlinks.expanded || (this.options.chrome?.() ?? "compact") === "full";
   }
 
   private backlinkLines(width: number): string[] {

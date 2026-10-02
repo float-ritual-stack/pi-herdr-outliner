@@ -589,7 +589,7 @@ const plainMarkdownTheme: MarkdownTheme = {
 
 // These existing journeys characterize Expanded's metadata and source-row layout.
 function expandedPreview(...args: ConstructorParameters<typeof DetailPiPreviewLayout>): DetailPiPreviewLayout {
-  return new DetailPiPreviewLayout(args[0], args[1], args[2], args[3], {density: () => "expanded", ...args[4]});
+  return new DetailPiPreviewLayout(args[0], args[1], args[2], args[3], {chrome: () => "full", ...args[4]});
 }
 
 function previewLayout(detail: DetailState): DetailPiPreviewLayout {
@@ -3224,7 +3224,7 @@ test.each([
   {label:"table row",raw:"# Capture\n\n| Name | State |\n| --- | --- |\n| item | **ready** |",needle:"item",wholeRow:true,expected:"item ready",ranges:[[44,48],[53,58]]},
 ])("terminal mouse copy captures $label and rejects a later same-text render",({raw,needle,wholeRow,expected,ranges})=>{
   const detail=state(raw,raw);
-  const layout=new DetailPiPreviewLayout(detail,plainMarkdownTheme,true,undefined,{density:()=>"compact"});
+  const layout=new DetailPiPreviewLayout(detail,plainMarkdownTheme,true,undefined,{chrome:()=>"compact"});
   const {terminal,input}=terminalFixture();
   layout.scrollView.setScrollbar('hidden');
   layout.syncState(terminal.columns);
@@ -3804,8 +3804,8 @@ test("duplicate body links retain occurrence focus through wrap, resize and fold
 
 test("compact Detail keeps authored content and source selection aligned when density changes", () => {
   const detail = state("# Sample note\n\n## Heading\nA selectable paragraph.\n\nTail", "# Sample note\n\n## Heading\nA selectable paragraph.\n\nTail");
-  let density: "compact" | "expanded" = "compact";
-  const layout = new DetailPiPreviewLayout(detail, plainMarkdownTheme, false, undefined, {density: () => density});
+  let density: "compact" | "full" = "compact";
+  const layout = new DetailPiPreviewLayout(detail, plainMarkdownTheme, false, undefined, {chrome: () => density});
   const first = layout.render(40).map(stripTerminalSequences);
   expect(first[0]).toContain("[⋯]");
   expect(first.findIndex(line => line.includes("Sample note"))).toBeLessThan(3);
@@ -3823,7 +3823,7 @@ test("compact Detail keeps authored content and source selection aligned when de
   layout.scrollView.scrollTo(separator);
   expect(layout.sourceLineAtScroll(40)).toBe(5);
   layout.scrollView.scrollTo(0);
-  density = "expanded";
+  density = "full";
   const expanded = layout.render(40).map(stripTerminalSequences);
   expect(layout.headerHeight(40)).toBe(3);
   expect(expanded.join("\n")).toContain("Collapsed · press b");

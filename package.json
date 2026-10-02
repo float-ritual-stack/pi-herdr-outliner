@@ -21,6 +21,7 @@
     "test:e2e:herdr": "bun run test/e2e/startup-interruption.ts && bun run test/e2e/resource-authoring.ts",
     "test:e2e:roadmap": "bun run test/e2e/roadmap-batches.ts",
     "test:e2e:extensions": "bun run test/e2e/extension-kinds.ts",
+    "test:e2e:pane-bars": "bun run test/e2e/pane-bars.ts",
     "test:e2e:goto": "bun run test/e2e/goto-search.ts && bun run test/e2e/goto-search.ts --composed",
     "test:e2e:inbox": "bun run test/e2e/inbox-agent.ts",
     "test:e2e:assistant-sessions": "bun run test/e2e/assistant-sessions.ts",

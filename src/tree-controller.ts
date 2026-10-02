@@ -1,6 +1,7 @@
 import {TreeComments} from "./tree-comments";
 import {TreeBranchFilter} from "./tree-branch-filter";
-import {adjacentReaderMenu, readerMenuFromAction, readerMenuItems, type ReaderDensity, type ReaderMenu} from "./reader-chrome";
+import {adjacentReaderMenu, paneBarButtons, readerMenuFromAction, readerMenuItems, type ChromeLevel, type PaneBarButton, type PaneBarState, type ReaderMenu} from "./reader-chrome";
+import {OutlinerUiConfig, paneKindName, type PaneKind} from "./ui-config";
 import {wrapTextWithAnsi} from '@earendil-works/pi-tui';
 import {inspectWorkspaceConnection,type WorkspaceReport} from './workspace-diagnostics';
 import {layoutWorkspaceReport} from './workspace-report-view';
@@ -12,7 +13,7 @@ import type {DetailDestinationPlacement} from "./detail-pane-placement";
 import type {ChangeFeedPage, MutationProvenance, OutlinerCapability, OutlinerServiceStatus, OutlinerViewAddress} from "./types";
 import {checkServiceCompatibility} from "./service-compatibility";
 import {DocumentPreview, type DocumentPreviewState} from './document-preview';
-import {treePreviewFrame, defaultPreviewPreferences, type PreviewPreferences} from './tree-preview';
+import {autoPreviewDock, treePreviewFrame, defaultPreviewPreferences, type PreviewPreferences} from './tree-preview';
 import type { RequestInput } from "./client";
 import { emptyAttentionState } from "./attention";
 import { GotoController } from "./goto-controller";
@@ -38,6 +39,8 @@ import {
   DEFAULT_OUTLINER_ACTION_KEYMAP,
   displayActionChord,
   filterActionMenuItems,
+  outlinerActionLink,
+  type OutlinerActionHint,
   type OutlinerActionKeymap,
   type OutlinerActionMenuItem,
 } from "./outliner-actions";
@@ -133,7 +136,21 @@ export interface TreeQuickCompletion {
 export interface TreeRoot { readonly rowId: string; readonly canonicalId: string; readonly label: string }
 
 export interface TreeView {
-  readonly density?: ReaderDensity;
+  /** Tree chrome from ui.json: compact is one bar and one hint row. */
+  readonly chrome?: ChromeLevel;
+  readonly previewChrome?: ChromeLevel;
+  /** Pinned buttons for the Tree's bar and its Preview's bar, in pin order. */
+  readonly bar?: readonly PaneBarButton[];
+  readonly previewBar?: readonly PaneBarButton[];
+  /** Generated hint row entries for the current scope; `menuKey` opens the full list. */
+  readonly hints?: readonly OutlinerActionHint[];
+  readonly menuKey?: string;
+  /** The open action menu's bar (where a pin goes), what is pinned there, and the pin key. */
+  readonly actionMenuBar?: PaneKind;
+  readonly actionMenuPinned?: ReadonlySet<string>;
+  readonly pinKey?: string;
+  /** Workspace, counts, Inbox and destination: shown in the menu instead of in the chrome. */
+  readonly actionMenuInfo?: string;
   readonly actionMenuCategory?: ReaderMenu;
   readonly root?: TreeRoot | null;
   readonly breadcrumbs?: readonly (TreeRoot & {kind:"physical"|"occurrence"})[];
@@ -192,9 +209,11 @@ export interface TreeView {
 
 export interface TreeControllerEffects {
   previewSelectionInput?: import('./document-preview').PreviewSelectionInput;
-  density?(): ReaderDensity;
+  /** Pins and chrome (ui.json); the host loads it, Ctrl+R reloads it. */
+  readonly uiConfig?: OutlinerUiConfig;
+  /** How long a status stays in the hint row; TREE_STATUS_FLASH_MS unless a test shortens it. */
+  readonly statusFlashMs?: number;
   inspectProperties?(blockId: string): void | Promise<void>;
-  setDensity?(density: ReaderDensity): void;
   copyText?(text:string):void;
   openExternal?(url:string):void|Promise<void>;
   readonly initialRoot?: TreeRoot;
@@ -244,6 +263,8 @@ export interface TreeController {
   handleDisclosure(rowId: string): Promise<void>;
   handleRowClick(rowId: string, activate?: boolean): Promise<void>;
   handleAction(actionId: string, origin?: { column: number; row: number }): Promise<void>;
+  /** A right-click: on an open menu's item it pins or unpins that item; elsewhere it opens the menu. */
+  handleSecondaryClick(origin: { column: number; row: number }, link?: string | null): Promise<void>;
   handleServiceEvent(event: OutlinerEvent): Promise<void>;
   handleConnect(): Promise<void>;
   handleDisconnect(): void;
@@ -277,6 +298,8 @@ interface PendingBrowsingPublication {
 const TREE_MUTATION = { author: "user", actorId: "tree" } as const satisfies MutationProvenance;
 
 const MAX_TREE_HISTORY_ENTRIES = 200;
+/** How long a status message stays in the hint row before the hints return. */
+export const TREE_STATUS_FLASH_MS = 8_000;
 
 
 function errorMessage(error: unknown): string {
@@ -445,6 +468,47 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   let refreshPending = false;
   let attention = emptyAttentionState(effects.clientId);
   const actionKeymap = effects.actionKeymap ?? DEFAULT_OUTLINER_ACTION_KEYMAP;
+  const uiConfig = effects.uiConfig ?? new OutlinerUiConfig("");
+  let menuBarKind: PaneKind = "tree";
+  let flashedStatus = "";
+  let flashTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Status is a flash: it shows in the hint row for a while, then the hints come back. */
+  function freshStatus(): string {
+    if (status !== flashedStatus) {
+      flashedStatus = status;
+      clearTimeout(flashTimer);
+      flashTimer = undefined;
+      if (status) {
+        const shown = status;
+        flashTimer = setTimeout(() => { if (status === shown) { status = ""; flashedStatus = ""; } if (!closed) effects.invalidate(); }, effects.statusFlashMs ?? TREE_STATUS_FLASH_MS);
+        flashTimer.unref?.();
+      }
+    }
+    return status;
+  }
+  function previewDockState(id: string): ReturnType<PaneBarState> {
+    if (id === "tree.preview.right" || id === "tree.preview.bottom") return {active: previewPreferences.dock === id.slice("tree.preview.".length)};
+    if (id === "tree.preview.auto") return {glyph: previewPreferences.dock === "auto" ? "◙" : "○"};
+    if (id === "tree.preview.toggle") return {glyph: previewPreferences.enabled ? "Hide Preview" : "Show Preview"};
+    if (id === "tree.indentation.toggle") return {glyph: `Indent: ${indentationMode}`};
+    return undefined;
+  }
+  function previewChrome() {
+    return {chrome: uiConfig.chrome("preview"), buttons: paneBarButtons(uiConfig.bar("preview"), actionKeymap, previewDockState)};
+  }
+  function menuPinnable(): boolean {
+    return mode === "action-menu" && !selectionMenu && !locationMenu && !destinationMenu;
+  }
+  function actionMenuInfo(): string {
+    const parts = [
+      sanitizeDynamicText(effects.workspaceRoot),
+      `${physicalRowCount} block${physicalRowCount === 1 ? "" : "s"} · ${occurrenceRowCount} projected`,
+    ];
+    const inboxCue = inboxStatusCue(inbox.snapshot, inbox.error);
+    if (inboxCue) parts.push(outlinerActionLink("tree.inbox.open", sanitizeDynamicText(inboxCue)));
+    parts.push(outlinerActionLink("tree.navigation.link", `Opens in: ${sanitizeDynamicText(navigationDisplay.text)}`));
+    return `\x1b[2m${parts.join(" · ")}\x1b[22m`;
+  }
   let actionMenuOrigin: { column: number; row: number } | null = null;
   let actionMenuIndex = 0;
   const destinationPreview=new NavigationDestinationPreview(effects,effects.invalidate);
@@ -659,7 +723,16 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (locationMenu) return filterActionMenuItems(locationMenu, actionMenuQuery);
     if (destinationMenu) return filterActionMenuItems(placementDirection ? navigationPlacementItems(destinationMenu.state) : navigationDestinationItems(destinationMenu.state, destinationMenu.purpose === "link",showOtherDestinations), actionMenuQuery);
     const selected = rows[selectedIndex];
-    let items = readerMenuItems(actionKeymap.menuItems("tree", actionMenuScope), actionMenuCategory);
+    let items = readerMenuItems(actionKeymap.menuItems("tree", actionMenuScope), actionMenuCategory).map(item => {
+      if (item.id === "tree.chrome.toggle" || item.id === "tree.preview.chrome.toggle") {
+        const kind: PaneKind = item.id === "tree.chrome.toggle" ? "tree" : "preview";
+        const current = uiConfig.chrome(kind);
+        return {...item, label: `${paneKindName(kind)} chrome: ${current} → ${current === "compact" ? "full" : "compact"}`};
+      }
+      if (item.id === "tree.navigation.link") return {...item, label: `Opens in: ${sanitizeDynamicText(navigationDisplay.text)} · Change`};
+      if (item.id === "tree.preview.auto") return {...item, label: `Auto dock Preview: ${previewPreferences.dock === "auto" ? "on → off" : "off → on"}`};
+      return item;
+    });
     if (actionMenuScope !== "browse") return filterActionMenuItems(items
       .filter(item => !inbox.attentionOnly || !["tree.inbox.older", "tree.inbox.newer"].includes(item.id))
       .map(item => item.id === "tree.inbox.attention"
@@ -772,7 +845,14 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       inboxCue: inboxStatusCue(inbox.snapshot, inbox.error),
       localPreview: localReader.state,
       previewPreferences,
-      density: effects.density?.() ?? "compact",
+      chrome: uiConfig.chrome("tree"),
+      previewChrome: uiConfig.chrome("preview"),
+      bar: paneBarButtons(uiConfig.bar("tree"), actionKeymap, previewDockState),
+      previewBar: previewChrome().buttons,
+      hints: actionKeymap.hints("tree", actionScope()),
+      menuKey: displayActionChord(actionKeymap.primaryBinding("tree.menu.open")),
+      pinKey: displayActionChord(actionKeymap.primaryBinding("tree.menu.pin")),
+      ...(menuPinnable() ? {actionMenuBar: menuBarKind, actionMenuPinned: new Set(uiConfig.bar(menuBarKind)), actionMenuInfo: actionMenuInfo()} : {}),
       actionMenuCategory,
       navigationDestinationLabel: navigationDisplay.text,
       previewHelp: `${actionKeymap.helpText("tree", "browse", ["tree.preview.focus", "tree.preview.close"])} · drag to copy`,
@@ -782,7 +862,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       viewerHelp: workspaceReport?actionKeymap.helpText("tree","workspace",["tree.viewer.copy","tree.viewer.next-field","tree.cancel"]):undefined,
       viewerOffset:Math.min(viewerOffset,Math.max(0,displayedViewerLines().length-1)),
       expandedBlockOffset,
-      status: disconnected ? "Workspace service disconnected; reconnecting…" : status,
+      status: disconnected ? "Workspace service disconnected; reconnecting…" : freshStatus(),
       refreshPending,
       attention,
       actionHelpText: mode === "branch-filter" ? "Type to find · Enter browse results · Esc clear · Ctrl+Q close" : inboxHelpText() ?? actionKeymap.helpText("tree", actionScope()),
@@ -2252,12 +2332,12 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   function scrollLocalPreview(delta:number):void {
     if(mode === "inbox") { inbox.scrollPreview(delta); return; }
     if(!localReader.state)return;
-    const frame=treePreviewFrame(localReader.state,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences,effects.density?.() ?? "compact");
+    const frame=treePreviewFrame(localReader.state,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences,previewChrome());
     localReader.scroll(delta,frame.content.width,frame.content.height);
   }
   function resizeLocalPreview(fraction: number): void {
     if (!localReader.state || !Number.isFinite(fraction)) return;
-    const frame = treePreviewFrame(localReader.state,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences,effects.density?.() ?? "compact");
+    const frame = treePreviewFrame(localReader.state,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences,previewChrome());
     const key = frame.placement === 'beside' ? 'sideFraction' : 'bottomFraction';
     previewPreferences = {...previewPreferences, [key]: Math.max(.2, Math.min(.8, fraction))};
     effects.invalidate();
@@ -2278,6 +2358,14 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     origin?: { column: number; row: number },
   ): Promise<void> {
     if (actionId !== "tree.read") cancelReadSequence();
+    if (actionId === "tree.menu.pin") {
+      if (!menuPinnable()) return;
+      const item = filteredActionMenuItems()[actionMenuIndex];
+      if (!item) return;
+      const result = uiConfig.togglePin(menuBarKind, item.id);
+      status = result.ok ? `${result.pinned ? "Pinned" : "Unpinned"} ${item.label} ${result.pinned ? "to" : "from"} the ${paneKindName(menuBarKind)} bar` : result.error;
+      effects.invalidate(); return;
+    }
     if (actionId === "tree.filter" || actionId === "tree.filter.clear" || actionId === "tree.filter.properties") {
       const activeMode = mode === "action-menu" ? actionMenuReturnMode : mode;
       if (activeMode !== "browse" && activeMode !== "branch-filter") { status = "Finish or cancel the active draft before changing filters"; effects.invalidate(); return; }
@@ -2382,11 +2470,12 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
         ] : []].map(line => sanitizeDynamicText(line));
       mode = "viewer"; effects.invalidate(); return;
     }
-    if (actionId.startsWith("tree.density.")) {
-      const density = actionId.slice("tree.density.".length);
-      if (density !== "compact" && density !== "expanded") return;
-      try { effects.setDensity?.(density); if (mode === "action-menu") mode = actionMenuReturnMode; }
-      catch (error) { status = errorMessage(error); }
+    if (actionId === "tree.chrome.toggle" || actionId === "tree.preview.chrome.toggle") {
+      const kind: PaneKind = actionId === "tree.chrome.toggle" ? "tree" : "preview";
+      const next = uiConfig.chrome(kind) === "compact" ? "full" : "compact";
+      if (mode === "action-menu") mode = actionMenuReturnMode;
+      const result = uiConfig.setChrome(kind, next);
+      status = result.ok ? `${paneKindName(kind)} chrome: ${next}` : result.error;
       effects.invalidate(); return;
     }
     if (actionId === "tree.location") {
@@ -2469,12 +2558,20 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       }
       effects.invalidate(); return;
     }
-    if (["tree.preview.right", "tree.preview.bottom", "tree.preview.auto"].includes(actionId)) {
-      previewPreferences = {...previewPreferences, dock: actionId.split('.').at(-1) as PreviewPreferences['dock']};
+    if (actionId === "tree.preview.right" || actionId === "tree.preview.bottom") {
+      previewPreferences = {...previewPreferences, dock: actionId === "tree.preview.right" ? "right" : "bottom"};
+      effects.invalidate(); return;
+    }
+    if (actionId === "tree.preview.auto") {
+      // A toggle: turning Auto off keeps Preview where Auto had put it.
+      const placed = localReader.state ? treePreviewFrame(localReader.state,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences,previewChrome()).placement : null;
+      const current = placed === "beside" ? "right" : placed === "below" ? "bottom" : autoPreviewDock(effects.terminalWidth());
+      previewPreferences = {...previewPreferences, dock: previewPreferences.dock === "auto" ? current : "auto"};
+      status = previewPreferences.dock === "auto" ? "Preview docks automatically" : `Preview stays ${current === "right" ? "right" : "below"}`;
       effects.invalidate(); return;
     }
     if (actionId === "tree.preview.grow" || actionId === "tree.preview.shrink") {
-      const frame = localReader.state && treePreviewFrame(localReader.state,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences,effects.density?.() ?? "compact");
+      const frame = localReader.state && treePreviewFrame(localReader.state,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences,previewChrome());
       const fraction = frame?.placement === 'beside' ? previewPreferences.sideFraction : previewPreferences.bottomFraction;
       resizeLocalPreview(fraction + (actionId.endsWith('grow') ? .05 : -.05)); return;
     }
@@ -2580,14 +2677,16 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       effects.invalidate();
       return;
     }
-    const readerMenu = readerMenuFromAction(actionId);
+    const readerMenu = actionId === "tree.preview.menu" ? "all" : readerMenuFromAction(actionId);
     if (readerMenu) {
       selectionMenu = false;
       actionMenuCategory = readerMenu; locationMenu = null;
       destinationMenu = null;placementDirection=null;destinationPreview.clear();
       if (mode !== "action-menu") {
         actionMenuReturnMode = mode;
-        actionMenuScope = actionScope();
+        actionMenuScope = actionId === "tree.preview.menu" && mode === "browse" && localReader.state ? "reader" : actionScope();
+        menuBarKind = actionMenuScope === "reader" ? "preview" : "tree";
+        status = "";
       }
       mode = "action-menu";
       actionMenuOrigin = origin ?? null;
@@ -2706,8 +2805,10 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       return;
     }
     if (actionId === "tree.keymap.reload") {
-      const result = actionKeymap.reload();
-      status = result.ok ? "Outliner keymap reloaded" : `Keymap unchanged: ${result.error}`;
+      const keys = actionKeymap.reload();
+      const ui = uiConfig.reload();
+      status = keys.ok && ui.ok ? "Keymap and bars reloaded"
+        : [keys.ok ? "" : `Keymap unchanged: ${keys.error}`, ui.ok ? "" : `Bars unchanged: ${ui.error}`].filter(Boolean).join(" · ");
       effects.invalidate();
       return;
     }
@@ -2890,7 +2991,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (!treePointer && inputAction !== "suppress" && mode === "browse" && localReader.state?.focused) {
       cancelReadSequence();
       if(localReader.hasDraft||localReader.state?.checklistPicker){
-        const frame=treePreviewFrame(localReader.state,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences,effects.density?.() ?? "compact");
+        const frame=treePreviewFrame(localReader.state,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences,previewChrome());
         await localReader.key(key,frame.content.width,frame.content.height,openPreviewTarget,str);return;
       }
       if(key.name==="escape"){
@@ -2901,7 +3002,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       if(action.suppressed)return;
       if(action.actionId?.startsWith("tree.reader."))return handleAction(action.actionId);
       if(action.actionId && (action.actionId.startsWith("tree.preview.") || ["tree.preview.focus","tree.preview.close","tree.pane.new","tree.navigation.link","tree.navigation.once","tree.menu.open"].includes(action.actionId))) return handleAction(action.actionId);
-      const frame=treePreviewFrame(localReader.state,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences,effects.density?.() ?? "compact");
+      const frame=treePreviewFrame(localReader.state,effects.terminalWidth(),effects.terminalHeight(),"",previewPreferences,previewChrome());
       if(await localReader.key(key,frame.content.width,frame.content.height,openPreviewTarget,str))return;
       const delta=key.name==="up"?-1:key.name==="down"?1:key.name==="pageup"?-frame.content.height:key.name==="pagedown"?frame.content.height:0;
       if(delta) scrollLocalPreview(delta);
@@ -2924,7 +3025,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (key.name !== "return" || key.ctrl || key.meta || key.shift || mode !== "browse") cancelReadSequence();
     if (key.ctrl && key.name === "q") {
       if(localReader.hasDraft||inbox.hasCommentDraft){status="Comment draft retained · save or cancel before closing";effects.invalidate();return;}
-      closed=true;navigationGeneration++;openRecovery.dispose();
+      closed=true;navigationGeneration++;openRecovery.dispose();clearTimeout(flashTimer);
       effects.stop();
       return;
     }
@@ -3307,6 +3408,15 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     handleDisclosure,
     handleRowClick,
     handleAction,
+    async handleSecondaryClick(origin, link) {
+      const id = link?.startsWith("pi-outliner-action:") ? link.slice("pi-outliner-action:".length) : null;
+      if (id && menuPinnable()) {
+        const index = filteredActionMenuItems().findIndex(item => item.id === id);
+        if (index >= 0) { actionMenuIndex = index; await handleAction("tree.menu.pin"); return; }
+      }
+      if (mode === "action-menu") return;
+      await handleAction("tree.menu.open", origin);
+    },
     handleServiceEvent,
     handleConnect,
     handleDisconnect,

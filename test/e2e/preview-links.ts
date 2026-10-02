@@ -12,6 +12,8 @@ import {runHerdrScenario} from './herdr-runner';
 let sourceId='';
 const result=await runHerdrScenario({
  name:'preview-links',
+ // Preview history and Open are menu actions; this journey pins them to the bar.
+ uiConfig:{bar:{preview:["tree.reader.back","tree.reader.open","tree.preview.close"]}},
  async prepare(projectRoot,paths){
   await mkdir(paths.stateDir,{recursive:true});
   const store=new OutlinerStore(paths.database,{workspaceRoot:projectRoot});
@@ -38,8 +40,8 @@ const result=await runHerdrScenario({
   const terminal=await session.attachClient();
   const point=(text:string,label:string)=>{
    const lines=text.split('\n');const row=lines.findIndex(line=>line.includes(label));
-   // Compact chrome (PIE-385): the Tree header reads "● Tree [Note] …" in both frames.
-   const anchorText=text.includes('Inbox agent')?'Inbox agent':'Tree [Note]';
+   // Tree's bar buttons are right-aligned; its identity ("● Tree") is the left-aligned anchor.
+   const anchorText=text.includes('Inbox agent')?'Inbox agent':(text.includes('● Tree')?'● Tree':'○ Tree');
    const anchor=lines.findIndex(line=>line.includes(anchorText));
    if(row<0||anchor<0)return null;
    const column=visibleWidth(lines[row]!.slice(0,lines[row]!.indexOf(label)))+1;

@@ -1039,12 +1039,22 @@ journalctl --user -u outliner-publish.service -f
 
 ## Keyboard controls
 
-The footer in each pane is generated from the effective action registry and is
-authoritative for the current mode. The tables below list defaults. Press `?`
-or click the pane-corner `[⋯]` target to open the same contextual action menu.
-Type to fuzzy-filter action labels, descriptions, bindings, and IDs; Backspace
-edits the query. Use Up/Down and Enter, click an action, or press Esc to close.
-The menu also includes currently unbound actions.
+Each pane has one hint row, generated from the effective action registry for the
+current mode: `?` first, then the bound actions by priority. Every hint is a link
+that runs its action. A status message ("Branch filter cleared") flashes in the
+same row for a few seconds, then the hints return. The tables below list
+defaults. Press `?` or click the pane's `[⋯]` to open the contextual action
+menu. Type to fuzzy-filter action labels, descriptions, bindings, and IDs;
+Backspace edits the query. Use Up/Down and Enter, click an action, or press Esc
+to close. The menu also includes currently unbound actions.
+
+In a `[⋯]` menu, **right-click** an item or press **`Alt+Enter`** to pin it to that
+pane's bar, or unpin it; pinned items are marked `♦`. Enter still runs the item.
+The menu's footer names the bar a pin goes to: a menu opened from Preview's
+`[⋯]`, or while Preview has focus, pins to the Preview bar. Right-clicks belong to
+Herdr's pane menu everywhere else; the pane takes them only while its menu is open
+(or always, with `OUTLINER_RIGHT_CLICK=outliner`). The pin key is the
+`tree.menu.pin` / `detail.menu.pin` action, so it is rebindable like any other.
 
 Detail resolves each terminal chord once against an ordered context stack:
 global close, active chooser/filter/completion/editor, focused projection, then
@@ -1124,6 +1134,42 @@ an array of chords; an empty array leaves that action unbound:
 chords, unknown action IDs, active-scope collisions, or removing the only
 cancel route rejects the entire candidate and preserves the prior bindings.
 
+### Pane bars and chrome (`ui.json`)
+
+Pins and chrome live beside the keymap in
+`$XDG_CONFIG_HOME/pi-herdr-outliner/ui.json` (falling back to
+`~/.config/pi-herdr-outliner/ui.json`), or `OUTLINER_UI_PATH`. Pinning from a
+menu writes it; you can also edit it by hand. `Ctrl+R` reloads it together with
+the keymap, and a file that doesn't parse is reported and leaves the bars as
+they are (pinning refuses to overwrite it until it is fixed). Defaults ship in
+code; a kind listed in the file replaces that kind's defaults.
+
+```json
+{
+  "bar": {
+    "tree": ["tree.menu.note", "tree.menu.view", "tree.menu.links", "tree.menu.props", "tree.indentation.toggle"],
+    "preview": ["tree.preview.right", "tree.preview.bottom", "tree.preview.auto", "tree.preview.close"],
+    "detail": ["detail.menu.note", "detail.menu.view", "detail.menu.links", "detail.menu.props"]
+  },
+  "chrome": {"tree": "compact", "preview": "compact", "detail": "compact"}
+}
+```
+
+- **`bar.<kind>`** lists real action IDs (the ones `keybindings.json` uses), in
+  bar order. Kinds are `tree`, `preview` (Tree's Preview) and `detail` (Detail's
+  Current and Preview readers). A Tree action can't go on the Detail bar.
+- **`chrome.<kind>`** is `compact` (default: one bar row and one hint row) or
+  `full` (adds location, counts, destination and status rows; Preview adds its
+  shortcut row). **View → Tree chrome**, **Preview chrome** and **Detail chrome**
+  switch it from the menu and write the file.
+- Kinds and keys this client doesn't know are kept untouched, so ep0ch-door can
+  share the file (PIE-492): its tile kinds use the same `bar` and `chrome` maps.
+
+Pinned buttons show their glyph when the action has one, otherwise its label:
+`[▐]` dock right, `[▄]` dock below, `[◙]`/`[○]` Auto dock on/off, `[×]` close,
+`[+]`/`[−]` grow/shrink, `[‹]`/`[›]` Preview history, `[Open]`. Buttons that don't
+fit a narrow pane are left off the bar, never out of the menu; `[⋯]` always stays.
+
 Tree reorder actions are `tree.reorder.up` / `tree.reorder.down`;
 `tree.move.up` / `tree.move.down` move selection. Reorder defaults to Option/Alt
 arrows and appears in `?`. Independent Detail placement uses Option/Alt+Shift
@@ -1163,6 +1209,8 @@ unchanged.
 | `Delete`, then `y` | Confirm moving the selected canonical subtree to Trash |
 | `r` | Restore a selected direct Trash root |
 | `p` | Type the work ID/short UUID to permanently purge a Trash root |
+| `?` | Open the action menu; in it, `Enter` runs and `Alt+Enter` (or right-click) pins/unpins to the bar |
+| `Ctrl+R` | Reload `keybindings.json` and `ui.json` (pins and chrome) |
 | `Ctrl+Q` | Close the pane |
 
 In Herdr, Goto opens a large popup over the workspace so a narrow Tree pane does
@@ -1216,31 +1264,31 @@ Projected virtual occurrences deliberately constrain hierarchy and collapse. Bra
 
 ### Reader layout and menus
 
-Tree, Detail and nested Preview use Compact layout by default. Ordinary reading
-keeps one internal menu row; the current document title appears in the Herdr
-frame when the host supports it. Authored headings remain document content.
-Nested Preview retains its own title and controls without renaming the host.
+Tree, Detail and Tree's Preview use compact chrome by default: one bar row (the
+pane's identity, its pinned buttons and `[⋯]`) and one hint row. Docked below,
+Preview's shaded bar is the divider between it and Tree. The current document
+title appears in the Herdr frame when the host supports it. Authored headings
+remain document content.
 
-Use **Note**, **View**, **Links**, **Props** or **[⋯]** for the existing actions and
-their effective shortcuts. **?** opens the full searchable action list. In an
-open menu, Left/Right changes category and Escape returns to the reader. Narrow
-panes keep whole labels and put the remaining actions behind **[⋯]**.
+The default Tree and Detail bars pin **Note**, **View**, **Links** and **Props**;
+**?** or **[⋯]** opens the full searchable action list. In an open menu,
+Left/Right changes category and Escape returns to the reader.
 
-- **View → Expanded layout** restores location, routing and helper rows.
-  **Compact layout** returns the space to the document while retaining the
+- **View → Tree chrome / Detail chrome / Preview chrome** switches that pane kind
+  between compact and full, saved in `ui.json` (see
+  [Pane bars and chrome](#pane-bars-and-chrome-uijson)). Detail keeps the
   authored reading position.
+- The Tree menu's top row holds what compact leaves out: the workspace path,
+  block and projection counts, the Inbox cue (click to open Inbox) and **Opens
+  in** (click to change it). **Opens in: … · Change** is also a menu item.
 - **Location / ancestors** opens navigation through the current ancestry.
-  **Links** contains the linked destination and its Change action.
 - **Props** opens the existing inspector. Tree's **View status** shows counts,
   workspace, Inbox and projection diagnostics on demand.
-- Drafts, recovery decisions and service failures remain visible. Routine Open
-  receipts expire rather than occupying a permanent footer.
+- Drafts, recovery decisions, branch errors and service failures keep rows of
+  their own; routine statuses flash in the hint row.
 
-Density is stored on the client host in `view.json` beside the resolved project
-`client.json`, with `OUTLINER_VIEW_PREFERENCES_PATH` as an optional override.
-The file contains `{"density":"compact"}` or `{"density":"expanded"}`; it is
-not note metadata and does not change canonical text. Existing panes keep their
-current choice; new panes load the saved preference.
+`view.json` (the earlier `density` setting) is no longer read; `ui.json`'s
+`chrome` replaces it.
 
 Application title metadata expires if the reader exits unexpectedly. A custom
 Herdr pane label takes precedence after the next title heartbeat (up to five
@@ -2813,11 +2861,13 @@ actions instead use the selected branch. Prefix+U retains Tree+Detail launch.
 
 ### Local Tree Preview controls
 
-Each Tree has its own **Show/Hide Preview** control and `?` menu actions.
-Hiding persists while browsing until you show it again. In Preview's header,
-**→** docks right, **↓** docks below, **Auto** follows available space, **−/+**
-resize, and **×** hides. Drag the divider to resize directly. Keyboard equivalents
-are `Alt+Shift+P` (toggle), `Alt+=` (grow), and `Alt+-` (shrink); all are configurable.
+Each Tree has its own **Show/Hide Preview** action (`Alt+Shift+P`, pinnable to
+the Tree bar). Hiding persists while browsing until you show it again. Preview's
+bar carries `[▐]` dock right, `[▄]` dock below, `[◙]` Auto docking (click again
+for `[○]`: Preview stays where Auto put it) and `[×]` hide, then `[⋯]` for the
+Preview's own menu (pins from it go on the Preview bar). Grow/shrink (`Alt+=`,
+`Alt+-`), history (`‹`/`›`), Open and Comment are in that menu and can be pinned.
+Drag the divider (beside) or the bar's title (below) to resize directly.
 Dock and size preferences survive hide/show and terminal resizing within that Tree;
 they do not change Herdr panes or persist after closing the Tree. Small windows use
 a compact reader; `Alt+P` switches focus between Tree and Preview.

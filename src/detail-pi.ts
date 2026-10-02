@@ -6,8 +6,8 @@ import {sanitizeDynamicText} from "./terminal";
 import {listItemRemovalMenu, checklistStatusMenu} from "./checklist-ui";
 import type {ChecklistChoice} from "./checklist-session";
 import {detailTitle} from "./detail-renderer";
-import {adjacentReaderMenu, readerMenuFromAction, readerMenuItems, type ReaderMenu} from "./reader-chrome";
-import {ViewPreferences} from "./view-preferences";
+import {adjacentReaderMenu, paneBarButtons, readerMenuFromAction, readerMenuItems, type ReaderMenu} from "./reader-chrome";
+import {OutlinerUiConfig} from "./ui-config";
 import { renderDetailLines } from "./detail-renderer";
 import { treeLinkAtClick } from "./tree-mouse";
 import {EditRecoveryInput} from "./edit-recovery-input";
@@ -27,6 +27,7 @@ import { getMarkdownTheme, initTheme } from "@earendil-works/pi-coding-agent";
 import {
   decodeKittyPrintable,
   getCapabilities,
+  getOsc8LinkAtColumn,
   Key,
   KeybindingsManager,
   matchesKey,
@@ -51,6 +52,7 @@ import {
 import { BUFFER_COMPOSER_HEIGHT, BufferComposer, bufferComposerEditorBody } from "./buffer-composer";
 import {
   actionMenuItemText,
+  displayActionChord,
   filterActionMenuItems,
   OutlinerActionKeymap,
   outlinerActionLink,
@@ -76,6 +78,7 @@ import { projectDetailRead } from "./detail-embeds";
 import { createDetailKeyHandler, detailActionScopes } from "./detail-keymap";
 import {
   createPiDetailInputListener,
+  decodePiDetailInput,
   detailChooserOwnsPiInput,
   piDetailChooserInput,
   piDetailLinkClick,
@@ -216,7 +219,7 @@ const destinationTimeoutMs = openDestinationTimeoutFromEnvironment(
 const WEB_RESOURCE_REQUEST_TIMEOUT_MS = 17_000;
 
 const paths = resolveClientPaths();
-const viewPreferences = new ViewPreferences();
+const uiConfig = OutlinerUiConfig.load();
 const paneDisplay = new PaneDisplay(() => synchronizeLayout?.());
 reportCurrentPaneWorkspace(paths.workspaceRoot);
 const client = createOutlinerClient(paths);
@@ -840,13 +843,13 @@ const localNavigation = composedTreeNavigation({
   schedulePreview: (task) => serviceEventScheduler.schedulePreview(task),
 });
 const composedTree: ComposedTree | null = composed ? new ComposedTree({
-  viewPreferences,
+  uiConfig,
   client, clientId, contextId: browsingContextId, workspaceRoot: paths.workspaceRoot,
   navigation: localNavigation, actionKeymap,
   width: () => composedTree?.controller.mode === "goto" ? processTerminal.columns : composedWidths(processTerminal.columns).tree,
   height: () => processTerminal.rows,
   focused: () => focusedRegion === "tree", focus: () => focusRegion("tree"),
-  invalidate: () => { synchronizeLayout?.(); }, stop: requestStop,
+  invalidate: () => { synchronizeLayout?.(); syncRightClickOwnership(); }, stop: requestStop,
   detach: openTargetInNewDetail,
 }) : null;
 
@@ -953,7 +956,7 @@ async function stop(exitCode = 0): Promise<void> {
   catch(error){controller.onServiceError(error);return;}
   await paneDisplay.stop();
   destinationDisplay.dispose();
-  if (rightClickOwnership === "outliner") {
+  if (paneOwnsRightClick) {
     try {
       configureCurrentPaneRightClick("herdr");
     } catch {
@@ -981,6 +984,37 @@ async function stop(exitCode = 0): Promise<void> {
 
 let actionMenuHandle: OverlayHandle | null = null;
 let actionMenuInvoke: ((id: string) => void) | null = null;
+/** Set while a menu of Detail actions is open: pins or unpins one of its items on the Detail bar. */
+let actionMenuPin: ((id: string) => void) | null = null;
+let paneOwnsRightClick = rightClickOwnership === "outliner";
+/** While a menu is open the pane takes right-clicks (they pin), then hands them back to Herdr. */
+function syncRightClickOwnership(): void {
+  const wanted = rightClickOwnership === "outliner" || actionMenuPin !== null || composedTree?.controller.mode === "action-menu";
+  if (wanted === paneOwnsRightClick || stopping) return;
+  paneOwnsRightClick = wanted;
+  setImmediate(() => {
+    try { configureCurrentPaneRightClick(wanted ? "outliner" : "herdr"); }
+    catch (error) { controller.onServiceError(error); }
+  });
+}
+/** The action link painted at a terminal cell; pi-tui keeps the last painted screen. */
+function paintedLinkAt(point: {column: number; row: number}): string | null {
+  const screen = (tui as unknown as {previousScreen?: readonly string[]}).previousScreen ?? [];
+  return getOsc8LinkAtColumn(screen[point.row] ?? "", point.column) ?? null;
+}
+/** Menu labels that say the current state, as Tree's do. */
+function detailMenuItem(item: OutlinerActionMenuItem): OutlinerActionMenuItem {
+  if (item.id !== "detail.chrome.toggle") return item;
+  const current = uiConfig.chrome("detail");
+  return {...item, label: `Detail chrome: ${current} → ${current === "compact" ? "full" : "compact"}`};
+}
+function togglePinnedDetailAction(actionId: string): string {
+  const result = uiConfig.togglePin("detail", actionId);
+  synchronizeLayout?.();
+  if (!result.ok) return result.error;
+  const label = actionKeymap.action(actionId).label;
+  return `${result.pinned ? "Pinned" : "Unpinned"} ${label} ${result.pinned ? "to" : "from"} the Detail bar`;
+}
 let actionMenuCancelled: (() => void) | undefined;
 let composerHandle: OverlayHandle | null = null;
 let keyInspectorHandle: OverlayHandle | null = null;
@@ -1039,6 +1073,8 @@ function closeActionMenu(cancel = true): void {
   actionMenuHandle?.hide();
   actionMenuHandle = null;
   actionMenuInvoke = null;
+  actionMenuPin = null;
+  syncRightClickOwnership();
   if (cancel) cancelled?.();
 }
 
@@ -1054,10 +1090,16 @@ interface DetailDestinationMenuOptions {
   purpose: "link" | "open" | "place"; status(): string; preview: NavigationDestinationPreview; select(id: string | undefined): void;
 }
 
+interface DetailMenuPinning {
+  toggle(actionId: string): string;
+  pinned(actionId: string): boolean;
+}
+
 class FuzzyActionMenu implements Component {
   private query = "";
   private list: SelectList;
   private visibleRows: number | undefined;
+  private notice = "";
   onSelect?: (actionId: string) => void;
   onCancel?: () => void;
 
@@ -1067,8 +1109,17 @@ class FuzzyActionMenu implements Component {
     private readonly destination?: DetailDestinationMenuOptions,
     private readonly changeMenu?: (delta: number) => void,
     private readonly decisionTitle?: string,
+    private readonly pinning?: DetailMenuPinning,
   ) {
     this.list = this.createList();
+  }
+
+  /** Pins the highlighted item, or the given one (a right-click), and keeps the menu open. */
+  pin(actionId = this.list.getSelectedItem()?.value): void {
+    if (!this.pinning || !actionId || !this.items.some(item => item.id === actionId)) return;
+    this.notice = this.pinning.toggle(actionId);
+    this.list = this.createList(actionId);
+    tui.requestRender();
   }
 
   render(width: number): string[] {
@@ -1093,13 +1144,22 @@ class FuzzyActionMenu implements Component {
         ...wrapTextWithAnsi("↑↓ choose · Enter confirms · Esc cancels", Math.max(1, width))]
         .map(line => truncateToWidth(line, width, "", true));
     }
+    const pinKey = displayActionChord(actionKeymap.primaryBinding("detail.menu.pin"));
+    // The pin hint (or the last pin's result) shares the Find row, so a short overlay never cuts it off.
+    const pin = this.pinning ? `  ${this.notice ? sanitizeDynamicText(this.notice) : `\x1b[2m${pinKey}/right-click ♦ pin to Detail bar\x1b[0m`}` : "";
     return [
-      `\x1b[2mFind: ${this.query}▏\x1b[0m`,
+      truncateToWidth(`\x1b[2mFind: ${this.query}▏\x1b[0m${pin}`, width),
       ...this.list.render(width),
     ];
   }
 
   handleInput(data: string): void {
+    if (this.pinning) {
+      const input = decodePiDetailInput(data);
+      if (input.kind === "key" && actionKeymap.resolve("detail", "menu", input.str, input.key).actionId === "detail.menu.pin") {
+        this.pin(); return;
+      }
+    }
     if (this.changeMenu && (matchesKey(data, Key.left) || matchesKey(data, Key.right))) {
       this.changeMenu(matchesKey(data, Key.right) ? 1 : -1); return;
     }
@@ -1131,7 +1191,8 @@ class FuzzyActionMenu implements Component {
     const list = new SelectList(
       filtered.map((item) => ({
         value: item.id,
-        label: outlinerActionLink(item.id, this.destination || this.decisionTitle ? item.label : actionMenuItemText(item)),
+        label: outlinerActionLink(item.id, this.destination || this.decisionTitle ? item.label
+          : `${this.pinning ? this.pinning.pinned(item.id) ? "♦ " : "  " : ""}${actionMenuItemText(item)}`),
         description: this.decisionTitle ? undefined : item.description,
       })),
       Math.min(this.visibleRows ?? this.maxVisible, Math.max(1, filtered.length)),
@@ -1170,11 +1231,13 @@ function showActionMenu(
   destination?: DetailDestinationMenuOptions,
   changeMenu?: (delta: number) => void,
   decisionTitle?: string,
+  pinnable = false,
 ): void {
   closeActionMenu();
   tui.releasePointerGesture();
   actionMenuCancelled = cancelled;
-  const menu = new FuzzyActionMenu(items, destination ? 7 : 13, destination, changeMenu, decisionTitle);
+  const pinning = pinnable ? {toggle: togglePinnedDetailAction, pinned: (id: string) => uiConfig.isPinned("detail", id)} : undefined;
+  const menu = new FuzzyActionMenu(pinnable ? items.map(detailMenuItem) : items, destination ? 7 : 13, destination, changeMenu, decisionTitle, pinning);
   menu.onSelect = (actionId) => {
     closeActionMenu(false);
     if (cancelled) void invoke(actionId);
@@ -1185,6 +1248,8 @@ function showActionMenu(
     closeActionMenu();
     tui.requestRender();
   };
+  actionMenuPin = pinning ? id => menu.pin(id) : null;
+  syncRightClickOwnership();
   actionMenuHandle = tui.showOverlay(menu, {
     width: decisionTitle ? "100%" : destination ? "95%" : "70%",
     maxHeight: destination ? "90%" : "70%",
@@ -1466,7 +1531,8 @@ const handleKeypress = createDetailKeyHandler({openNewTree: () => { openTreePane
   viewport,
   stop: requestStop,
   actionKeymap,
-  openActionMenu: items => showActionMenu(items, invokeDetailAction),
+  openActionMenu: items => showActionMenu(items, invokeDetailAction, undefined, undefined, undefined, undefined, undefined, true),
+  reloadUiConfig: () => uiConfig.reload(),
   openKeyInspector,
   openProvenanceInspector,
   focusDraftSplit,
@@ -1477,7 +1543,8 @@ const handleKeypress = createDetailKeyHandler({openNewTree: () => { openTreePane
 });
 
 const inspectionKeypress = createDetailKeyHandler({openNewTree: () => { openTreePane({workspaceRoot: paths.workspaceRoot, root: null, direction: "right"}); },controller: inspection, viewport: () => viewport(inspection), stop: () => { void readingSurface.closePreview(); }, actionKeymap,
-  openActionMenu: items => showActionMenu(items, invokeDetailAction),
+  openActionMenu: items => showActionMenu(items, invokeDetailAction, undefined, undefined, undefined, undefined, undefined, true),
+  reloadUiConfig: () => uiConfig.reload(),
   openKeyInspector,
   openProvenanceInspector,
   navigatePreview: direction => inspectionLayout.navigate(direction),
@@ -1487,24 +1554,23 @@ const inspectionKeypress = createDetailKeyHandler({openNewTree: () => { openTree
 function showReaderMenu(menu: ReaderMenu): void {
   const items = readerMenuItems(actionKeymap.menuItems("detail", activeDetailActionScopes()), menu).map(item =>
     item.id === "detail.navigation.link" ? {...item, label: `Opens in: ${destinationDisplay.text} · Change`} : item);
-  showActionMenu(items, invokeDetailAction, undefined, undefined, undefined, delta => showReaderMenu(adjacentReaderMenu(menu,delta)));
+  showActionMenu(items, invokeDetailAction, undefined, undefined, undefined, delta => showReaderMenu(adjacentReaderMenu(menu,delta)), undefined, true);
 }
 
 async function readerAction(actionId: string): Promise<boolean> {
   const menu = readerMenuFromAction(actionId);
   if (menu) { showReaderMenu(menu); return true; }
-  if (actionId.startsWith("detail.density.")) {
-    const value = actionId.slice("detail.density.".length);
-    if (value !== "compact" && value !== "expanded") return true;
-    try {
-      const geometry = readerGeometry();
-      preview.preserveReadingPosition(geometry.current.width, geometry.current.height, () => {
-        if (readingSurface.previewVisible) inspectionLayout.preserveReadingPosition(geometry.preview.width, geometry.preview.height, () => viewPreferences.setDensity(value));
-        else viewPreferences.setDensity(value);
-      });
-      synchronizeLayout?.();
-    }
-    catch (error) { readingSurface.active.onServiceError(error); }
+  if (actionId === "detail.chrome.toggle") {
+    const value = uiConfig.chrome("detail") === "compact" ? "full" : "compact";
+    let message = "";
+    const apply = () => { const result = uiConfig.setChrome("detail", value); message = result.ok ? `Detail chrome: ${value}` : result.error; };
+    const geometry = readerGeometry();
+    preview.preserveReadingPosition(geometry.current.width, geometry.current.height, () => {
+      if (readingSurface.previewVisible) inspectionLayout.preserveReadingPosition(geometry.preview.width, geometry.preview.height, apply);
+      else apply();
+    });
+    synchronizeLayout?.();
+    await readingSurface.active.dispatch({type: "status.set", message}, viewport(readingSurface.active));
     return true;
   }
   if (actionId === "detail.location") {
@@ -1583,6 +1649,7 @@ async function handleInput(data: string): Promise<void> {
       actionKeymap.menuItems("detail", activeDetailActionScopes()),
       invokeDetailAction,
       secondaryClick,
+      undefined, undefined, undefined, undefined, true,
     );
     return;
   }
@@ -1632,7 +1699,9 @@ const preview = new DetailPiPreviewLayout(
   () => tui.requestRender(),
   {
     calloutTheme: calloutThemeResolution.theme,
-    density: () => viewPreferences.density,
+    chrome: () => uiConfig.chrome("detail"),
+    bar: () => paneBarButtons(uiConfig.bar("detail"), actionKeymap),
+    hints: () => ({entries: actionKeymap.hints("detail", activeDetailActionScopes()), menuKey: displayActionChord(actionKeymap.primaryBinding("detail.menu.open")), ...(composed ? {prefix: "F6 Tree"} : {})}),
     titleInFrame: () => paneDisplay.inFrame && !composed,
     headerPropertyKeys: detailHeaderPropertyKeys,
     destinationLabel: () => destinationDisplay.text,
@@ -1650,7 +1719,9 @@ const preview = new DetailPiPreviewLayout(
 const draftSplit = new DetailPiDraftSplitLayout(customFrame, preview);
 const inspectionLayout = new DetailPiPreviewLayout(inspection.state, getMarkdownTheme(), hyperlinksEnabled, () => tui.requestRender(), {
   calloutTheme: calloutThemeResolution.theme,
-  density: () => viewPreferences.density,
+  chrome: () => uiConfig.chrome("detail"),
+  bar: () => paneBarButtons(uiConfig.bar("detail"), actionKeymap),
+  hints: () => ({entries: actionKeymap.hints("detail", detailActionScopes(inspection.state)), menuKey: displayActionChord(actionKeymap.primaryBinding("detail.menu.open"))}),
   destinationLabel: () => destinationDisplay.text,
   surfaceLabel: () => `${readingSurface.focused === "preview" ? "●" : "○"} Preview`,
   helpText: () => `${readingHelp()}${actionKeymap.helpText("detail", detailActionScopes(inspection.state))}`,
@@ -1795,6 +1866,13 @@ tui.addOutlinerInputListener(data => {
     if(isTreeMouseSequence(data))return;
     recoveryInputDecoder.accept(data,decoded=>recoveryReview?.key(decoded.str,decoded.key));
     return {consume:true};
+  }
+
+  const menuRightClick = actionMenuPin ? parseTreeSecondaryClick(data) : null;
+  if (menuRightClick) {
+    const link = paintedLinkAt(menuRightClick);
+    if (link?.startsWith("pi-outliner-action:")) actionMenuPin?.(link.slice("pi-outliner-action:".length));
+    return {consume: true};
   }
 
   // Inspect delivered bytes before focus routing, native overlays, or our decoders.

@@ -82,7 +82,7 @@ const result = await runHerdrScenario({
     await session.waitVisible(pane, "physical blocks");
     await session.setKeybindings({ "tree.inbox.attention": ["z"] });
     await session.keys(pane, "ctrl+r");
-    await session.waitVisible(pane, "Outliner keymap reloaded");
+    await session.waitVisible(pane, "Keymap and bars reloaded");
     await session.keys(pane, "I");
     await session.waitVisible(pane, "z show recent results");
     await session.keys(pane, "z");

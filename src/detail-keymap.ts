@@ -29,6 +29,8 @@ export interface DetailKeymapOptions {
     items: readonly OutlinerActionMenuItem[],
     invoke: (actionId: string) => Promise<void>,
   ): void;
+  /** Reloads ui.json (pins and chrome) with the keymap on Ctrl+R. */
+  reloadUiConfig?(): {ok: true} | {ok: false; error: string};
   focusDraftSplit?(): void;
   navigatePreview?(direction: "up" | "down" | "pageup" | "pagedown" | "top" | "bottom"): void;
   previewFocused?(): boolean;
@@ -226,8 +228,10 @@ export function createDetailKeyHandler(options: DetailKeymapOptions): DetailKeyH
         );
         return true;
       case "detail.keymap.reload": {
-        const result = actionKeymap.reload();
-        await setStatus(result.ok ? "Outliner keymap reloaded" : `Keymap unchanged: ${result.error}`);
+        const keys = actionKeymap.reload();
+        const ui = options.reloadUiConfig?.() ?? {ok: true};
+        await setStatus(keys.ok && ui.ok ? "Keymap and bars reloaded"
+          : [keys.ok ? "" : `Keymap unchanged: ${keys.error}`, ui.ok ? "" : `Bars unchanged: ${ui.error}`].filter(Boolean).join(" · "));
         return true;
       }
       case "detail.focus.tree":

@@ -6,6 +6,8 @@ import {runHerdrScenario} from "./herdr-runner";
 const composed = process.argv.includes("--composed");
 const result = await runHerdrScenario({
   name: "tree-indentation", layout: composed ? "composed" : "separate",
+  // The indentation badge is a pinned Tree bar button.
+  uiConfig: {bar: {tree: ["tree.menu.note", "tree.menu.view", "tree.indentation.toggle"]}},
   async prepare() {},
   async run(s) {
     const terminal = await s.attachClient();

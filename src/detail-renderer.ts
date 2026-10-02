@@ -3,7 +3,8 @@ import {getMarkdownTheme} from "@earendil-works/pi-coding-agent";
 import {renderDetailReadPreview} from "./detail-pi-preview";
 import {measureRenderedLinks, withInternalLinks} from "./rendered-links";
 import {parsePreviewRegionActionUri, type PreviewRegion} from "./detail-preview-regions";
-import {renderReaderMenu, type ReaderDensity} from "./reader-chrome";
+import {renderHintRow, renderPaneBar, type ChromeLevel, type PaneBarButton} from "./reader-chrome";
+import type {OutlinerActionHint} from "./outliner-actions";
 import {
   hyperlink,
   sliceByColumn,
@@ -198,17 +199,15 @@ function renderDetailMetadata(
 }
 
 export interface DetailHeaderOptions {
-  density?: ReaderDensity;
+  chrome?: ChromeLevel;
+  /** Pinned buttons for this Detail's bar (ui.json `bar.detail`). */
+  bar?: readonly PaneBarButton[];
   titleInFrame?: boolean;
   linkBreadcrumbs?: boolean;
   surface?: string;
   focused?: boolean;
   propertyKeys?: readonly string[];
   destinationLabel?: string;
-}
-
-function renderHeaderControls(): string {
-  return outlinerActionLink("detail.menu.open", "\x1b[2;36m[⋯]\x1b[0m");
 }
 
 function alignHeaderControls(left: string, controls: string, width: number): string {
@@ -225,9 +224,9 @@ export function renderDetailHeader(
   width: number,
   options: DetailHeaderOptions = {},
 ): string[] {
-  if (options.density === "compact") {
-    const identity = options.titleInFrame ? options.surface ?? "Current" : `${options.surface ?? "Current"} · ${detailTitle(state)}`;
-    const rows = [renderReaderMenu("detail", width, identity)];
+  if (options.chrome === "compact") {
+    const identity = sanitizeDynamicText(options.titleInFrame ? options.surface ?? "Current" : `${options.surface ?? "Current"} · ${detailTitle(state)}`);
+    const rows = [renderPaneBar(width, identity, options.bar ?? [], "detail.menu.open").line];
     if (state.recoveryNotice) rows.push(fitToWidth(outlinerActionLink("detail.edit.recover", `Recovery needs attention · ${sanitizeDynamicText(state.recoveryNotice)}`), width));
     const attention = attentionBanner(state.attention, detailBlockTarget(state)?.blockId ?? null, width);
     if (attention) rows.push(attention);
@@ -246,7 +245,7 @@ export function renderDetailHeader(
     : title;
   const attention = attentionBanner(state.attention, detailBlockTarget(state)?.blockId ?? null, width);
   return [
-    alignHeaderControls(left, renderHeaderControls(), width),
+    renderPaneBar(width, left, options.bar ?? [], "detail.menu.open").line,
     state.recoveryNotice ? fitToWidth(outlinerActionLink("detail.edit.recover",`Recovery needs attention · ${sanitizeDynamicText(state.recoveryNotice)}`),width) : (state.recoveryCount ?? 0) > 0 ? fitToWidth(outlinerActionLink("detail.edit.recover",`Writing history · ${state.recoveryCount} draft${state.recoveryCount===1?"":"s"} · Alt+R`),width) : attention ?? renderDetailMetadata(state, width, options),
     options.destinationLabel === undefined ? `\x1b[2m${"─".repeat(width)}\x1b[0m`
       : outlinerActionLink("detail.navigation.link", alignHeaderControls(`Opens in: ${fitDynamicText(options.destinationLabel, width)}`, "/ Change", width)),
@@ -259,11 +258,14 @@ export function renderDetailFooter(
   mode: DetailState["mode"] = state.mode,
   helpText = detailHelpText(mode),
   chooserHelpText = openDestinationChooserHelp(),
-  density: ReaderDensity = "expanded",
+  chrome: ChromeLevel = "full",
+  hints?: {entries: readonly OutlinerActionHint[]; menuKey: string; prefix?: string},
 ): string[] {
-  if (density === "compact" && !state.destinationChooser.active) {
+  if (chrome === "compact" && !state.destinationChooser.active) {
     const message = state.disconnected ? "Workspace service disconnected; reconnecting…" : attentionReturnSummary(state.attention, width) ?? state.status;
-    return message ? [fitDynamicText(message, width)] : [];
+    // The one hint row: a status or cue while there is one, otherwise the generated hints.
+    if (!hints) return message ? [fitDynamicText(message, width)] : [];
+    return [message ? fitDynamicText(message, width) : renderHintRow(width, hints.entries, {menuKey: hints.menuKey, menuAction: "detail.menu.open", ...(hints.prefix ? {prefix: hints.prefix} : {})})];
   }
   const destinationChooserOpen = state.destinationChooser.active;
   const returnSummary = attentionReturnSummary(state.attention, width);
@@ -296,6 +298,8 @@ function appendCompletion(
 
 export interface DetailRenderOptions {
   header?: DetailHeaderOptions;
+  /** Generated hint row for compact chrome. */
+  hints?: {entries: readonly OutlinerActionHint[]; menuKey: string; prefix?: string};
   helpPrefix?: string;
   helpText?: string;
   chooserHelpText?: string;
@@ -387,11 +391,11 @@ export function renderDetailLines(
 ): string[] {
   const width = viewport.width;
   const height = viewport.height;
-  const density = ["edit", "select", "comment"].includes(state.mode) ? "expanded" : options.header?.density ?? "expanded";
-  const output = renderDetailHeader(state, width, {...options.header,density});
+  const chrome = ["edit", "select", "comment"].includes(state.mode) ? "full" : options.header?.chrome ?? "full";
+  const output = renderDetailHeader(state, width, {...options.header,chrome});
   const helpText = options.helpText ??
     (options.helpPrefix ? `${options.helpPrefix}  ${detailHelpText(state.mode)}` : detailHelpText(state.mode));
-  const footer = renderDetailFooter(state,width,state.mode,helpText,options.chooserHelpText,density);
+  const footer = renderDetailFooter(state,width,state.mode,helpText,options.chooserHelpText,chrome,options.hints);
   const bodyHeight = Math.max(1, height - output.length - footer.length);
   const bodyStart = output.length;
   let sourceRowsInViewport: number | undefined;

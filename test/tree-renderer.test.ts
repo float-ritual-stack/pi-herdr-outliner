@@ -1,4 +1,3 @@
-import {outlinerActionLink} from "../src/outliner-actions";
 import {initTheme} from "@earendil-works/pi-coding-agent";
 initTheme(undefined,false);
 import { getOsc8LinkAtColumn, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
@@ -11,7 +10,8 @@ import {
 import { DEFAULT_OUTLINER_ACTION_KEYMAP } from "../src/outliner-actions";
 import { InboxController } from "../src/inbox-controller";
 import type { TreeView } from "../src/tree-controller";
-import { renderTreeFrame, treeSemanticState } from "../src/tree-renderer";
+import { renderTreeFrame, treeHintRow, treeSemanticState } from "../src/tree-renderer";
+import { renderPaneBar } from "../src/reader-chrome";
 import { composeAuthoredLinkRows, isBlockTreeRow, type TreeDisplayRow } from "../src/tree-rows";
 import { resolveBlockReferencesWithStatus } from "../src/references";
 import { treeIndexFixture } from "./tree-fixtures";
@@ -123,7 +123,7 @@ function view(
     : row);
   const { rows: _rows, ...rest } = overrides;
   return {
-    density: "expanded",
+    chrome: "full",
     workspaceRoot: "/w",
     rows,
     expandedDocuments: new Map(originalRows.filter(isBlockTreeRow).filter(row => row.multilineExpanded).map(row => [row.canonicalId, {
@@ -159,17 +159,17 @@ function view(
   };
 }
 
-const HELP = DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", "browse");
-const NARROW_HELP = truncate(HELP, 80);
-const PANE_MENU = "\x1b]8;;pi-outliner-action:tree.menu.open\x1b\\[⋯]\x1b]8;;\x1b\\";
-const HEADER = `\x1b[1;36mOutliner\x1b[0m  \x1b[2m/w\x1b[0m  ${PANE_MENU} ${outlinerActionLink("tree.preview.toggle", "[Hide Preview]")} \x1b]8;;pi-outliner-action:tree.indentation.toggle\x1b\\[Indent: viewport]\x1b]8;;\x1b\\`;
+const hintRow = (width: number) => treeHintRow(view([]), width, {showStatus: false});
+const NARROW_HELP = hintRow(80);
+const header = (width: number) => renderPaneBar(width, "● Tree", [], "tree.menu.open").line;
+const HEADER = header(80);
 
 describe("renderTreeFrame", () => {
   test("bounds and sanitizes the focused root header", () => {
     const label="界".repeat(100)+"\x1b[2J\x1b]52;c;payload\x07";
     const frame=renderTreeFrame(view([block("root")],{root:{rowId:"root",canonicalId:"root",label}}),40,12).frame;
     expect(frame.split("\n")).toHaveLength(12);
-    const header=frame.split("\n")[2]!;
+    const header=frame.slice("\x1b[H\x1b[2J".length).split("\n")[0]!;
     expect(visibleWidth(header)).toBeLessThanOrEqual(40);
     expect(header).not.toContain("\x1b[2J");expect(header).not.toContain("\x1b]52");
   });
@@ -182,7 +182,7 @@ describe("renderTreeFrame", () => {
     await inbox.start();
     const browse = renderTreeFrame(view([block("root")], { inboxCue: "Inbox paused · 4 pending" }), 80, 18);
     const cue = browse.frame.split("\n").find(line => stripTerminalSequences(line).includes("Inbox paused"))!;
-    expect(getOsc8LinkAtColumn(cue, 2)).toBe("pi-outliner-action:tree.inbox.open");
+    expect(getOsc8LinkAtColumn(cue, stripTerminalSequences(cue).indexOf("Inbox paused") + 1)).toBe("pi-outliner-action:tree.inbox.open");
     for (const focused of [undefined, true]) {
       const rendered = renderTreeFrame(view([block("root")], { mode: "inbox", inbox }), 60, 18, 0, { focused, clearScreen: false });
       const lines = rendered.frame.split("\n");
@@ -212,15 +212,15 @@ describe("renderTreeFrame", () => {
       mouseTargets: expect.any(Array),
       scrollStartEntryIndex: 0,
       frame: [
-        "\x1b[H\x1b[2J",
-        HEADER,
-        "\x1b[2m2 physical blocks · 0 projected occurrences\x1b[0m",
+        "\x1b[H\x1b[2J" + HEADER,
+        "\x1b[2m/w · 2 physical blocks · 0 projected occurrences\x1b[0m",
         "─".repeat(80),
         "\x1b[48;5;238m\x1b[1m▾ Root   \x1b[0m",
         "  • Child  A",
         "",
+        "",
         "ready",
-        `\x1b[2m${NARROW_HELP}\x1b[0m`,
+        NARROW_HELP,
       ].join("\n"),
     });
   });
@@ -284,7 +284,7 @@ describe("renderTreeFrame", () => {
     expect(plain.some((line) => line.includes("• Neutral item"))).toBe(true);
     expect(rows.map((row) => isTreeRow(row) ? row.block.text : row.text)).toEqual(original);
 
-    const selected = renderTreeFrame(view([semantic[0]!]), 42, 8).frame.split("\n")[4]!;
+    const selected = renderTreeFrame(view([semantic[0]!]), 42, 8).frame.split("\n")[3]!;
     expect(selected).toContain("\x1b[48;5;238m\x1b[1m• \x1b[1;31m! Blocked item");
     expect(selected).toContain("\x1b[0m\x1b[48;5;238m\x1b[1m");
     expect(visibleWidth(selected)).toBeLessThanOrEqual(42);
@@ -329,7 +329,7 @@ describe("renderTreeFrame", () => {
     expect(narrowRow).toStartWith("\x1b[48;5;238m\x1b[1m");
 
     const minimum = renderTreeFrame(view([roadmap]), 18, 8).frame.split("\n");
-    const minimumRow = minimum[4]!;
+    const minimumRow = minimum[3]!;
     expect(stripTerminalSequences(minimumRow)).toContain("planned");
     expect(visibleWidth(minimumRow)).toBeLessThanOrEqual(18);
   });
@@ -442,7 +442,7 @@ describe("renderTreeFrame", () => {
       actionMenuOrigin: { column: 5, row: 5 },
       status: "Choose an action",
     }), 40, 9).frame.split("\n");
-    const header = rendered[1]!;
+    const header = rendered[0]!;
     const menuColumn = stripTerminalSequences(header).indexOf("[⋯]") + 1;
     expect(getOsc8LinkAtColumn(header, menuColumn)).toBe(
       "pi-outliner-action:tree.menu.open",
@@ -450,7 +450,7 @@ describe("renderTreeFrame", () => {
     expect(rendered.join("\n")).toContain("pi-outliner-action:tree.edit");
     expect(rendered.join("\n")).not.toContain("\x1b]52;");
     expect(rendered[6]).toStartWith("     ");
-    expect(rendered.at(-1)).toContain("↵ invoke");
+    expect(rendered.at(-1)).toContain("↵ run");
     expect(rendered.map((line) => ({
       text: stripTerminalSequences(line),
       width: visibleWidth(line),
@@ -560,7 +560,7 @@ describe("renderTreeFrame", () => {
       9,
     ).frame.split("\n");
 
-    expect(rendered.slice(4, 6)).toEqual([
+    expect(rendered.slice(3, 5)).toEqual([
       "\x1b[48;5;238m\x1b[1m• # Heading  S\x1b[0m",
       "  │ \x1b[33m-\x1b[0m item",
     ]);
@@ -598,14 +598,15 @@ describe("renderTreeFrame", () => {
       10,
     ).frame.split("\n");
 
-    expect(rendered.slice(4, 8)).toEqual([
+    expect(rendered.slice(3, 8)).toEqual([
       "\x1b[48;5;238m\x1b[1m  │ line 5\x1b[0m",
       "  │ line 6",
       "  │ line 7",
       "  │ line 8",
+      "  │ line 9",
     ]);
-    expect(rendered.at(-2)).toBe("Expanded block rows 5-8/12");
-    expect(rendered.at(-1)).toBe(`\x1b[2m${truncate(HELP, 40)}\x1b[0m`);
+    expect(rendered.at(-2)).toBe("Expanded block rows 5-9/12");
+    expect(rendered.at(-1)).toBe(hintRow(40));
   });
 
   test("places an add-child editor before existing descendants and renders completion rows", () => {
@@ -664,8 +665,9 @@ describe("renderTreeFrame", () => {
     ).frame;
 
     expect(rendered).toContain(
-      "1 physical block · 0 projected occurrences\u001b[0m  \u001b[33mWARNING: truncated at 500\u001b[0m",
+      "/w · 1 physical block · 0 projected occurrences\u001b[0m",
     );
+    expect(rendered.split("\n")[0]).toContain("\u001b[33mtruncated at 500");
     expect(rendered).toContain("References 1/1 · Showing first 20 matches");
   });
 
@@ -728,9 +730,8 @@ describe("renderTreeFrame", () => {
       mouseTargets: expect.any(Array),
       scrollStartEntryIndex: 0,
       frame: [
-        "\x1b[H\x1b[2J",
-        HEADER,
-        "\x1b[2m5 physical blocks · 1 projected occurrence\x1b[0m",
+        "\x1b[H\x1b[2J" + header(200),
+        "\x1b[2m/w · 5 physical blocks · 1 projected occurrence\x1b[0m",
         "─".repeat(200),
         "\x1b[48;5;238m\x1b[1m▾ Valid [V:1]   \x1b[0m",
         "  ◇ Card   ",
@@ -738,8 +739,9 @@ describe("renderTreeFrame", () => {
         "• Invalid [V:0 · CONFIG ERROR]   ",
         "• Failed [V:0 · QUERY ERROR]   ",
         "• Read only [V:0 · READ-ONLY]   ",
+        "",
         "ready",
-        `\x1b[2m${truncate(HELP, 200)}\x1b[0m`,
+        hintRow(200),
       ].join("\n"),
     });
     expect(valid.displayText).toBe("Valid");
@@ -771,14 +773,14 @@ describe("renderTreeFrame", () => {
       mouseTargets: expect.any(Array),
       scrollStartEntryIndex: 0,
       frame: [
-        "\x1b[H\x1b[2J",
-        HEADER,
-        "\x1b[2m1 physical block · 1 projected occurrence\x1b[0m",
+        "\x1b[H\x1b[2J" + HEADER,
+        "\x1b[2m/w · 1 physical block · 1 projected occurrence\x1b[0m",
         "─".repeat(80),
         "▾ Definition [V:1]   ",
         "\x1b[48;5;238m\x1b[1m  ◇ Canonical   \x1b[0m",
+        "",
         "ready",
-        `\x1b[2m${NARROW_HELP}\x1b[0m`,
+        NARROW_HELP,
       ].join("\n"),
     });
     expect(rendered.frame).not.toContain("▸ Canonical");
@@ -879,7 +881,7 @@ describe("renderTreeFrame", () => {
       11,
     ).frame.split("\n");
 
-    expect(rendered.slice(4, 9)).toEqual([
+    expect(rendered.slice(3, 8)).toEqual([
       "▾ Ancestor   ",
       "  ▾ Definition [V:1]   ",
       "    ◇ Card   ",
@@ -969,10 +971,10 @@ describe("renderTreeFrame", () => {
     const rows = Array.from({ length: 6 }, (_, index) => block(`row-${index}`, { position: index }));
 
     const down = renderTreeFrame(view(rows, { selectedIndex: 5 }), 40, 8, 0);
-    expect(down.scrollStartEntryIndex).toBe(4);
-    expect(down.frame).toContain("• row-4");
+    expect(down.scrollStartEntryIndex).toBe(3);
+    expect(down.frame).toContain("• row-3");
     expect(down.frame).toContain("\x1b[48;5;238m\x1b[1m• row-5");
-    expect(down.frame).not.toContain("• row-3");
+    expect(down.frame).not.toContain("• row-2");
 
     const up = renderTreeFrame(view(rows, { selectedIndex: 0 }), 40, 8, down.scrollStartEntryIndex);
     expect(up.scrollStartEntryIndex).toBe(0);
@@ -995,9 +997,9 @@ describe("renderTreeFrame", () => {
     }
     const rendered = renderTreeFrame(current, 80, 10, 0);
 
-    expect(rendered.scrollStartEntryIndex).toBe(14_997);
+    expect(rendered.scrollStartEntryIndex).toBe(14_996);
     expect(rendered.frame).toContain("\x1b[48;5;238m\x1b[1m• large-15000");
-    expect(previewReads).toBeLessThanOrEqual(4);
+    expect(previewReads).toBeLessThanOrEqual(5);
   });
 
   test("recomputes viewport bounds after width, expansion, and projection replacement", () => {
@@ -1017,7 +1019,7 @@ describe("renderTreeFrame", () => {
     const replacement = view([block("filtered-content")], { selectedIndex: 0 });
     const replaced = renderTreeFrame(replacement, 20, 10, 15_000);
     expect(replaced.scrollStartEntryIndex).toBe(0);
-    expect(replaced.frame).toContain("1 physical block");
+    expect(replaced.frame).toContain("/w · 1 physical b");
     expect(replaced.frame).toContain("\x1b[48;5;238m\x1b[1m• filtered-content");
     expect(replaced.frame).not.toContain("selected");
   });
@@ -1159,7 +1161,7 @@ test("breadcrumbs keep controls at the edges and link occurrence identity safely
     {rowId:"occurrence:hub:note",canonicalId:"note",label:"世界\x1b[2J projected note",kind:"occurrence" as const},
   ];
   const result=renderTreeFrame(view([block("note")],{breadcrumbs:path,breadcrumbStart:1}),32,12,0);
-  const line=result.frame.split("\n")[3]!;
+  const line=result.frame.split("\n")[2]!;
   expect(visibleWidth(line)).toBe(32);
   expect(stripTerminalSequences(line).startsWith("⌂ < ◇ 世界")).toBe(true);
   expect(stripTerminalSequences(line).endsWith(">" )).toBe(true);
@@ -1246,18 +1248,20 @@ test.each([
 ] as Array<[string, Partial<VirtualBranchState>, string]>)("compact Tree keeps %s visible at narrow widths (status %p)", (label, error, status) => {
   const state=branchState({...error});
   const render=renderTreeFrame(view([block("definition")], {
-    density:"compact", status, branchStates:new Map([["definition",state]]),
+    chrome:"compact", status, branchStates:new Map([["definition",state]]),
   }),40,8,0,{clearScreen:false});
   const lines=render.frame.split("\n").map(stripTerminalSequences);
   expect(lines).toHaveLength(8);
   const errorRow=lines.findIndex(line=>line.startsWith(label+":"));
-  expect(errorRow).toBe(status ? 6 : 7);
+  // One hint row at the bottom; a status flashes there rather than taking the error's row.
+  expect(errorRow).toBe(6);
+  if (status) expect(lines[7]).toBe(status);
   expect(lines[errorRow]).not.toContain("matched root");
   expect(visibleWidth(lines[errorRow]!)).toBeLessThanOrEqual(40);
 });
 
 test.each(["Workspace service disconnected; reconnecting…", "Failed to open target"])("compact branch errors retain concurrent safety state: %s", status => {
-  const tree=view([block("definition")],{density:"compact",status,
+  const tree=view([block("definition")],{chrome:"compact",status,
     branchStates:new Map([["definition",branchState({queryError:"query unavailable"})]])});
   for(const recoveryStatus of [undefined,"Retained draft needs recovery"]){
     const lines=renderTreeFrame({...tree,recoveryStatus},60,10,0,{clearScreen:false}).frame.split("\n").map(stripTerminalSequences);
@@ -1270,7 +1274,7 @@ test.each(["Workspace service disconnected; reconnecting…", "Failed to open ta
 });
 
 test("short compact Tree reserves destination recovery controls ahead of lower-priority notices", () => {
-  const tree=view([block("definition")],{density:"compact",status:"Workspace service disconnected; reconnecting…",
+  const tree=view([block("definition")],{chrome:"compact",status:"Workspace service disconnected; reconnecting…",
     recoveryStatus:"Destination missing",recoveryHelp:"↵ choose destination  ⎋ cancel",
     branchStates:new Map([["definition",branchState({queryError:"query unavailable"})]])});
   const lines=renderTreeFrame(tree,60,4,0,{clearScreen:false}).frame.split("\n").map(stripTerminalSequences);
@@ -1292,13 +1296,14 @@ test("short compact Tree reserves destination recovery controls ahead of lower-p
 
 test("compact Tree gives a short pane back its rows and keeps overflow reachable", () => {
   const rows = Array.from({length: 20}, (_,index) => block(`Item ${index + 1}`));
-  const compact = view(rows, {density:"compact", status:""});
+  const compact = view(rows, {chrome:"compact", status:""});
   const render = renderTreeFrame(compact,40,12,0,{clearScreen:false});
   const lines = render.frame.split("\n").map(stripTerminalSequences);
   expect(lines).toHaveLength(12);
   expect(lines[0]).toContain("[⋯]");
   expect(lines[1]).toContain("Item 1");
-  expect(lines[11]).toContain("Item 11");
+  expect(lines[10]).toContain("Item 10");
+  expect(lines[11]).toContain("? all actions");
   expect(lines.join("\n")).not.toContain("physical block");
   expect(lines.join("\n")).not.toContain("Opens in:");
   expect(render.mouseTargets[1]?.rowId).toBe("Item 1");
@@ -1307,4 +1312,31 @@ test("compact Tree gives a short pane back its rows and keeps overflow reachable
     expect(visibleWidth(row)).toBeLessThanOrEqual(width);
     expect(getOsc8LinkAtColumn(row,visibleWidth(row)-2)).toBe("pi-outliner-action:tree.menu.open");
   }
+});
+
+test("chrome budget: compact Tree with Preview keeps one bar per pane and one shared hint row", async () => {
+  const {DocumentPreview} = await import("../src/document-preview");
+  const reader = new DocumentPreview({async request<T>(): Promise<T> { throw Error("not used"); }}, () => {});
+  await reader.loadText({kind: "block", blockId: "item-1"}, "Item 1", Promise.resolve(Array.from({length: 40}, (_, i) => `Preview line ${i + 1}`).join("\n\n")));
+  const rows = Array.from({length: 40}, (_, index) => block(`Item ${index + 1}`));
+  const previewBar = [{actionId: "tree.preview.right", text: "[▐]"}, {actionId: "tree.preview.bottom", text: "[▄]"}, {actionId: "tree.preview.auto", text: "[◙]"}, {actionId: "tree.preview.close", text: "[×]"}];
+  for (const [dock, chromeRows] of [["bottom", 3], ["right", 2]] as const) {
+    const tree = view(rows, {chrome: "compact", previewChrome: "compact", status: "", localPreview: reader.state!, previewBar,
+      previewPreferences: {enabled: true, dock, sideFraction: .5, bottomFraction: .5}});
+    const rendered = renderTreeFrame(tree, 120, 20, 0, {clearScreen: false});
+    const lines = rendered.frame.split("\n").map(stripTerminalSequences);
+    expect(lines).toHaveLength(20);
+    const content = lines.filter(line => /Item \d+|Preview line \d+/.test(line) && !line.includes("[⋯]")).length;
+    const chrome = lines.filter(line => line.includes("[⋯]") || /^─+$/.test(line) || line.startsWith("? all actions")).length;
+    expect(chrome).toBe(chromeRows);
+    expect(lines.at(-1)).toStartWith("? all actions");
+    expect(lines.some(line => line.includes("[▐][▄][◙][×][⋯]"))).toBe(true);
+    expect(content).toBeGreaterThanOrEqual(20 - chromeRows - 8);
+    expect(rendered.preview?.controls?.map(control => control.action)).toEqual(["tree.preview.right", "tree.preview.bottom", "tree.preview.auto", "tree.preview.close", "tree.preview.menu"]);
+  }
+  // A Preview notice flashes in the shared hint row instead of taking a Preview row.
+  const noticed = renderTreeFrame(view(rows, {chrome: "compact", status: "", localPreview: {...reader.state!, notice: "Copied 3 lines"}, previewBar,
+    previewPreferences: {enabled: true, dock: "bottom", sideFraction: .5, bottomFraction: .5}}), 120, 20, 0, {clearScreen: false}).frame.split("\n").map(stripTerminalSequences);
+  expect(noticed.at(-1)).toBe("Copied 3 lines");
+  expect(noticed.filter(line => line === "Copied 3 lines")).toHaveLength(1);
 });

@@ -11,6 +11,8 @@ import {runHerdrScenario} from './herdr-runner';
 let sourceId='',targetId='';
 const result=await runHerdrScenario({
  name:'open-here',
+ // Open (Preview) and Show/Hide Preview (Tree) are menu actions; this journey pins them.
+ uiConfig:{bar:{preview:['tree.preview.right','tree.preview.bottom','tree.preview.auto','tree.preview.close','tree.reader.open'],tree:['tree.menu.note','tree.menu.view','tree.menu.links','tree.menu.props','tree.preview.toggle']}},
  async prepare(projectRoot,paths){
   await mkdir(paths.stateDir,{recursive:true});
   const store=new OutlinerStore(paths.database,{workspaceRoot:projectRoot});
@@ -39,7 +41,8 @@ const result=await runHerdrScenario({
    await session.focus(pane);await session.waitVisible(pane,label);
    const point=(text:string)=>{
      const lines=text.split('\n'), row=lines.findIndex(line=>line.includes(label));
-     const anchorText=pane===panes.detail?'● Current':text.includes('Inbox agent')?'Inbox agent':'Outliner  ';
+     // Tree's bar buttons are right-aligned; its identity ("● Tree") is the left-aligned anchor.
+     const anchorText=pane===panes.detail?'● Current':text.includes('Inbox agent')?'Inbox agent':(text.includes('● Tree')?'● Tree':'○ Tree');
      const anchor=lines.findIndex(line=>line.includes(anchorText));
      if(row<0||anchor<0)return null;
      const column=visibleWidth(lines[row]!.slice(0,lines[row]!.indexOf(label)));

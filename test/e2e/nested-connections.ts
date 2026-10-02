@@ -11,16 +11,16 @@ const result=await runHerdrScenario({
   const updated=await session.client.request<Block>({action:'update',blockId:a.id,text:`CONNECTION ALPHA\n\n((${b.id}|Go to Beta))`,expectedRevision:a.revision,mutation:{author:'agent',actorId:'nested-connections-fixture'}});
   await session.revealTree(session.panes.tree,a.id);
   await session.setKeybindings({'tree.root.focus':['Alt+F'],'tree.authored-links.toggle':['Alt+J'],'tree.preview.toggle':['Alt+H']});
-  await session.keys(session.panes.tree,'ctrl+r');await session.waitVisible(session.panes.tree,'Outliner keymap reloaded');
+  await session.keys(session.panes.tree,'ctrl+r');await session.waitVisible(session.panes.tree,'Keymap and bars reloaded');
   await session.keys(session.panes.tree,'alt+f');await session.waitVisible(session.panes.tree,'Focused branch:');
   await session.keys(session.panes.tree,'alt+j');await session.waitVisible(session.panes.tree,'Backlinks');
   await session.focus(session.panes.tree);
   const clickArrow=async(label:string)=>{
    const coordinate=(text:string)=>{
     const lines=text.split('\n'), row=lines.findIndex(l=>l.includes(label)&&l.includes('▸'));
-    const anchor=lines.findIndex(l=>l.includes('Outliner  '));if(row<0||anchor<0)return null;
+    const anchor=lines.findIndex(l=>/[●○] Tree/.test(l));if(row<0||anchor<0)return null;
     const column=visibleWidth(lines[row]!.slice(0,lines[row]!.indexOf('▸')));
-    const left=visibleWidth(lines[anchor]!.slice(0,lines[anchor]!.indexOf('Outliner  ')));
+    const left=visibleWidth(lines[anchor]!.slice(0,lines[anchor]!.search(/[●○] Tree/)));
     return{row,column,y:row-anchor,x:column-left};
    };
    const ready=await session.waitFor('native disclosure '+label,async()=>({native:coordinate(await terminal.visible()),pane:coordinate(await session.visible(session.panes.tree))}),v=>!!v.native&&!!v.pane&&v.native.x===v.pane.x&&v.native.y===v.pane.y);

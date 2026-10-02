@@ -5,8 +5,8 @@ import {parsePreviewRegionActionUri} from "./detail-preview-regions";
 import {PaneDisplay} from "./pane-display";
 import {listItemRemovalMenu, checklistStatusMenu} from "./checklist-ui";
 import type {ChecklistChoice} from "./checklist-session";
-import {ViewPreferences} from "./view-preferences";
-import {adjacentReaderMenu, readerMenuFromAction, readerMenuItems, type ReaderMenu} from "./reader-chrome";
+import {OutlinerUiConfig} from "./ui-config";
+import {adjacentReaderMenu, paneBarButtons, readerMenuFromAction, readerMenuItems, type ReaderMenu} from "./reader-chrome";
 import {EditRecoveryInput} from "./edit-recovery-input";
 import {EditRecoveryClient} from "./edit-recovery-client";
 import {EditRecoveryReview,type RecoveryChoice} from "./edit-recovery-review";
@@ -29,7 +29,7 @@ import {
   startClientRuntimeSync,
   type ClientRuntimeSync,
 } from "./client-runtime-sync";
-import { OutlinerActionKeymap, filterActionMenuItems, type OutlinerActionMenuItem } from "./outliner-actions";
+import { OutlinerActionKeymap, displayActionChord, filterActionMenuItems, type OutlinerActionMenuItem } from "./outliner-actions";
 import {
   createDetailController,
   detailRestoreRequest,
@@ -101,7 +101,10 @@ const WEB_RESOURCE_REQUEST_TIMEOUT_MS = 17_000;
 
 initTheme(undefined, false);
 const paths = resolveClientPaths();
-const viewPreferences = new ViewPreferences();
+const uiConfig = OutlinerUiConfig.load();
+function detailHints(reader: DetailController) {
+  return {entries: actionKeymap.hints("detail", detailActionScopes(reader.state, {bufferMode: reader.isBufferMode()})), menuKey: displayActionChord(actionKeymap.primaryBinding("detail.menu.open"))};
+}
 const paneDisplay = new PaneDisplay(draw);
 reportCurrentPaneWorkspace(paths.workspaceRoot);
 const client = createOutlinerClient(paths);
@@ -204,7 +207,7 @@ function viewport(reader: DetailController = readingSurface.active): DetailViewp
   return {
     width,
     height,
-    previewBodyHeight: Math.max(1, height - renderDetailHeader(reader.state,width,{density:viewPreferences.density}).length - renderDetailFooter(reader.state,width,reader.state.mode,undefined,undefined,viewPreferences.density).length),
+    previewBodyHeight: Math.max(1, height - renderDetailHeader(reader.state,width,{chrome:uiConfig.chrome("detail")}).length - renderDetailFooter(reader.state,width,reader.state.mode,undefined,undefined,uiConfig.chrome("detail"),detailHints(reader)).length),
     ...(reader.state.mode === "preview" ? { preview: buildDetailAnsiPreview(reader.state, width) } : {}),
   };
 }
@@ -567,26 +570,33 @@ let actionMenu: {
   category?: ReaderMenu;
   cancelled?: () => void;
   title?: string;
+  /** A menu of Detail actions: its items can be pinned to the Detail bar. */
+  pinnable?: boolean;
+  notice?: string;
 } | null = null;
 
-function openActionMenu(items: readonly OutlinerActionMenuItem[], invoke: (id: string) => Promise<void>, cancelled?: () => void, title?: string): void {
+function openActionMenu(items: readonly OutlinerActionMenuItem[], invoke: (id: string) => Promise<void>, cancelled?: () => void, title?: string, pinnable = false): void {
   actionMenu?.cancelled?.();
-  actionMenu = {items, invoke, query: "", index: 0, cancelled, title};
+  const current = uiConfig.chrome("detail");
+  const labelled = pinnable ? items.map(item => item.id === "detail.chrome.toggle" ? {...item, label: `Detail chrome: ${current} → ${current === "compact" ? "full" : "compact"}`} : item) : items;
+  actionMenu = {items: labelled, invoke, query: "", index: 0, cancelled, title, pinnable};
   draw();
 }
 
 function showReaderMenu(category: ReaderMenu): void {
   const items = readerMenuItems(actionKeymap.menuItems("detail", detailActionScopes(readingSurface.active.state)), category).map(item =>
     item.id === "detail.navigation.link" ? {...item, label: `Opens in: ${destinationDisplay.text} · Change`} : item);
-  openActionMenu(items, invokeReaderAction);
+  openActionMenu(items, invokeReaderAction, undefined, undefined, true);
   if (actionMenu) actionMenu.category = category;
 }
 
 async function chromeAction(id: string): Promise<boolean> {
   const category = readerMenuFromAction(id);
   if (category) { showReaderMenu(category); return true; }
-  if (id === "detail.density.compact" || id === "detail.density.expanded") {
-    viewPreferences.setDensity(id === "detail.density.compact" ? "compact" : "expanded");
+  if (id === "detail.chrome.toggle") {
+    const value = uiConfig.chrome("detail") === "compact" ? "full" : "compact";
+    const result = uiConfig.setChrome("detail", value);
+    await readingSurface.active.dispatch({type: "status.set", message: result.ok ? `Detail chrome: ${value}` : result.error}, viewport(readingSurface.active));
     draw(); return true;
   }
   if (id === "detail.location") {
@@ -616,11 +626,11 @@ function draw(): void {
     const lines = [
       actionMenu.title ?? `Actions · ${actionMenu.query}`,
       ...items.slice(start, start + count).map((item, index) =>
-        `${start + index === actionMenu!.index ? "▶" : " "} ${item.label} · ${item.binding}`),
+        `${start + index === actionMenu!.index ? "▶" : " "} ${actionMenu!.pinnable ? uiConfig.isPinned("detail", item.id) ? "♦ " : "  " : ""}${item.label} · ${item.binding}`),
     ];
     if (actionMenu.cancelled) lines.push("", ...wrapTextWithAnsi(sanitizeDynamicText(items[actionMenu.index]?.description ?? ""), Math.max(1, width)));
     while (lines.length < height - 1) lines.push("");
-    lines.push(actionMenu.cancelled ? "↑↓ choose · Enter confirms · Esc cancels" : "Type to filter · ↑↓ select · Enter invoke · Esc cancel");
+    lines.push(actionMenu.cancelled ? "↑↓ choose · Enter confirms · Esc cancels" : actionMenu.notice ?? `Type to filter · ↑↓ select · Enter invoke${actionMenu.pinnable ? ` · ${displayActionChord(actionKeymap.primaryBinding("detail.menu.pin"))} ♦ pin to Detail bar` : ""} · Esc cancel`);
     process.stdout.write("\x1b[H\x1b[2J" + lines.slice(0, height).map(line => truncateToWidth(sanitizeDynamicText(line), width)).join("\n"));
     return;
   }
@@ -657,7 +667,8 @@ function draw(): void {
       reader.setPreviewRegions([...detailPropertyInspectorRegions(reader.state), ...bodyRegions], view);
     }
     return renderDetailLines(reader.state, view, {
-      header: {density: viewPreferences.density, titleInFrame: reader === controller && paneDisplay.inFrame, destinationLabel: destinationDisplay.text, surface: label === "Current" && geometry.arrangement === "switch" ? `Current · Preview ready (${actionKeymap.primaryBinding("detail.reading.focus")})` : label, focused: readingSurface.active === reader},
+      hints: detailHints(reader),
+      header: {chrome: uiConfig.chrome("detail"), bar: paneBarButtons(uiConfig.bar("detail"), actionKeymap), titleInFrame: reader === controller && paneDisplay.inFrame, destinationLabel: destinationDisplay.text, surface: label === "Current" && geometry.arrangement === "switch" ? `Current · Preview ready (${actionKeymap.primaryBinding("detail.reading.focus")})` : label, focused: readingSurface.active === reader},
       helpPrefix: readingSurface.previewVisible ? `${actionKeymap.primaryBinding("detail.reading.focus")} Current/Preview · Alt+Enter Keep · Esc close Preview` : "",
       helpText: actionKeymap.helpText("detail", detailActionScopes(reader.state, {bufferMode: reader.isBufferMode()})),
       chooserHelpText: reader.destinationChooserHelpText(),
@@ -797,8 +808,8 @@ async function stop(): Promise<void> {
   process.exit(0);
 }
 
-const handleKeypress = createDetailKeyHandler({openActionMenu,openNewTree: () => { openTreePane({workspaceRoot: paths.workspaceRoot, root: null, direction: "right"}); }, controller, viewport: () => viewport(controller), stop, actionKeymap, openKeyInspector: () => keyInspector.open() });
-const inspectionKeypress = createDetailKeyHandler({openActionMenu,openNewTree: () => { openTreePane({workspaceRoot: paths.workspaceRoot, root: null, direction: "right"}); },controller: inspection, viewport: () => viewport(inspection), stop: () => { void readingSurface.closePreview(); }, actionKeymap, openKeyInspector: () => keyInspector.open()});
+const handleKeypress = createDetailKeyHandler({openActionMenu: (items, invoke) => openActionMenu(items, invoke, undefined, undefined, true), reloadUiConfig: () => uiConfig.reload(),openNewTree: () => { openTreePane({workspaceRoot: paths.workspaceRoot, root: null, direction: "right"}); }, controller, viewport: () => viewport(controller), stop, actionKeymap, openKeyInspector: () => keyInspector.open() });
+const inspectionKeypress = createDetailKeyHandler({openActionMenu: (items, invoke) => openActionMenu(items, invoke, undefined, undefined, true), reloadUiConfig: () => uiConfig.reload(),openNewTree: () => { openTreePane({workspaceRoot: paths.workspaceRoot, root: null, direction: "right"}); },controller: inspection, viewport: () => viewport(inspection), stop: () => { void readingSurface.closePreview(); }, actionKeymap, openKeyInspector: () => keyInspector.open()});
 
 async function initialize(): Promise<void> {
   await waitForService();
@@ -892,6 +903,13 @@ async function handleInput(str: string, key: TerminalKey): Promise<void> {
     const items = filterActionMenuItems(menu.items, menu.query);
     if (menu.category && (key.name === "left" || key.name === "right")) showReaderMenu(adjacentReaderMenu(menu.category,key.name === "right" ? 1 : -1));
     else if (key.name === "escape") { actionMenu = null; menu.cancelled?.(); }
+    else if (menu.pinnable && actionKeymap.resolve("detail", "menu", str, key).actionId === "detail.menu.pin") {
+      const selected = items[menu.index];
+      if (selected) {
+        const result = uiConfig.togglePin("detail", selected.id);
+        menu.notice = result.ok ? `${result.pinned ? "Pinned" : "Unpinned"} ${selected.label} ${result.pinned ? "to" : "from"} the Detail bar` : result.error;
+      }
+    }
     else if (key.name === "return") {
       const selected = items[menu.index];
       if (selected) { actionMenu = null; await menu.invoke(selected.id); }

@@ -19,7 +19,7 @@ const result=await runHerdrScenario({
     let parent=top;
     for(let i=1;i<=2;i++) parent=await create(`304 Level ${i} readable title`,parent.id);
     await s.setKeybindings({"tree.root.focus":["Alt+F"],"tree.breadcrumb.left":["Alt+J"],"tree.breadcrumb.right":["Alt+K"]});
-    await s.keys(tree,"ctrl+r");await s.waitVisible(tree,"Outliner keymap reloaded");
+    await s.keys(tree,"ctrl+r");await s.waitVisible(tree,"Keymap and bars reloaded");
     await s.revealTree(tree,hub.id);
     // Follow the displayed query occurrence, not its physical storage parent.
     for(let i=0;i<4;i++) await s.keys(tree,"down");

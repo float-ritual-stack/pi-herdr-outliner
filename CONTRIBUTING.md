@@ -58,6 +58,10 @@ source evidence or distinguish authored glyphs from controls.
 - `src/store.ts` owns persistence and canonical graph invariants.
 - `src/server.ts` owns protocol dispatch, sequence, and subscriptions.
 - `src/tree-controller.ts` / `src/tree-renderer.ts` own Tree behavior and presentation.
+- `src/ui-config.ts` owns `ui.json` (pinned bar actions and `compact | full`
+  chrome per pane kind, shared in shape with ep0ch-door); `src/reader-chrome.ts`
+  draws every pane's bar and hint row from it and the action registry. A new
+  pane kind adds a kind there, not its own header or footer.
 - `src/detail-controller.ts` plus `src/detail-*` own Detail behavior and presentation.
 - `src/virtual-branches.ts` owns projection semantics.
 - `src/backlink-facets.ts` owns what a backlink source is (kind, stage, placement,

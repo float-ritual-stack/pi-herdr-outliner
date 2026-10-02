@@ -21,7 +21,7 @@ const result = await runHerdrScenario({
     const children = () => s.client.request<Block[]>({ action: "children", parentId: ticket.id });
     await s.setKeybindings({ "tree.root.focus": ["Alt+F"] });
     await s.keys(tree, "ctrl+r");
-    await s.waitVisible(tree, "Outliner keymap reloaded");
+    await s.waitVisible(tree, "Keymap and bars reloaded");
     await s.revealTree(tree, view.id);
     await s.keys(tree, "alt+f");
     await s.waitVisible(tree, "Focused branch: Validation lane");

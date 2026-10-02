@@ -6,6 +6,8 @@ import {runHerdrScenario} from './herdr-runner';
 
 const result=await runHerdrScenario({
   name:'local-preview-comments',
+ // Comment is a menu action; this journey pins it to the Preview bar.
+ uiConfig:{bar:{preview:["tree.reader.comment","tree.preview.close"]}},
   async prepare(){},
   async run(s){
     const panes=s.panes;

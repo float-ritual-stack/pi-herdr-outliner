@@ -21,6 +21,8 @@ export interface OutlinerActionDefinition {
   defaultChords: readonly string[];
   helpPriority: number;
   menuGroup: OutlinerActionMenuGroup;
+  /** A short CP437 mark for a pane bar button; without one the button shows the label. */
+  glyph?: string;
   intent: string;
   available(context: OutlinerActionContext): boolean;
 }
@@ -130,6 +132,11 @@ const ACTION_SPECS = [
   ] as const).map(([name,label,chord])=>({id:`tree.reader.${name}`,surface:'tree' as const,modes:['reader','inbox-reader'],label,
     description:name==='select'?'Arrows position the cursor; Shift+arrows select text in Preview':label,
     defaultChords:[chord],helpPriority:90,menuGroup:'Edit' as const})),
+  ...([
+    ['back','Preview back','‹'], ['forward','Preview forward','›'], ['open','Open Preview target','Open'],
+  ] as const).map(([name,label,glyph])=>({id:`tree.reader.${name}`,surface:'tree' as const,modes:['reader','browse'],label,
+    description:name==='open'?'Open what Preview shows in the linked Detail':`Go ${name} in Preview's history`,
+    defaultChords:[],helpPriority:0,menuGroup:'Navigate' as const,glyph})),
   {id:"tree.selection.toggle",surface:"tree",modes:["browse"],label:"Select / unselect item",description:"Collect this item without opening it or changing focus",defaultChords:["x"],helpPriority:65,menuGroup:"Edit"},
   {id:"tree.selection.inspect",surface:"tree",modes:["browse"],label:"Selected items",description:"Inspect, read, rank, copy or clear the collected set",defaultChords:["Shift+X"],helpPriority:64,menuGroup:"View"},
   {id:"tree.selection.clear",surface:"tree",modes:["browse"],label:"Clear selected items",description:"Remove the temporary selection without changing content",defaultChords:[],helpPriority:0,menuGroup:"Edit"},
@@ -143,27 +150,32 @@ const ACTION_SPECS = [
       label: `${menu[0]!.toUpperCase()}${menu.slice(1)} menu`, description: `Open ${menu} actions; left/right changes menu`,
       defaultChords: [], helpPriority: 0, menuGroup: "System" as const,
     })),
-    ...(["compact", "expanded"] as const).map(density => ({
-      id: `${surface}.density.${density}`, surface, modes: surface === "tree" ? ["browse"] : ["preview", "property", "annotation", "file"],
-      label: `${density === "compact" ? "Compact" : "Expanded"} layout`, description: density === "compact" ? "Give rows back to content" : "Show location, destination and shortcut rows",
-      defaultChords: [], helpPriority: 0, menuGroup: "View" as const,
-    })),
+    {id: `${surface}.chrome.toggle`, surface, modes: surface === "tree" ? ["browse"] : ["preview", "property", "annotation", "file"],
+      label: `${surface === "tree" ? "Tree" : "Detail"} chrome: compact / full`, description: "Compact gives rows back to content; full shows location, counts, destination, status and shortcut rows",
+      defaultChords: [], helpPriority: 0, menuGroup: "View" as const},
+    {id: `${surface}.menu.pin`, surface, modes: surface === "tree" ? ["action-menu"] : ["menu"],
+      label: "Pin / unpin to bar", description: "Pin the highlighted menu action to this pane's bar, or take it off",
+      defaultChords: ["Alt+Enter"], helpPriority: 0, menuGroup: "System" as const},
     {id: `${surface}.location`, surface, modes: surface === "tree" ? ["browse"] : ["preview", "property", "annotation", "file"],
       label: "Location / ancestors", description: "Inspect and navigate the current document's location", defaultChords: [], helpPriority: 0, menuGroup: "Navigate" as const},
   ]),
   {id:'tree.workspace.inspect',surface:'tree',modes:['browse'],label:'Workspace and connection',description:'Inspect workspace, storage paths and connection without changing data',defaultChords:[],helpPriority:0,menuGroup:'System'},
   { id: "tree.close", surface: "tree", modes: ["*"], label: "close", description: "Close this Tree pane", defaultChords: ["Ctrl+Q"], helpPriority: 100, menuGroup: "System" },
   ...([
-    ['toggle', 'Show / hide Preview', ['Alt+Shift+P']],
-    ['right', 'Dock Preview right', []], ['bottom', 'Dock Preview below', []],
-    ['auto', 'Auto Preview docking', []], ['grow', 'Grow Preview', ['Alt+=']], ['shrink', 'Shrink Preview', ['Alt+-']],
-  ] as const).map(([name, label, chords]) => ({id: `tree.preview.${name}`, surface: 'tree' as const, modes: ['browse','reader'], label, description: label, defaultChords: [...chords], helpPriority: 0, menuGroup: 'View' as const})),
+    ['toggle', 'Show / hide Preview', ['Alt+Shift+P'], undefined, 'Show or hide the Preview that follows the Tree selection'],
+    ['right', 'Dock Preview right', [], '▐', 'Dock Preview beside the Tree'],
+    ['bottom', 'Dock Preview below', [], '▄', 'Dock Preview under the Tree'],
+    ['auto', 'Auto dock Preview', [], '◙', 'On: Preview docks right in wide panes and below in narrow ones. Off: it stays where it is'],
+    ['grow', 'Grow Preview', ['Alt+='], '+', 'Grow Preview'], ['shrink', 'Shrink Preview', ['Alt+-'], '−', 'Shrink Preview'],
+    ['chrome.toggle', 'Preview chrome: compact / full', [], undefined, 'Compact keeps one bar row; full adds Preview\'s shortcut row'],
+    ['menu', 'Preview actions', [], undefined, 'Open the Preview\'s actions; pins from there go on the Preview bar'],
+  ] as const).map(([name, label, chords, glyph, description]) => ({id: `tree.preview.${name}`, surface: 'tree' as const, modes: ['browse','reader'], label, description, defaultChords: [...chords], helpPriority: 0, menuGroup: 'View' as const, ...(glyph ? {glyph} : {})})),
   { id: "tree.preview.focus", surface: "tree", modes: ["browse", "reader"], label: "Tree / Preview", description: "Focus Preview to scroll or copy, or return to Tree", defaultChords: ["Alt+P", "F7"], helpPriority: 30, menuGroup: "View" },
-  { id: "tree.preview.close", surface: "tree", modes: ["browse", "reader"], label: "close Preview", description: "Close local Preview and return to Tree", defaultChords: ["Esc", "Shift+F7"], helpPriority: 29, menuGroup: "View" },
+  { id: "tree.preview.close", surface: "tree", modes: ["browse", "reader"], label: "close Preview", description: "Close local Preview and return to Tree", defaultChords: ["Esc", "Shift+F7"], helpPriority: 29, menuGroup: "View", glyph: "×" },
   { id: "tree.cancel", surface: "tree", modes: ["delete", "viewer", "workspace", "edit", "add-child", "add-sibling", "branch-filter", "filter", "goto", "purge", "action-menu", "inbox", "inbox-steer", "inbox-search"], label: "cancel", description: "Cancel the current transient mode", defaultChords: ["Esc"], helpPriority: 100, menuGroup: "System" },
   { id: "tree.menu.open", surface: "tree", modes: ["workspace", "browse", "reader", "inbox"], label: "actions", description: "Open contextual actions and effective bindings", defaultChords: ["?"], helpPriority: 20, menuGroup: "System" },
   { id: "tree.attention.acknowledge", surface: "tree", modes: ["browse"], label: "ack attention", description: "Acknowledge return cues while leaving active marks visible", defaultChords: ["Ctrl+X"], helpPriority: 74, menuGroup: "Navigate" },
-  { id: "tree.keymap.reload", surface: "tree", modes: ["browse"], label: "reload keys", description: "Atomically reload the Outliner keymap", defaultChords: ["Ctrl+R"], helpPriority: 5, menuGroup: "System" },
+  { id: "tree.keymap.reload", surface: "tree", modes: ["browse"], label: "reload keys and bars", description: "Reload keybindings.json and ui.json (pins and chrome); a broken file keeps what is shown", defaultChords: ["Ctrl+R"], helpPriority: 5, menuGroup: "System" },
   { id: "tree.debug.keys", surface: "tree", modes: ["browse", "inbox", "viewer", "workspace"], label: "Inspect received keys", description: "Inspect raw terminal input without triggering actions", defaultChords: [], helpPriority: 0, menuGroup: "System" },
   { id: "tree.move.up", surface: "tree", modes: ["browse"], label: "up", description: "Select the previous visible row", defaultChords: ["ArrowUp"], helpPriority: 100, menuGroup: "Navigate" },
   { id: "tree.move.down", surface: "tree", modes: ["browse"], label: "down", description: "Select the next visible row", defaultChords: ["ArrowDown"], helpPriority: 100, menuGroup: "Navigate" },
@@ -260,7 +272,7 @@ const ACTION_SPECS = [
   { id: "detail.reading.keep", surface: "detail", modes: ["*"], label: "Keep Preview here", description: "Promote Preview into Current while protecting its draft", defaultChords: ["Alt+Enter"], helpPriority: 20, menuGroup: "View" },
   { id: "detail.reading.close", surface: "detail", modes: ["*"], label: "Close Preview", description: "Release the local Preview while preserving Current", defaultChords: ["Shift+F7"], helpPriority: 20, menuGroup: "View" },
   { id: "detail.menu.open", surface: "detail", modes: ["preview", "annotation", "file", "property"], label: "actions", description: "Open contextual actions and effective bindings", defaultChords: ["?"], helpPriority: 25, menuGroup: "System" },
-  { id: "detail.keymap.reload", surface: "detail", modes: ["preview", "annotation", "file", "property"], label: "reload keys", description: "Atomically reload the Outliner keymap", defaultChords: ["Ctrl+R"], helpPriority: 5, menuGroup: "System" },
+  { id: "detail.keymap.reload", surface: "detail", modes: ["preview", "annotation", "file", "property"], label: "reload keys and bars", description: "Reload keybindings.json and ui.json (pins and chrome); a broken file keeps what is shown", defaultChords: ["Ctrl+R"], helpPriority: 5, menuGroup: "System" },
   { id: "detail.debug.provenance", surface: "detail", modes: ["preview", "annotation"], label: "Inspect rendered provenance", description: "Inspect a frozen Pi reader cell and its observed source evidence", defaultChords: [], helpPriority: 0, menuGroup: "System" },
   { id: "detail.debug.keys", surface: "detail", modes: ["preview", "annotation", "file", "property"], label: "Inspect received keys", description: "Inspect raw terminal input without triggering actions", defaultChords: [], helpPriority: 0, menuGroup: "System" },
   { id: "detail.focus.tree", surface: "detail", modes: ["preview", "annotation", "file"], label: "Tree", description: "Return focus to Tree", defaultChords: ["q", "Ctrl+C"], helpPriority: 75, menuGroup: "Pane" },
@@ -354,6 +366,18 @@ const ACTIONS: readonly OutlinerActionDefinition[] = ACTION_SPECS.map((action) =
 
 const ACTIONS_BY_ID = new Map(ACTIONS.map((action) => [action.id, action]));
 
+/** Which client surface owns an action id, or null when the registry has no such action. */
+export function outlinerActionSurface(actionId: string): OutlinerActionSurface | null {
+  return ACTIONS_BY_ID.get(actionId)?.surface ?? null;
+}
+
+export interface OutlinerActionHint {
+  actionId: string;
+  key: string;
+  label: string;
+}
+const ARROW_CHORDS = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
+
 function canonicalKeyName(input: string): string {
   const trimmed = input.trim();
   if (trimmed.length === 1) return trimmed;
@@ -406,6 +430,15 @@ export function actionChordForInput(str: string | undefined, key: TerminalKey): 
 
 type ActionScopes = string | readonly string[];
 
+/**
+ * An open `[⋯]` menu owns the keyboard: letters go to its Find box and wildcard (`*`)
+ * actions such as Detail's Alt+Enter "Keep Preview here" don't reach it.
+ */
+const MENU_SCOPES: ReadonlySet<string> = new Set(["menu", "action-menu"]);
+function wildcardApplies(scopes: readonly string[]): boolean {
+  return !scopes.every(scope => MENU_SCOPES.has(scope));
+}
+
 function normalizeActionScopes(scopes: ActionScopes): readonly string[] {
   return typeof scopes === "string" ? [scopes] : scopes;
 }
@@ -417,7 +450,7 @@ function actionApplies(
 ): boolean {
   const activeScopes = normalizeActionScopes(scopes);
   return action.surface === surface &&
-    (action.modes.includes("*") || activeScopes.some((scope) => action.modes.includes(scope)));
+    ((action.modes.includes("*") && wildcardApplies(activeScopes)) || activeScopes.some((scope) => action.modes.includes(scope)));
 }
 
 function actionScopeRank(
@@ -580,6 +613,22 @@ export class OutlinerActionKeymap {
       .join("  ");
   }
 
+  /**
+   * The hint row's entries: the menu key first, then bound actions by help priority.
+   * Bare arrows are left out; the full list is always the menu behind `?`.
+   */
+  hints(surface: OutlinerActionSurface, scopes: ActionScopes): OutlinerActionHint[] {
+    const menu = `${surface}.menu.open`;
+    return this.actions(surface, scopes)
+      .filter(action => action.helpPriority > 0 && action.id !== menu)
+      .filter(action => {
+        const binding = this.bindings(action.id)[0];
+        return binding !== undefined && !ARROW_CHORDS.has(binding);
+      })
+      .sort((left, right) => right.helpPriority - left.helpPriority || left.id.localeCompare(right.id))
+      .map(action => ({actionId: action.id, key: displayActionChord(this.primaryBinding(action.id)), label: action.label}));
+  }
+
   menuItems(surface: OutlinerActionSurface, scopes: ActionScopes): OutlinerActionMenuItem[] {
     return this.actions(surface, scopes)
       .sort((left, right) => left.menuGroup.localeCompare(right.menuGroup) || right.helpPriority - left.helpPriority)
@@ -653,7 +702,9 @@ export class OutlinerActionKeymap {
       const chords = overrides.get(action.id) ?? action.defaultChords.map(normalizeActionChord);
       for (const other of ACTIONS) {
         if (other.id <= action.id || other.surface !== action.surface) continue;
-        if (!action.modes.some((mode) => other.modes.includes(mode) || mode === "*" || other.modes.includes("*"))) continue;
+        const menuOnly = (modes: readonly string[]) => modes.every(mode => MENU_SCOPES.has(mode));
+        if (!action.modes.some((mode) => other.modes.includes(mode) ||
+          (mode === "*" && !menuOnly(other.modes)) || (other.modes.includes("*") && !menuOnly(action.modes)))) continue;
         const otherChords = overrides.get(other.id) ?? other.defaultChords.map(normalizeActionChord);
         const collision = chords.find((chord) => otherChords.includes(chord));
         if (collision) {

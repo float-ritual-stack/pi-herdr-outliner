@@ -22,7 +22,7 @@ import { TextBuffer } from "../src/text-buffer";
 import { deriveResourceCapabilityReport } from "../src/resources";
 import type { Block } from "../src/types";
 import { createPropertyInspectorModel, detailPropertyInspectorRegions } from "../src/property-inspector";
-const ACTION_MENU = "\x1b]8;;pi-outliner-action:detail.menu.open\x1b\\\x1b[2;36m[⋯]\x1b[0m\x1b]8;;\x1b\\";
+const ACTION_MENU = "\x1b]8;;pi-outliner-action:detail.menu.open\x1b\\[⋯]\x1b]8;;\x1b\\";
 
 test("Current, Preview and Properties headers expose the same clickable destination without moving content", () => {
   for (const surface of ["Current", "Preview", "Properties"]) {

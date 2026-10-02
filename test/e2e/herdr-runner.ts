@@ -16,7 +16,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { OutlinerClient } from "../../src/client";
 import { checkServiceCompatibility } from "../../src/service-compatibility";
@@ -42,6 +42,10 @@ export interface HerdrScenarioSession {
   readonly database: Database;
   readonly client: OutlinerClient;
   setKeybindings(bindings: Record<string, string[]>): Promise<void>;
+  /** The private ui.json (pins and chrome) under this run's XDG_CONFIG_HOME. */
+  readonly uiConfigPath: string;
+  setUiConfig(value: unknown): Promise<void>;
+  readUiConfig(): Promise<unknown>;
   setRegistryUnavailable(unavailable: boolean): Promise<void>;
   /** `source`: the service the client registered with, when not the project's (an outline host's outline). */
   adoptDetached(clientId: string, role?: "tree" | "detail", source?: OutlinerClient): Promise<string>;
@@ -87,6 +91,8 @@ export interface HerdrScenarioSession {
 
 type Scenario = {
   name: string;
+  /** ui.json written before any pane starts: pins (`bar`) and `chrome` per pane kind. */
+  uiConfig?: unknown;
   detailRenderer?: "pi-tui" | "ansi";
   editor?: string;
   commandKeys?: ReadonlyArray<{ key: string; command: string }>;
@@ -872,6 +878,18 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
         await writeFile(keymapPath, `${JSON.stringify(bindings, null, 2)}\n`);
         await artifacts.event("keybindings-written", { path: keymapPath, bindings });
       },
+      uiConfigPath: join(configHome, "pi-herdr-outliner", "ui.json"),
+      async setUiConfig(value) {
+        const path = join(configHome, "pi-herdr-outliner", "ui.json");
+        await mkdir(dirname(path), {recursive: true});
+        await writeFile(path, typeof value === "string" ? value : `${JSON.stringify(value, null, 2)}\n`);
+        await artifacts.event("ui-config-written", {path, value});
+      },
+      async readUiConfig() {
+        const path = join(configHome, "pi-herdr-outliner", "ui.json");
+        try { return JSON.parse(await readFile(path, "utf8")); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+      },
       async setRegistryUnavailable(unavailable) {
         if (!fault.proxy) throw new Error("Registry faults are available only in the composed fixture");
         await artifacts.event("registry-fault", fault.proxy.setDisabled(unavailable));
@@ -1290,6 +1308,8 @@ export async function runHerdrScenario(scenarioInput: Scenario): Promise<Scenari
           `\n[[keys.command]]\nkey = ${JSON.stringify(binding.key)}\ntype = "plugin_action"\ncommand = ${JSON.stringify(binding.command)}\n`
         ).join("")),
       writeFile(keymapPath, "{}\n"),
+      ...(scenario.uiConfig === undefined ? [] : [mkdir(join(configHome, "pi-herdr-outliner"), {recursive: true})
+        .then(() => writeFile(join(configHome, "pi-herdr-outliner", "ui.json"), `${JSON.stringify(scenario.uiConfig, null, 2)}\n`))]),
     ]);
 
     const binary = Bun.which("herdr");

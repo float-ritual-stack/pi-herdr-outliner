@@ -5,6 +5,11 @@ import {runHerdrScenario} from "./herdr-runner";
 
 const result = await runHerdrScenario({
   name: "preview-controls",
+  // Grow and Show/Hide Preview are menu actions; this journey pins them so every control is one click.
+  uiConfig: {bar: {
+    tree: ["tree.menu.note", "tree.menu.view", "tree.preview.toggle"],
+    preview: ["tree.preview.right", "tree.preview.bottom", "tree.preview.auto", "tree.preview.close", "tree.preview.grow"],
+  }},
   async prepare() {},
   async run(session) {
     // This helper launches two local processes in a private tab, giving Tree
@@ -39,11 +44,11 @@ const result = await runHerdrScenario({
       const headerOffset = (frame: string) => {
         const lines = frame.split("\n");
         const heading = lines.findIndex(line => /[●○] Preview · FOCUS FIRST/.test(line));
-        const title = lines.findIndex(line => line.includes("Outliner  "));
+        const title = lines.findIndex(line => /[●○] Tree/.test(line));
         if (heading < 0 || title < 0) return null;
         return {
           row: heading - title,
-          column: visibleWidth(lines[heading]!.slice(0, lines[heading]!.indexOf("Preview"))) - visibleWidth(lines[title]!.slice(0, lines[title]!.indexOf("Outliner  "))),
+          column: visibleWidth(lines[heading]!.slice(0, lines[heading]!.indexOf("Preview"))) - visibleWidth(lines[title]!.slice(0, lines[title]!.search(/[●○] Tree/))),
         };
       };
       const expectedOffset = headerOffset(paneFrame);
@@ -115,30 +120,35 @@ const result = await runHerdrScenario({
     }
     await terminal.resize(170, 74);
     await session.revealTree(panes.tree, docs[0]!.id);
-    const clickLabel = async (label: string) => {
+    await session.waitFor("Auto docks right after the resize", () => session.visible(panes.tree), frame => frame.split("\n")[0]!.includes("Preview ·"));
+    // The attached screen can lag the pane; act only once both show the label at the same place.
+    const settledLabel = async (label: string) => {
       const position = (frame:string) => {
         const lines=frame.split('\n'), row=lines.findIndex(line=>line.includes(label));
-        const origin=lines.findIndex(line=>line.includes('Outliner  '));
+        const origin=lines.findIndex(line=>/[●○] Tree/.test(line));
         if(row<0||origin<0)return null;
         const column=visibleWidth(lines[row]!.slice(0,lines[row]!.indexOf(label)));
-        const left=visibleWidth(lines[origin]!.slice(0,lines[origin]!.indexOf('Outliner  ')));
+        const left=visibleWidth(lines[origin]!.slice(0,lines[origin]!.search(/[●○] Tree/)));
         return {row,column,relativeRow:row-origin,relativeColumn:column-left};
       };
-      const ready=await session.waitFor(`native button ${label}`,async()=>({native:position(await terminal.visible()),pane:position(await session.visible(panes.tree))}),value=>!!value.native&&!!value.pane&&value.native.relativeRow===value.pane.relativeRow&&value.native.relativeColumn===value.pane.relativeColumn);
-      await click(ready.native!.column+1,ready.native!.row);
+      const ready=await session.waitFor(`native ${label}`,async()=>({native:position(await terminal.visible()),pane:position(await session.visible(panes.tree))}),value=>!!value.native&&!!value.pane&&value.native.relativeRow===value.pane.relativeRow&&value.native.relativeColumn===value.pane.relativeColumn);
+      return ready.native!;
     };
-    await clickLabel('[↓]');
+    const clickLabel = async (label: string) => {
+      const point = await settledLabel(label);
+      await click(point.column+1,point.row);
+    };
+    await clickLabel('[▄]');
     await session.waitFor('explicit bottom', () => session.visible(panes.tree), frame => frame.split('\n').findIndex(line=>line.includes('Preview ·')) > 8);
-    await clickLabel('[→]');
+    await clickLabel('[▐]');
     await session.waitFor('explicit right', () => session.visible(panes.tree), frame => frame.split('\n').findIndex(line=>line.includes('Preview ·')) < 3);
     const beforeResize = await session.visible(panes.tree);
     await clickLabel('[+]');
     const grown = await session.waitFor('grow changes divider', () => session.visible(panes.tree), frame => frame.indexOf('Preview ·') !== beforeResize.indexOf('Preview ·'));
     // Drag the native divider; coordinate offsets come from the attached screen.
-    const native = await session.waitFor('settled native toolbar',terminal.visible,text=>/[●○] Preview · FOCUS FIRST/.test(text));
-    const rows = native.split('\n');
-    const header = rows.findIndex(line => /[●○] Preview ·/.test(line));
-    const dividerColumn = visibleWidth(rows[header]!.slice(0, rows[header]!.search(/[●○] Preview ·/))) - 1;
+    const preview = await settledLabel('Preview · FOCUS');
+    const header = preview.row;
+    const dividerColumn = preview.column - 3;
     await terminal.write(`\x1b[<0;${dividerColumn+1};${header+5}M\x1b[<32;${dividerColumn+7};${header+5}M\x1b[<0;${dividerColumn+7};${header+5}m`);
     await session.waitFor('drag changes divider', () => session.visible(panes.tree), frame => frame.indexOf('Preview ·') !== grown.indexOf('Preview ·'));
     await session.checkpoint('mouse-dock-grow-drag');

@@ -30,7 +30,7 @@ await child.exited;`);
  assert.deepEqual(found.entries.map(e=>e.block?.id),[alpha.id,beta.id]);
  await session.record('completed-agent-mentions',found);
  await session.setKeybindings({'tree.mentions.open':['Alt+M']});
- await session.keys(session.panes.tree,'ctrl+r');await session.waitVisible(session.panes.tree,'Outliner keymap reloaded');
+ await session.keys(session.panes.tree,'ctrl+r');await session.waitVisible(session.panes.tree,'Keymap and bars reloaded');
  await session.keys(session.panes.tree,'alt+m');
  const wait=(label:string)=>session.waitFor(label,terminal.visible,text=>text.includes(label));
  await wait('Recent mentions');await wait('ALPHA CANONICAL BODY');

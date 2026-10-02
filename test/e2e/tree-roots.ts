@@ -15,7 +15,7 @@ const result=await runHerdrScenario({
     const match=await create("PIE303 Nested result\n[fixture::match]");
     await session.setKeybindings({"tree.root.focus":["Alt+F"],"tree.root.right":["Alt+T"],"tree.root.workspace":["Alt+W"],"tree.root.below":["Alt+Y"]});
     await session.keys(tree,"ctrl+r");
-    await session.waitVisible(tree,"Outliner keymap reloaded");
+    await session.waitVisible(tree,"Keymap and bars reloaded");
     await session.revealTree(tree,a.id);
     await session.keys(tree,"space");
     await session.revealTree(tree,b.id);await session.keys(tree,"alt+f");

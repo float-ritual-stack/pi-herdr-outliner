@@ -62,7 +62,7 @@ const result = await runHerdrScenario({name:'document-folding', async prepare(){
   await copyHeading();
   assert.ok((await s.visible(s.panes.detail)).includes('Nested destination'),'Drag must not fold');
   await s.keys(s.panes.detail,'?');
-  await s.text(s.panes.detail,'Expanded layout');
+  await s.text(s.panes.detail,'Detail chrome');
   await s.keys(s.panes.detail,'enter');
   await s.waitVisible(s.panes.detail,'Opens in:');
   await copyHeading();
@@ -70,7 +70,7 @@ const result = await runHerdrScenario({name:'document-folding', async prepare(){
   await s.waitVisible(s.panes.detail,'REVIEW NESTED ITEM');
   await s.checkpoint('01b-expanded-density-comment-and-copy');
   await s.keys(s.panes.detail,'?');
-  await s.text(s.panes.detail,'Compact layout');
+  await s.text(s.panes.detail,'Detail chrome');
   await s.keys(s.panes.detail,'enter');
   await s.waitFor('compact after comment',()=>s.visible(s.panes.detail),f=>!f.includes('Opens in:'));
   await click('▾ Parent item');

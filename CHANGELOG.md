@@ -4,6 +4,25 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+### Pane bars you choose, glyph dock buttons, and a chrome budget (PIE-525)
+
+- Preview's bar is back to one click for docking: `[▐]` right, `[▄]` below,
+  `[◙]`/`[○]` Auto docking on/off and `[×]` close, each the same action as its
+  key and menu item.
+- In any `[⋯]` menu, right-click an item or press `Alt+Enter` to pin it to that
+  pane's bar (Tree, Preview or Detail), or unpin it. Pins are saved in
+  `ui.json` beside `keybindings.json`, can be edited by hand, and reload with
+  `Ctrl+R`. Defaults ship in code; the shape (`bar` and `chrome` per pane kind)
+  is the one ep0ch-door will share.
+- Compact chrome is one bar row and one hint row per pane. The hint row is
+  generated from the bound actions, every hint is clickable, and statuses flash
+  there instead of taking a row. Docked below, Preview's bar is the divider.
+  Workspace path, counts, Inbox and "Opens in" moved to the menu's top row.
+- `chrome: compact | full` per pane kind replaces `view.json`'s `density`
+  (no longer read). **View → Tree/Preview/Detail chrome** switches it.
+- Tree and Preview at a 65×20 pane: 10 content rows with the former full chrome,
+  18 now; chrome rows around Tree with Preview below went from 11 to 3.
+
 ### Anyone with the link: `[publish::public]` (PIE-518)
 
 - Tag a note `[publish::public]` or `[publish::public:<slug>]` and anyone with

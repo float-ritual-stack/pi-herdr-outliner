@@ -1,12 +1,12 @@
-import {renderReaderMenu} from "./reader-chrome";
+import {renderHintRow, renderPaneBar} from "./reader-chrome";
 import type {TextViewerFrame} from "./text-viewer-input";
 import { renderReferenceCompletion } from "./reference-completion-renderer";
 import type {DocumentPreviewFrame} from "./document-preview-renderer";
 import {renderNavigationDestinationPreview} from './navigation-destination-menu';
-import {treePreviewFrame} from './tree-preview';
+import {TREE_HINT_ROWS, treePreviewFrame} from './tree-preview';
 import { renderGotoFrame } from "./goto-renderer";
 import { renderInboxFrame } from "./inbox-renderer";
-import { getOsc8LinkAtColumn, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { currentAttentionMark } from "./attention";
 import {
   attentionReturnSummary,
@@ -193,6 +193,35 @@ export interface TreeRenderOptions {
   readonly propertyKeys?: readonly string[];
   readonly clearScreen?: boolean;
   readonly focused?: boolean;
+  /** False when a host (Tree with its Preview) draws the pane's one hint row itself. */
+  readonly hintRow?: boolean;
+}
+
+/** The Tree pane's identity and live cues; dynamic text is sanitized here because the bar keeps links. */
+function treeIdentity(view: TreeView, width: number, options: TreeRenderOptions): string {
+  const title = sanitizeDynamicText(options.titleInFrame ? "Tree" : view.root?.label ?? "Tree");
+  const parts = [`${options.focused === false ? "○" : "●"} ${title}`];
+  if (view.activeFilter) parts.push(`\x1b[33mFilter: ${sanitizeDynamicText(view.activeFilter)}\x1b[39m`);
+  if (view.visibleCompleteness.kind === "truncated") parts.push(`\x1b[33mtruncated at ${view.visibleCompleteness.limit}\x1b[39m`);
+  const returnSummary = attentionReturnSummary(view.attention, width);
+  if (returnSummary) parts.push(returnSummary);
+  if (view.mode === "browse" && (view.selectionCue || view.recoverableSelections)) {
+    const label = view.selectionCue || `${view.recoverableSelections}${view.recoverableSelectionsTruncated ? "+" : ""} retained selections`;
+    parts.push(outlinerActionLink("tree.selection.inspect", sanitizeDynamicText(label)) + (view.collectedIds?.size ? ` ${outlinerActionLink("tree.selection.clear", "[Clear]")}` : ""));
+  }
+  if (view.branchFilterCue) parts.push(`${outlinerActionLink("tree.filter.clear", "[Clear filter]")} ${sanitizeDynamicText(view.branchFilterCue)}`);
+  return parts.join(" · ");
+}
+
+/** The pane's one hint row: recovery controls, then a fresh status, then generated hints. */
+export function treeHintRow(view: TreeView, width: number, options: TreeRenderOptions & {scope?: string; message?: string; showStatus?: boolean} = {}): string {
+  if (view.recoveryHelp) return truncateToWidth(view.recoveryHelp, width);
+  const message = options.message ?? (options.showStatus === false ? "" : view.status);
+  const scope = options.scope ?? view.mode;
+  return renderHintRow(width, view.hints ?? DEFAULT_OUTLINER_ACTION_KEYMAP.hints("tree", scope), {
+    menuKey: view.menuKey ?? "?", menuAction: "tree.menu.open", message,
+    ...(options.focused === undefined ? {} : {prefix: "F6 Detail"}),
+  });
 }
 
 function propertyKeysForRow(
@@ -393,28 +422,32 @@ export function renderTreeFrame(
   options: TreeRenderOptions = {},
 ): TreeRenderResult {
   if (view.localPreview && view.mode === "browse") {
-    const preview=treePreviewFrame(view.localPreview,width,height,view.previewHelp ?? "Alt+P Tree/Preview · Esc close · drag to copy",view.previewPreferences, view.density);
-    const tree=renderTreeFrame({...view,localPreview:null},preview.treeWidth,preview.treeHeight,initialScrollStartEntryIndex,{...options,clearScreen:false});
+    const area = Math.max(1, height - TREE_HINT_ROWS);
+    const preview=treePreviewFrame(view.localPreview,width,height,view.previewHelp ?? "",view.previewPreferences,{chrome:view.previewChrome ?? "compact",buttons:view.previewBar ?? []});
+    const tree=renderTreeFrame({...view,localPreview:null},preview.treeWidth,preview.treeHeight,initialScrollStartEntryIndex,{...options,clearScreen:false,hintRow:false});
     const treeLines=tree.frame.split("\n");
     let lines:string[];
     if(preview.placement==='beside') lines=preview.lines.map((line,index)=>{
       const left=truncateToWidth(treeLines[index]??'',preview.treeWidth);
       return left+' '.repeat(Math.max(0,preview.treeWidth-visibleWidth(left)))+'│'+line;
     });
-    else if(preview.placement==='below') lines=[...treeLines,'─'.repeat(width),...preview.lines];
-    else {lines=view.localPreview.focused?preview.lines:treeLines;if(!view.localPreview.focused)lines[height-1]=truncateToWidth('Preview available · '+(view.previewHelp??'Alt+P focus · Esc close'),width);}
-    if (view.recoveryHelp && preview.placement === 'compact') {
-      lines[height-2] = truncateToWidth(sanitizeDynamicText(view.recoveryStatus ?? ''), width);
-      lines[height-1] = truncateToWidth(view.recoveryHelp, width);
-      preview.content.height = Math.max(0,Math.min(preview.content.height,height-2-preview.content.y));
-      preview.controls ??= [];
-      for(let column=0;column<width;column++){
-        const uri=getOsc8LinkAtColumn(lines[height-1]!,column);
-        if(uri?.startsWith('pi-outliner-action:'))preview.controls.push({rect:{x:column,y:height-1,width:1,height:1},action:uri.slice('pi-outliner-action:'.length)});
-      }
-    }
+    else if(preview.placement==='below') lines=[...treeLines.slice(0,preview.treeHeight),...preview.lines];
+    else lines=view.localPreview.focused?preview.lines:treeLines;
+    lines=lines.slice(0,area);
+    while(lines.length<area)lines.push('');
+    // Recovery controls take the hint row, so its status and any connection status keep rows above it.
+    const notices = [view.recoveryStatus, view.recoveryHelp ? view.status : ""].filter((text): text is string => Boolean(text));
+    notices.slice(-Math.max(0, area - 1)).forEach((text, index, kept) => {
+      lines[area - kept.length + index] = truncateToWidth(sanitizeDynamicText(text), width);
+    });
+    if (notices.length) preview.content.height = Math.max(0,Math.min(preview.content.height,area-Math.min(notices.length,area-1)-preview.content.y));
+    const previewNotice = view.localPreview.notice ? sanitizeDynamicText(view.localPreview.notice) : "";
+    const hidden = preview.placement==='compact' && !view.localPreview.focused;
+    const hint = treeHintRow(view,width,{...options,scope:view.localPreview.focused?"reader":"browse",
+      // Full Tree chrome keeps its own status row, so the hint row only flashes it in compact.
+      message:previewNotice || ((view.chrome ?? "compact") === "compact" ? view.status : "") || (hidden ? `Preview available · ${view.previewHelp ?? ""}` : "")});
     const mouseTargets=preview.placement==='compact'&&view.localPreview.focused?[]:tree.mouseTargets.map(target=>target?{...target,minColumn:0,maxColumn:preview.treeWidth-1}:target);
-    return{...tree,preview,mouseTargets,frame:`${options.clearScreen===false?'':`${ESC}H${ESC}2J`}${lines.slice(0,height).join("\n")}`};
+    return{...tree,preview,mouseTargets,frame:`${options.clearScreen===false?'':`${ESC}H${ESC}2J`}${[...lines,hint].slice(0,height).join("\n")}`};
   }
   if(view.mode==='action-menu' && view.destinationPreview) {
     const fit=(text:string,w:number)=>truncateToWidth(text,w);
@@ -441,7 +474,7 @@ export function renderTreeFrame(
     const lines=[fit(title,width),fit(view.destinationInstructions??(openingOnce ? 'Choose where this item opens once' : 'Choose where links from Tree open'),width),fit(`Find: ${view.actionMenuQuery??''}▏`,width),'─'.repeat(width),...middle,fit(footer,width)];
     return{frame:(options.clearScreen===false?'':`${ESC}H${ESC}2J`)+lines.slice(0,height).join('\n'),scrollStartEntryIndex:initialScrollStartEntryIndex,mouseTargets:[]};
   }
-  const output: string[] = view.density === "expanded" ? [""] : [];
+  const output: string[] = [];
   const clear = options.clearScreen === false ? "" : `${ESC}H${ESC}2J`;
   const mouseTargets: Array<TreeMouseTarget | null | undefined> = [];
 
@@ -467,54 +500,23 @@ export function renderTreeFrame(
       viewer:view.workspaceReport?{content:{x:0,y:2,width,height:bodyHeight},identity:view.workspaceReport,offset:view.viewerOffset}:undefined};
   }
 
-  const compact = view.density !== "expanded";
+  const compact = (view.chrome ?? "compact") === "compact";
   const breadcrumb = compact ? null : renderTreeBreadcrumbs(view, width);
-  if (compact) {
-    output.push(renderReaderMenu("tree", width, `${options.focused === false ? "○" : "●"} ${options.titleInFrame ? "Tree" : view.root?.label ?? "Tree"}`));
-    const cues = [view.activeFilter ? `Filter: ${view.activeFilter}` : "",
-      view.visibleCompleteness.kind === "truncated" ? `Results truncated at ${view.visibleCompleteness.limit}` : "",
-      attentionReturnSummary(view.attention, width) ?? ""].filter(Boolean);
-    if (cues.length) output.push(truncateToWidth(cues.join(" · "), width));
-  } else {
-  const paneMenu = outlinerActionLink("tree.menu.open", "[⋯]");
-  const previewToggle = outlinerActionLink("tree.preview.toggle", view.previewPreferences?.enabled === false ? "[Show Preview]" : "[Hide Preview]");
-  const indentationBadge = outlinerActionLink("tree.indentation.toggle", `[Indent: ${view.indentationMode ?? "viewport"}]`);
-  output.push(
-    truncateToWidth(`\x1b[1;36m${options.focused === undefined ? "Outliner" : `${options.focused ? "●" : "○"} Tree`}\x1b[0m  \x1b[2m${truncate(view.workspaceRoot, Math.max(1, width - 65))}\x1b[0m  ${paneMenu} ${previewToggle} ${indentationBadge}`, width),
-  );
-  const filterLabel = view.activeFilter ? `  \x1b[33mfilter: ${view.activeFilter}\x1b[0m` : "";
-  const truncationLabel =
-    view.visibleCompleteness.kind === "truncated"
-      ? `  \x1b[33mWARNING: truncated at ${view.visibleCompleteness.limit}\x1b[0m`
-      : "";
-  const physicalCount = view.physicalRowCount;
-  const occurrenceCount = view.occurrenceRowCount;
-  const returnSummary = attentionReturnSummary(view.attention, width);
-  output.push((view.root && !breadcrumb ? truncateToWidth(outlinerActionLink("tree.root.workspace", `← Workspace · ${sanitizeDynamicText(view.root.label)}`),width) : returnSummary) ?? truncateToWidth(
-    `\x1b[2m${view.inboxCue ? `${outlinerActionLink("tree.inbox.open", view.inboxCue)} · ` : ""}${countLabel(physicalCount, "physical block")} · ${countLabel(
-      occurrenceCount,
-      "projected occurrence",
-    )}${filterLabel}\x1b[0m${truncationLabel}`,
-    width,
-  ));
-  if (breadcrumb) output.push(breadcrumb.line);
-  output.push(view.navigationDestinationLabel === undefined ? "─".repeat(width)
-    : outlinerActionLink("tree.navigation.link", truncateToWidth(`Opens in: ${truncateToWidth(sanitizeDynamicText(view.navigationDestinationLabel), Math.max(1, width - 21))} / Change`, width)));
+  const hintRow = options.hintRow !== false;
+  const recovery = view.mode === "browse" && Boolean(view.recoveryHelp) && hintRow;
+  // Recovery controls can displace the bar; even a one-row pane must offer an escape.
+  if (!(recovery && height <= 1)) {
+    output.push(renderPaneBar(width, treeIdentity(view, width, options), view.bar ?? [], "tree.menu.open").line);
   }
-  if (view.mode === "browse" && (view.selectionCue || view.recoverableSelections)) {
-    const label = view.selectionCue || `${view.recoverableSelections}${view.recoverableSelectionsTruncated ? "+" : ""} retained selections`;
-    const clearSelection = view.collectedIds?.size ? ` ${outlinerActionLink("tree.selection.clear","[Clear]")}` : "";
-    output.push(truncateToWidth(outlinerActionLink("tree.selection.inspect",sanitizeDynamicText(label)) + clearSelection,width));
+  if (!compact) {
+    const counts = `${countLabel(view.physicalRowCount, "physical block")} · ${countLabel(view.occurrenceRowCount, "projected occurrence")}`;
+    output.push(truncateToWidth(`\x1b[2m${truncate(view.workspaceRoot, Math.max(1, Math.floor(width / 3)))} · ${view.inboxCue ? `${outlinerActionLink("tree.inbox.open", view.inboxCue)} · ` : ""}${counts}\x1b[0m`, width));
+    if (breadcrumb) output.push(breadcrumb.line);
+    output.push(view.navigationDestinationLabel === undefined ? "─".repeat(width)
+      : outlinerActionLink("tree.navigation.link", truncateToWidth(`Opens in: ${truncateToWidth(sanitizeDynamicText(view.navigationDestinationLabel), Math.max(1, width - 21))} / Change`, width)));
   }
-  const compactRecovery = compact && view.mode === "browse" && Boolean(view.recoveryHelp);
-  // Recovery controls can displace optional chrome; even a one-row pane must offer an escape.
-  if (compactRecovery) {
-    while (output.length > 1 && output.length > height - 3) output.pop();
-    if (height === 1) output.length = 0;
-  }
-  if (view.branchFilterCue) output.push(truncateToWidth(outlinerActionLink("tree.filter.clear", "[Clear filter]") + " " + sanitizeDynamicText(view.branchFilterCue), width));
   const headerHeight = output.length;
-  const minimumBodyHeight = compactRecovery && height <= 2 ? 0 : 1;
+  const minimumBodyHeight = recovery && height <= 2 ? 0 : 1;
   const selectedRow = view.rows[view.selectedIndex];
   const selectedBranchState =
     selectedRow?.kind === "physical"
@@ -524,31 +526,37 @@ export function renderTreeFrame(
   const branchError = selectedBranchState?.configurationErrors.length
     ? `CONFIG ERROR: ${selectedBranchState.configurationErrors.join("; ")}`
     : selectedBranchState?.queryError ? `QUERY ERROR: ${selectedBranchState.queryError}` : "";
-  // Short panes keep notices by priority (recovery controls, recovery status, connection/general status, branch error) but render them in reading order.
+  // Short panes keep footer rows by priority (the hint row with any recovery controls, recovery
+  // status, branch error) but render them in reading order. Status flashes in the hint row.
+  // Recovery controls take the hint row; then a status (connection state) needs its own row.
+  const statusOwnRow = hintRow && Boolean(view.recoveryHelp);
+  const fit = (text: string | undefined) => text ? truncateToWidth(sanitizeDynamicText(text), width) : "";
   const compactNotices = [
-    {text: view.recoveryStatus, priority: 1, sanitize: true},
-    {text: branchError, priority: 3, sanitize: true},
-    {text: view.status, priority: 2, sanitize: true},
-    {text: view.recoveryHelp, priority: 0, sanitize: false},
-  ].filter((notice, index, all): notice is {text: string; priority: number; sanitize: boolean} =>
-    Boolean(notice.text) && all.findIndex(other => other.text === notice.text) === index);
+    {text: hintRow ? fit(view.recoveryStatus) : "", priority: 1},
+    {text: fit(branchError), priority: 3},
+    {text: statusOwnRow ? fit(view.status) : "", priority: 2},
+    {text: hintRow ? treeHintRow(view, width, options) : "", priority: 0},
+  ].filter((notice, index, all) => notice.text && all.findIndex(other => other.text === notice.text) === index);
   const compactCapacity = Math.max(0, height - headerHeight - minimumBodyHeight);
   const compactKept = new Set([...compactNotices].sort((a, b) => a.priority - b.priority).slice(0, compactCapacity));
-  const compactFooterLines = compactNotices.filter(notice => compactKept.has(notice));
-  const compactFooter = compactFooterLines.length;
-  const footerHeight = compact && view.mode === "browse" ? compactFooter : 2;
+  const compactFooterLines = compactNotices.filter(notice => compactKept.has(notice)).map(notice => notice.text);
+  const footerHeight = view.mode === "browse" ? (compact ? compactFooterLines.length : hintRow ? 2 : 1) : 2;
   const bodyHeight = Math.max(minimumBodyHeight, height - headerHeight - footerHeight);
   if (view.mode === "action-menu") {
     const actionMenuItems = view.actionMenuItems ?? [];
     const actionMenuIndex = view.actionMenuIndex ?? 0;
     const actionMenuQuery = view.actionMenuQuery ?? "";
+    // The menu is where hidden chrome lives: workspace, counts, Inbox and destination, one click each.
+    const info = view.actionMenuInfo && bodyHeight > 1 ? truncateToWidth(view.actionMenuInfo, width) : null;
+    if (info) output.push(info);
+    const menuBody = bodyHeight - Number(Boolean(info));
     const originRow = view.actionMenuOrigin
-      ? Math.max(0, Math.min(bodyHeight - 1, view.actionMenuOrigin.row - headerHeight))
+      ? Math.max(0, Math.min(menuBody - 1, view.actionMenuOrigin.row - headerHeight - Number(Boolean(info))))
       : 0;
     const menuColumn = view.actionMenuOrigin
       ? Math.max(0, Math.min(view.actionMenuOrigin.column, Math.max(0, width - 24)))
       : 0;
-    const menuHeight = Math.max(1, bodyHeight - originRow);
+    const menuHeight = Math.max(1, menuBody - originRow);
     const menuWidth = Math.max(1, width - menuColumn);
     const window = completionWindow(
       actionMenuItems.length,
@@ -558,7 +566,8 @@ export function renderTreeFrame(
     for (let row = 0; row < originRow; row += 1) output.push("");
     for (let index = window.start; index < window.end; index++) {
       const item = actionMenuItems[index]!;
-      const text = actionMenuItemText(item);
+      const pinned = view.actionMenuPinned?.has(item.id) ? "♦ " : view.actionMenuBar ? "  " : "";
+      const text = pinned + actionMenuItemText(item);
       const linked = outlinerActionLink(item.id, truncateToWidth(text, Math.max(1, menuWidth - 2)));
       const prefix = " ".repeat(menuColumn);
       output.push(
@@ -567,9 +576,11 @@ export function renderTreeFrame(
     }
     while (output.length < height - 2) output.push("");
     const selected = actionMenuItems[actionMenuIndex];
-    const description = selected ? ` · ${selected.description}` : "";
+    // A pin's result (or any fresh status) takes the description's place while it flashes.
+    const description = view.status ? ` · ${sanitizeDynamicText(view.status)}` : selected ? ` · ${selected.description}` : "";
     output.push(truncate(`Find: ${actionMenuQuery}▏${description}`, width));
-    output.push(`\x1b[2m${truncate("↑↓ choose  ↵ invoke  ⎋ close", width)}\x1b[0m`);
+    const pin = view.actionMenuBar ? `  ${view.pinKey ?? "⌥↵"}/right-click ♦ pin to ${view.actionMenuBar === "preview" ? "Preview" : "Tree"} bar` : "";
+    output.push(`\x1b[2m${truncate(`↑↓ choose  ↵ run${pin}  ⎋ close`, width)}\x1b[0m`);
     return {
       frame: clear + output.join("\n"),
       scrollStartEntryIndex: initialScrollStartEntryIndex,
@@ -846,7 +857,7 @@ export function renderTreeFrame(
   }
   while (output.length < height - footerHeight) output.push("");
   if (compact && view.mode === "browse") {
-    for (const {text, sanitize} of compactFooterLines) output.push(truncateToWidth(sanitize ? sanitizeDynamicText(text) : text, width));
+    output.push(...compactFooterLines);
     const selected = selectedExpandedInfo.current;
     return {frame: clear + output.slice(0,height).join("\n"), scrollStartEntryIndex, mouseTargets,
       expandedPage: selected ? {rowId: view.rows[view.selectedIndex]!.rowId, pageSize:bodyHeight,totalRows:selected.total,offset:selected.offset} : null};
@@ -911,9 +922,12 @@ export function renderTreeFrame(
       (selectedBranchState ? branchStatusText(selectedBranchState) : "");
     output.push(truncate(contextualStatus, width));
   }
-  const help = view.recoveryHelp ?? view.actionHelpText ??
-    DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", view.mode);
-  output.push(`\x1b[2m${(view.recoveryHelp ? truncateToWidth : truncate)(options.focused === undefined ? help : `F6 Detail  ${help}`, width)}\x1b[0m`);
+  if (view.mode === "browse") {
+    if (hintRow) output.push(treeHintRow(view, width, {...options, showStatus: false}));
+  } else {
+    const help = view.actionHelpText ?? DEFAULT_OUTLINER_ACTION_KEYMAP.helpText("tree", view.mode);
+    output.push(`\x1b[2m${truncate(options.focused === undefined ? help : `F6 Detail  ${help}`, width)}\x1b[0m`);
+  }
   return { frame: clear + output.join("\n"), scrollStartEntryIndex, mouseTargets, breadcrumbStart:breadcrumb?.start,
     expandedPage: selectedInfo && isBlockTreeRow(selectedRow) && selectedRow.multilineExpanded
       ? {rowId:selectedRow.rowId,pageSize:bodyHeight,totalRows:selectedInfo.total,offset:selectedInfo.offset} : null,

@@ -118,6 +118,11 @@ export function treeRowAtClick(
   return target && click.column >= (target.minColumn ?? 0) && click.column <= (target.maxColumn ?? Infinity) ? target.rowId : null;
 }
 
+/** The link painted at a point (a right-click's, for instance), or null. */
+export function treeLinkAtPoint(renderedLines: readonly string[], point: {column: number; row: number}): string | null {
+  return getOsc8LinkAtColumn(renderedLines[point.row] ?? "", point.column) ?? null;
+}
+
 export function treeLinkAtClick(
   renderedLines: readonly string[],
   sequence: string,

@@ -1,3 +1,4 @@
+import {OutlinerUiConfig} from "../src/ui-config";
 import { OutlinerStore } from "../src/store";
 import {initTheme} from "@earendil-works/pi-coding-agent";
 initTheme(undefined,false);
@@ -172,7 +173,7 @@ function harness(
     invalidations: 0,
     stops: 0,
     effects: {
-      density: () => "expanded",
+      uiConfig: new OutlinerUiConfig("", {chrome: {tree: "full", preview: "full", detail: "full"}}),
       navigation: serviceTreeNavigation({request: input => result.effects.request(input)}, clientId, `${clientId}-context`),
       clientId,
       browsingContextId: `${clientId}-context`,
@@ -2426,18 +2427,18 @@ describe("createTreeController", () => {
     await controller.initialize();
     await controller.handleKeypress(".", { name: "." }, "modified-enter");
 
-    renderViewport(controller);
+    renderViewport(controller, 80, 11);
     await controller.handleKeypress("", { name: "pagedown" }, "pass");
     expect(controller.view().expandedBlockOffset).toBe(5);
     expect(controller.view().status).toBe("Expanded block rows 6-10/20");
-    renderViewport(controller);
+    renderViewport(controller, 80, 11);
     await controller.handleKeypress("", { name: "pagedown" }, "pass");
-    renderViewport(controller);
+    renderViewport(controller, 80, 11);
     await controller.handleKeypress("", { name: "pagedown" }, "pass");
     expect(controller.view().expandedBlockOffset).toBe(15);
     expect(controller.view().status).toBe("Expanded block rows 16-20/20");
 
-    renderViewport(controller);
+    renderViewport(controller, 80, 11);
     await controller.handleKeypress("", { name: "pageup" }, "pass");
     expect(controller.view().expandedBlockOffset).toBe(10);
     expect(controller.view().status).toBe("Expanded block rows 11-15/20");
@@ -2445,7 +2446,7 @@ describe("createTreeController", () => {
     await controller.handleConnect();
     expect(controller.view().expandedBlockOffset).toBe(0);
     expect(controller.view().status).toBe("");
-    renderViewport(controller);
+    renderViewport(controller, 80, 11);
     await controller.handleKeypress("", { name: "pagedown" }, "pass");
     expect(controller.view().expandedBlockOffset).toBe(5);
 
@@ -2517,7 +2518,7 @@ describe("createTreeController", () => {
       marker: "•",
       author: " ",
     }).length;
-    const pageSize = 5;
+    const pageSize = 6;
 
     for (let index = 0; index < 10; index += 1) {
       renderViewport(controller);
@@ -3877,7 +3878,7 @@ test("paging uses the reflowed breadcrumb viewport without skipping numbered lin
   const seen=new Set<number>();
   for(let page=0;page<6;page++) {
     const rendered=renderViewport(controller,40,12);
-    expect(rendered.expandedPage?.pageSize).toBe(5);
+    expect(rendered.expandedPage?.pageSize).toBe(6);
     expect(rendered.expandedPage?.totalRows).toBe(25);
     for(const match of rendered.frame.matchAll(/line(\d+) body/g)) seen.add(Number(match[1]));
     await controller.handleKeypress("",{name:"pagedown"},"pass");
@@ -4239,11 +4240,13 @@ test('compact recovery controls retain valid OSC links and dispatch mouse action
   const lines=rendered.frame.split('\n');const footer=lines.find(line=>line.includes('destination.here'))!;
   expect(stripTerminalSequences(footer)).toContain('[Esc: Cancel]');
   expect(getOsc8LinkAtColumn(footer,2)).toBe('pi-outliner-action:destination.here');
-  if(rendered.preview?.placement==='compact'){
+  // The recovery controls sit in the pane's hint row, outside Preview, so Preview never swallows the click.
+  expect(lines.indexOf(footer)).toBe(lines.length-1);
+  if(rendered.preview){
    const input=new DocumentPreviewInput();input.render(lines,rendered.preview,c.view().localPreview);
-   const button=rendered.preview.controls!.find(control=>control.action==='destination.here')!;
-   let invoked='';input.handle(`\x1b[<0;${button.rect.x+1};${button.rect.y+1}M`,{focus(){},scroll(){},resize(){},async invoke(action){invoked=action;}},()=>{},()=>{});
-   expect(invoked).toBe('destination.here');
+   let invoked='';
+   const handled=input.handle(`\x1b[<0;3;${lines.length}M`,{focus(){},scroll(){},resize(){},async invoke(action){invoked=action;}},()=>{},()=>{});
+   expect(handled).toBe(false);expect(invoked).toBe('');
   }
  }
 });
@@ -4459,4 +4462,70 @@ test('comment groups hide discussion without hiding ordinary children and disclo
   await c.handleAction('tree.filter.clear');
   expect(groups().find(row=>row.rowId===physicalGroup.rowId)?.collapsed).toBe(true);
   expect(groups().find(row=>row.rowId===virtualGroup.rowId)?.collapsed).toBe(false);
+});
+
+test("a right-click or the pin key on a menu item pins it to the bar the menu was opened from, and clicks on the bar run it", async () => {
+  const {mkdtempSync, readFileSync, rmSync} = await import("node:fs");
+  const {tmpdir} = await import("node:os");
+  const {join} = await import("node:path");
+  const root = mkdtempSync(join(tmpdir(), "tree-pins-"));
+  try {
+    const path = join(root, "ui.json");
+    const source = block("pin-source");
+    const fake = harness(input => input.action === "tree.index" ? snapshot([source], source) : undefined);
+    const controller = createTreeController({...fake.effects, uiConfig: new OutlinerUiConfig(path)});
+    await controller.initialize();
+    await controller.handleAction("tree.menu.open");
+    const items = controller.view().actionMenuItems!;
+    const goto = items.find(item => item.id === "tree.goto")!;
+    expect(controller.view().actionMenuBar).toBe("tree");
+    expect(controller.view().actionMenuPinned?.has("tree.goto")).toBe(false);
+    await controller.handleSecondaryClick({column: 3, row: 4}, `pi-outliner-action:${goto.id}`);
+    expect(controller.view().mode).toBe("action-menu");
+    expect(controller.view().actionMenuPinned?.has("tree.goto")).toBe(true);
+    expect(JSON.parse(readFileSync(path, "utf8")).bar.tree).toContain("tree.goto");
+    expect(controller.view().bar?.map(button => button.actionId)).toContain("tree.goto");
+    // The pin key unpins the highlighted item.
+    await controller.handleKeypress("", {name: "return", meta: true}, "modified-enter");
+    expect(controller.view().actionMenuPinned?.has("tree.goto")).toBe(false);
+    expect(JSON.parse(readFileSync(path, "utf8")).bar.tree).not.toContain("tree.goto");
+    await controller.handleKeypress("", {name: "escape"}, "pass");
+    expect(controller.view().mode).toBe("browse");
+    // A right-click outside a menu opens it; it never pins.
+    await controller.handleSecondaryClick({column: 3, row: 4}, "pi-outliner-action:tree.goto");
+    expect(controller.view().mode).toBe("action-menu");
+    expect(JSON.parse(readFileSync(path, "utf8")).bar.tree).not.toContain("tree.goto");
+  } finally { rmSync(root, {recursive: true, force: true}); }
+});
+
+test("Preview's dock buttons show which dock is on, and Auto is an on/off toggle", async () => {
+  const source = block("dock-source");
+  const fake = harness(input => input.action === "tree.index" ? snapshot([source], source) : undefined);
+  const controller = createTreeController(fake.effects);
+  await controller.initialize();
+  const glyphs = () => controller.view().previewBar!.map(button => `${button.text}${button.active ? "*" : ""}`);
+  expect(glyphs()).toEqual(["[▐]", "[▄]", "[◙]", "[×]"]);
+  await controller.handleAction("tree.preview.bottom");
+  expect(glyphs()).toEqual(["[▐]", "[▄]*", "[○]", "[×]"]);
+  await controller.handleAction("tree.preview.auto");
+  expect(controller.view().previewPreferences?.dock).toBe("auto");
+  await controller.handleAction("tree.preview.auto");
+  expect(controller.view().previewPreferences?.dock).not.toBe("auto");
+});
+
+test("a status flashes: it shows until it expires, then the hint row returns", async () => {
+  const source = block("flash-source");
+  const fake = harness(input => input.action === "tree.index" ? snapshot([source], source) : undefined);
+  const controller = createTreeController({...fake.effects, statusFlashMs: 20});
+  await controller.initialize();
+  await controller.handleAction("tree.preview.auto");
+  expect(controller.view().status).toBe("Preview stays below");
+  const invalidations = fake.invalidations;
+  await new Promise(resolve => setTimeout(resolve, 60));
+  expect(controller.view().status).toBe("");
+  expect(fake.invalidations).toBeGreaterThan(invalidations);
+  // The same message set again flashes again.
+  await controller.handleAction("tree.preview.auto");
+  await controller.handleAction("tree.preview.auto");
+  expect(controller.view().status).toBe("Preview stays below");
 });

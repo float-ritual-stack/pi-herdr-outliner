@@ -7,7 +7,7 @@ const result=await runHerdrScenario({name:'virtual-branch-defaults',async prepar
  const folder=await create('Sources');const ticket=await create('PC-762 fixture\n[fixture::378]',folder.id);
  await create('Working note 378',ticket.id);
  const view=await create('Doing compact\n[type::virtual-branch] [query::fixture=378] [child-depth::1] [expanded::false]');
- await s.setKeybindings({'tree.root.focus':['Alt+F'],'tree.virtual-branch.reset-expansion':['Alt+Z']});await s.keys(tree,'ctrl+r');await s.waitVisible(tree,'Outliner keymap reloaded');
+ await s.setKeybindings({'tree.root.focus':['Alt+F'],'tree.virtual-branch.reset-expansion':['Alt+Z']});await s.keys(tree,'ctrl+r');await s.waitVisible(tree,'Keymap and bars reloaded');
  await s.revealTree(tree,view.id);await s.keys(tree,'alt+f');await s.waitVisible(tree,'Focused branch: Doing compact');
  assert(!(await s.visible(tree)).includes('Working note 378'));await s.checkpoint('01-compact-default');
  await s.keys(tree,'down','right');await s.waitVisible(tree,'Working note 378');await s.checkpoint('02-open-keyboard');

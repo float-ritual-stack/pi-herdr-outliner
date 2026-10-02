@@ -8,7 +8,7 @@ const result=await runHerdrScenario({
   const owner=await session.client.request<Block>({action:'create',text:`LABEL OWNER\n\n((${target.id}|PIE-181))\n((${target.id}^section|Why this matters))`});
   await session.revealTree(session.panes.tree,owner.id);
   await session.setKeybindings({'tree.preview.toggle':['Alt+H']});
-  await session.keys(session.panes.tree,'ctrl+r');await session.waitVisible(session.panes.tree,'Outliner keymap reloaded');
+  await session.keys(session.panes.tree,'ctrl+r');await session.waitVisible(session.panes.tree,'Keymap and bars reloaded');
   await session.keys(session.panes.tree,'alt+h');
   await session.keys(session.panes.tree,'?');await session.waitVisible(session.panes.tree,'Find:');
   await session.text(session.panes.tree,'Show authored links');await session.keys(session.panes.tree,'enter');

@@ -169,29 +169,29 @@ test('Forward reloads a visit interrupted by Back instead of restoring a loading
  expect(reader.state?.document.projectedText).toBe('Resolved bbbbbbbb');
 });
 
-test('narrow Preview preserves clickable navigation ahead of optional layout controls',async()=>{
+test('narrow Preview keeps its menu and fits pinned buttons on its one bar row',async()=>{
  const {initTheme}=await import('@earendil-works/pi-coding-agent');initTheme(undefined,false);
  const {treePreviewFrame}=await import('../src/tree-preview');
  const {renderDocumentPreview}=await import('../src/document-preview-renderer');
  const {stripTerminalSequences,visibleWidth}=await import('@earendil-works/pi-tui');
  const reader=new DocumentPreview({async request<T>():Promise<T>{throw Error('not used');}},()=>{});
  await reader.loadText({kind:'block',blockId:'source'},'Source',Promise.resolve('Body'));
- const compact=renderDocumentPreview(reader.state!,{x:10,y:2,width:26,height:8},'',undefined,'compact','preview.menu');
- expect(stripTerminalSequences(compact.lines[0]!)).toContain('· S');
- expect(compact.controls?.map(c=>c.action)).toEqual(['preview.open','preview.menu']);
- expect(visibleWidth(compact.lines[0]!)).toBeLessThanOrEqual(26);
- for(const canBack of [false,true]) for(const canForward of [false,true]){
-  const frame=renderDocumentPreview({...reader.state!,canBack,canForward},{x:10,y:2,width:26,height:8},'',undefined,'compact','preview.menu');
-  const actions=frame.controls!.map(c=>c.action);
-  expect(actions.includes('preview.back')).toBe(canBack);
-  expect(actions.includes('preview.forward')).toBe(canForward);
-  expect(actions).toContain('preview.open');
-  expect(frame.controls!.every(c=>c.rect.x+c.rect.width<=36&&c.rect.y===2)).toBe(true);
- }
+ const buttons=[{actionId:'tree.preview.right',text:'[▐]'},{actionId:'tree.preview.bottom',text:'[▄]'},{actionId:'tree.preview.auto',text:'[◙]'},{actionId:'tree.preview.close',text:'[×]'}];
+ const compact=renderDocumentPreview(reader.state!,{x:10,y:2,width:34,height:8},'',undefined,'compact',{buttons,menuAction:'tree.preview.menu'});
+ expect(stripTerminalSequences(compact.lines[0]!)).toContain('○ Preview');
+ expect(stripTerminalSequences(compact.lines[0]!).trimEnd().endsWith('[▐][▄][◙][×][⋯]')).toBe(true);
+ expect(compact.controls?.map(c=>c.action)).toEqual(['tree.preview.right','tree.preview.bottom','tree.preview.auto','tree.preview.close','tree.preview.menu']);
+ expect(compact.controls!.every(c=>c.rect.y===2&&c.rect.x+c.rect.width<=44)).toBe(true);
+ expect(stripTerminalSequences(compact.lines[0]!)).toContain('○ Preview · Source');
+ expect(compact.content.y).toBe(3);
+ const narrow=renderDocumentPreview(reader.state!,{x:0,y:0,width:12,height:8},'',undefined,'compact',{buttons,menuAction:'tree.preview.menu'});
+ expect(narrow.controls!.map(c=>c.action).at(-1)).toBe('tree.preview.menu');
+ expect(visibleWidth(narrow.lines[0]!)).toBeLessThanOrEqual(12);
  for(const sideFraction of [.55,.8]){
-  const frame=treePreviewFrame({...reader.state!,canBack:true,canForward:true},60,40,'',{enabled:true,dock:'right',sideFraction,bottomFraction:.5});
-  expect(frame.controls?.map(control=>control.action)).toEqual(expect.arrayContaining(['preview.back','preview.forward','preview.open']));
+  const frame=treePreviewFrame(reader.state!,60,40,'',{enabled:true,dock:'right',sideFraction,bottomFraction:.5},{chrome:'compact',buttons});
+  expect(frame.controls?.map(control=>control.action)).toEqual(expect.arrayContaining(['tree.preview.right','tree.preview.close','tree.preview.menu']));
   expect(frame.controls?.every(control=>control.rect.x+control.rect.width<=frame.rect.x+frame.rect.width)).toBe(true);
+  expect(frame.rect.height).toBe(39);
  }
 });
 

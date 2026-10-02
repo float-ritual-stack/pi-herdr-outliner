@@ -1,5 +1,5 @@
 import {openDetailPane} from "./pane-control";
-import type {ViewPreferences} from "./view-preferences";
+import type {OutlinerUiConfig} from "./ui-config";
 import {focusActiveCapture} from "./capture-owner";
 import {TextViewerInput} from './text-viewer-input';
 import {openExternalUrl} from "./open-external";
@@ -18,7 +18,7 @@ import { parsePropertySummaryKeys } from "./property-summary";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { createTreeController, TREE_SERVICE_CAPABILITIES } from "./tree-controller";
 import {
-  isTreeMouseSequence, parseTreePrimaryClick, parseTreeSecondaryClick, parseTreeWheel,
+  isTreeMouseSequence, parseTreePrimaryClick, parseTreeSecondaryClick, parseTreeWheel, treeLinkAtPoint,
   treeClickActivates, treeDisclosureAtClick, treeLinkAtClick, treeRowAtClick,
   type TreeMouseTarget,
 } from "./tree-mouse";
@@ -129,7 +129,7 @@ export class ComposedTree implements Component {
 
   constructor(private readonly options: {
     client: OutlinerRequester; clientId: string; contextId: string; workspaceRoot: string;
-    viewPreferences: ViewPreferences;
+    uiConfig: OutlinerUiConfig;
     navigation: TreeNavigation; actionKeymap: OutlinerActionKeymap;
     width(): number; height(): number; focused(): boolean; focus(): void;
     invalidate(): void; stop(): void;
@@ -139,8 +139,7 @@ export class ComposedTree implements Component {
     this.controller = createTreeController({
       previewSelectionInput:this.previewInput,
       inspectProperties: blockId => { openDetailPane({workspaceRoot: options.workspaceRoot, browsingContextId: crypto.randomUUID(), propertyInspectorBlockId: blockId}); },
-      density: () => options.viewPreferences.density,
-      setDensity: value => options.viewPreferences.setDensity(value),
+      uiConfig: options.uiConfig,
       copyText:text=>process.stdout.write(osc52ClipboardWrite(text)),
       openExternal: openExternalUrl,
       openKeyInspector: () => this.keyInspector.open(),
@@ -184,7 +183,7 @@ export class ComposedTree implements Component {
       if (this.controller.view().mode === "inbox" && this.controller.view().inbox?.handleActivityMouse(data)) return;
       if (this.controller.view().mode === "goto") return this.controller.handleGotoMouse(data);
       const secondary = parseTreeSecondaryClick(data);
-      if (secondary) return this.controller.handleAction("tree.menu.open", secondary);
+      if (secondary) return this.controller.handleSecondaryClick(secondary, treeLinkAtPoint(this.frameLines, secondary));
       const wheel = parseTreeWheel(data);
       if (wheel) return this.controller.handleTreeWheel(wheel);
       const click = parseTreePrimaryClick(data);
