@@ -58,15 +58,13 @@ export type MentionsMode = 'folder' | 'allowlist'
 
 /**
  * The `mode` option when set, otherwise `PI_OUTLINER_MENTIONS_MODE`; neither:
- * `folder`. A list with no mode is an error, and nothing is fed anywhere: it
- * may be an allowlist from before folder mode, and reading it either way
- * would start feeding folders nobody chose. Any other value is an error too.
+ * `folder`, unless folders are listed. A list with no mode is a setup from
+ * before folder mode, where the list was an allowlist, so it keeps meaning
+ * exactly that: only the folders someone chose feed. Any other value is an error.
  */
 export function mentionsModeOf(option: unknown, environment: string | undefined, listed: readonly string[] = []): MentionsMode {
   const typed = typeof option === 'string' && option.trim() !== '' ? option.trim() : (environment ?? '').trim()
-  if (typed === '' && listed.length > 0) {
-    throw Error('PI_OUTLINER_MENTIONS_WORKSPACES lists folders but PI_OUTLINER_MENTIONS_MODE is unset (an allowlist from before folder mode?), so nothing is fed: set the mode to folder (opt them out) or allowlist (only they feed), or drop the list with install-claude-mod.ts --folder')
-  }
+  if (typed === '' && listed.length > 0) return 'allowlist'
   if (typed === '' || typed === 'folder' || typed === 'allowlist') return typed === 'allowlist' ? 'allowlist' : 'folder'
   throw Error(`Outliner mentions mode "${typed}" is neither folder nor allowlist`)
 }

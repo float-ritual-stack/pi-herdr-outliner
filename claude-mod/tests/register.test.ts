@@ -252,22 +252,18 @@ describe('register', () => {
     expect(ingest.init?.env).toEqual({ OUTLINER_WORKSPACE_ROOT: listed })
   })
 
-  test('a list with no mode feeds nothing anywhere, bound or listed, and says why once', async ($, on) => {
+  test('a list with no mode is a legacy allowlist: an unlisted bound folder feeds nothing, and the tools still work', async ($, on) => {
     {
-      // A bound folder that isn't listed: it would feed under either reading of the list, so this is the case that matters.
       const cwd = WORKSPACE
       const session = sessionIn(on, cwd, succeeding, `${WORKSPACE}-listed`)
       on('tool.register', ($, e) => ({ value: { tool: `mcp__pi-outliner__${e.name}` } }))
       await session.begin(() => $.session.start({ ...START, cwd }))
       await $.turn.complete(ANSWER)
-      await $.turn.complete({ ...ANSWER, turnId: 'turn-2' })
       await session.clock.settle()
-      expect(session.bindings).toEqual([])
-      expect(session.runs).toEqual([])
-      expect(session.toasts).toHaveLength(1)
-      expect(session.toasts[0]).toContain('PI_OUTLINER_MENTIONS_MODE is unset')
-      const denied = await $.tool.call({ tool: 'mcp__pi-outliner__work_stage', item: 'PIE-8', stage: 'doing' })
-      expect(denied.deny).toContain('PI_OUTLINER_MENTIONS_MODE is unset')
+      expect(JSON.stringify(session.runs)).not.toContain('ingest')
+      expect(session.toasts.join(' ')).not.toContain('PI_OUTLINER_MENTIONS_MODE')
+      const called = await $.tool.call({ tool: 'mcp__pi-outliner__work_stage', item: 'PIE-8', stage: 'doing' })
+      expect(String((called as { deny?: string }).deny ?? '')).not.toContain('No Outliner outline')
     }
   })
 

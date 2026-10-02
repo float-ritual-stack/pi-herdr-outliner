@@ -55,7 +55,7 @@ describe('mention-message', () => {
     expect(mentionsModeOf('', undefined)).toBe('folder')
     expect(mentionsModeOf(undefined, ' ')).toBe('folder')
     expect(mentionsModeOf('', 'folder', ['/work/garden'])).toBe('folder')
-    expect(() => mentionsModeOf('', undefined, ['/work/garden'])).toThrow('PI_OUTLINER_MENTIONS_MODE is unset')
+    expect(mentionsModeOf('', undefined, ['/work/garden'])).toBe('allowlist')
     expect(mentionsModeOf('', 'allowlist')).toBe('allowlist')
     expect(mentionsModeOf('folder', 'allowlist')).toBe('folder')
     expect(mentionsModeOf(' allowlist ', undefined)).toBe('allowlist')

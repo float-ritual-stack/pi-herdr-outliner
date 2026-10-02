@@ -241,7 +241,7 @@ export function register(on: On, options: PluginOptions): void {
     $.clock.after(0, () => void (async () => {
       let workspace: Workspace | null
       try {
-        workspace = await sessionWorkspace($, option)
+        workspace = await sessionWorkspace($, option, 'mentions')
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error)
         if (toldWorkspaceFailures.has(reason)) return
@@ -322,13 +322,15 @@ async function outlinerRootOf($: EngineInterface): Promise<string | null> {
 }
 
 /**
- * The workspace a session feeds and works in, or null (`sessionWorkspaceOf`).
+ * The workspace a session feeds (`mentions`) or works in (`tools`: the outline
+ * tools and reference links), or null (`sessionWorkspaceOf`). Strict mode's
+ * list limits only what feeds; the tools follow the folder's binding.
  * In folder mode the installed CLI's `bound-folder` says which folder, from
  * the session's cwd up, is bound to an outline; an opted-out folder never
  * asks. A disabled Outliner is null; a CLI that cannot answer (one older than
  * `bound-folder`) throws with why, and nothing is fed.
  */
-async function sessionWorkspace($: EngineInterface, options: PluginOptions): Promise<Workspace | null> {
+async function sessionWorkspace($: EngineInterface, options: PluginOptions, purpose: 'mentions' | 'tools'): Promise<Workspace | null> {
   const [listedEnv, modeEnv, home, cwd] = await Promise.all([
     $.env.get('PI_OUTLINER_MENTIONS_WORKSPACES'),
     $.env.get('PI_OUTLINER_MENTIONS_MODE'),
@@ -337,7 +339,9 @@ async function sessionWorkspace($: EngineInterface, options: PluginOptions): Pro
   ])
   const listed = effectiveWorkspaces(options.workspaces, listedEnv, home)
   const mode = mentionsModeOf(options.mode, modeEnv, listed)
-  if (mode === 'allowlist' || workspaceForCwd(cwd, listed) !== null) return sessionWorkspaceOf(cwd, mode, listed, null)
+  const listedHere = workspaceForCwd(cwd, listed)
+  // Strict mode limits what feeds Recent Mentions; the tools and links still work in any bound folder.
+  if (mode === 'allowlist' ? purpose === 'mentions' || listedHere !== null : listedHere !== null) return sessionWorkspaceOf(cwd, mode, listed, null)
   // A remote socket in Claude's environment would take every CLI run elsewhere than the folder's binding.
   const [remote, socket] = await Promise.all([$.env.get('OUTLINER_REMOTE'), $.env.get('OUTLINER_SOCKET_PATH')])
   if (remote?.trim() === '1' || socket?.trim()) {
@@ -355,7 +359,8 @@ async function sessionWorkspace($: EngineInterface, options: PluginOptions): Pro
       ? "the installed Outliner is too old to find this folder's outline (no bound-folder); update it"
       : `bound-folder failed${reason ? `: ${reason}` : ''}`)
   }
-  return sessionWorkspaceOf(cwd, mode, listed, boundWorkspaceOf(ran.stdout, cwd))
+  const bound = boundWorkspaceOf(ran.stdout, cwd)
+  return mode === 'allowlist' ? bound : sessionWorkspaceOf(cwd, mode, listed, bound)
 }
 
 /**
@@ -493,7 +498,7 @@ async function readReferences($: EngineInterface, option: PluginOptions): Promis
   try {
     let workspace: Workspace | null
     try {
-      workspace = await sessionWorkspace($, option)
+      workspace = await sessionWorkspace($, option, 'tools')
     } catch (error) {
       // Why no outline could be found: the tools' refusal says it.
       references = { workspace: null, prefixes: [], why: error instanceof Error ? error.message : String(error) }

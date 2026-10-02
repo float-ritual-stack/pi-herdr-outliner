@@ -37,12 +37,12 @@ test('a message carries the workspace folder; subagents, aborted and empty respo
 });
 
 // The mod's pure folder rules, also under `claude plugin test`; here so they run wherever Bun does.
-test('the mode is folder unless allowlist is asked for; a list never implies one',()=>{
+test('the mode is folder unless allowlist is asked for; a list with no mode is a legacy allowlist',()=>{
  expect(mentionsModeOf('',undefined)).toBe('folder');
  expect(mentionsModeOf('', 'allowlist')).toBe('allowlist');
  expect(mentionsModeOf('folder','allowlist')).toBe('folder');
  expect(()=>mentionsModeOf('','everywhere')).toThrow('neither folder nor allowlist');
- expect(()=>mentionsModeOf('',undefined,['/work/old'])).toThrow('PI_OUTLINER_MENTIONS_MODE is unset');
+ expect(mentionsModeOf('',undefined,['/work/old'])).toBe('allowlist');
 });
 
 test("bound-folder's answer binds only a folder holding the cwd, pinned to the outline it names",()=>{
@@ -163,11 +163,11 @@ test("folder mode: OUTLINER_REMOTE in Claude's environment feeds nothing and say
  expect(toasts[0]).toContain('OUTLINER_REMOTE');
 },15000);
 
-test('a list with no mode feeds nothing, even in a bound folder, and says why',async()=>{
+test('a list with no mode is a legacy allowlist: an unlisted bound folder feeds nothing, quietly',async()=>{
  const {runs,entries,toasts}=await completeTurnIn(root=>join(root,'projects','mod'),()=>({}),()=>({PI_OUTLINER_MENTIONS_WORKSPACES:'/work/old-allowlist'}));
- expect(runs.some(run=>run.argv.includes('bound-folder')||run.argv.includes('ingest'))).toBe(false);
+ expect(runs.some(run=>run.argv.includes('ingest'))).toBe(false);
  expect(entries).toEqual([]);
- expect(toasts[0]).toContain('PI_OUTLINER_MENTIONS_MODE is unset');
+ expect(toasts.join(' ')).not.toContain('PI_OUTLINER_MENTIONS_MODE');
 },15000);
 
 test('strict allowlist mode: a listed folder feeds the outline as before, and an unlisted bound one does not',async()=>{
