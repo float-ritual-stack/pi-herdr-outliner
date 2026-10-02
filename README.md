@@ -1141,7 +1141,9 @@ Pins and chrome live beside the keymap in
 `~/.config/pi-herdr-outliner/ui.json`), or `OUTLINER_UI_PATH`. Pinning from a
 menu writes it; you can also edit it by hand. `Ctrl+R` reloads it together with
 the keymap, and a file that doesn't parse is reported and leaves the bars as
-they are (pinning refuses to overwrite it until it is fixed). Defaults ship in
+they are (pinning refuses to overwrite it until it is fixed). A pin naming an
+unknown or renamed action, another surface's action or a repeat is left off and
+named in the status; the rest of the file still applies. Defaults ship in
 code; a kind listed in the file replaces that kind's defaults.
 
 ```json

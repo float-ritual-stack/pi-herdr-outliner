@@ -7,7 +7,7 @@ import {listItemRemovalMenu, checklistStatusMenu} from "./checklist-ui";
 import type {ChecklistChoice} from "./checklist-session";
 import {detailTitle} from "./detail-renderer";
 import {adjacentReaderMenu, paneBarButtons, readerMenuFromAction, readerMenuItems, type ReaderMenu} from "./reader-chrome";
-import {OutlinerUiConfig} from "./ui-config";
+import {chromeToggleLabel, chromeToggledText, OutlinerUiConfig, pinResultText} from "./ui-config";
 import { renderDetailLines } from "./detail-renderer";
 import { treeLinkAtClick } from "./tree-mouse";
 import {EditRecoveryInput} from "./edit-recovery-input";
@@ -989,11 +989,12 @@ let actionMenuPin: ((id: string) => void) | null = null;
 let paneOwnsRightClick = rightClickOwnership === "outliner";
 /** While a menu is open the pane takes right-clicks (they pin), then hands them back to Herdr. */
 function syncRightClickOwnership(): void {
-  const wanted = rightClickOwnership === "outliner" || actionMenuPin !== null || composedTree?.controller.mode === "action-menu";
+  const wanted = rightClickOwnership === "outliner" || actionMenuPin !== null || composedTree?.controller.view().actionMenuBar !== undefined;
   if (wanted === paneOwnsRightClick || stopping) return;
   paneOwnsRightClick = wanted;
   setImmediate(() => {
-    try { configureCurrentPaneRightClick(wanted ? "outliner" : "herdr"); }
+    if (stopping) return;
+    try { configureCurrentPaneRightClick(paneOwnsRightClick ? "outliner" : "herdr"); }
     catch (error) { controller.onServiceError(error); }
   });
 }
@@ -1005,15 +1006,13 @@ function paintedLinkAt(point: {column: number; row: number}): string | null {
 /** Menu labels that say the current state, as Tree's do. */
 function detailMenuItem(item: OutlinerActionMenuItem): OutlinerActionMenuItem {
   if (item.id !== "detail.chrome.toggle") return item;
-  const current = uiConfig.chrome("detail");
-  return {...item, label: `Detail chrome: ${current} → ${current === "compact" ? "full" : "compact"}`};
+  return {...item, label: chromeToggleLabel("detail", uiConfig.chrome("detail"))};
 }
 function togglePinnedDetailAction(actionId: string): string {
   const result = uiConfig.togglePin("detail", actionId);
   synchronizeLayout?.();
   if (!result.ok) return result.error;
-  const label = actionKeymap.action(actionId).label;
-  return `${result.pinned ? "Pinned" : "Unpinned"} ${label} ${result.pinned ? "to" : "from"} the Detail bar`;
+  return pinResultText("detail", actionKeymap.action(actionId).label, result.pinned);
 }
 let actionMenuCancelled: (() => void) | undefined;
 let composerHandle: OverlayHandle | null = null;
@@ -1563,14 +1562,14 @@ async function readerAction(actionId: string): Promise<boolean> {
   if (actionId === "detail.chrome.toggle") {
     const value = uiConfig.chrome("detail") === "compact" ? "full" : "compact";
     let message = "";
-    const apply = () => { const result = uiConfig.setChrome("detail", value); message = result.ok ? `Detail chrome: ${value}` : result.error; };
+    const apply = () => { const result = uiConfig.setChrome("detail", value); message = result.ok ? chromeToggledText("detail", value) : result.error; };
     const geometry = readerGeometry();
     preview.preserveReadingPosition(geometry.current.width, geometry.current.height, () => {
       if (readingSurface.previewVisible) inspectionLayout.preserveReadingPosition(geometry.preview.width, geometry.preview.height, apply);
       else apply();
     });
     synchronizeLayout?.();
-    await readingSurface.active.dispatch({type: "status.set", message}, viewport(readingSurface.active));
+    await readingSurface.active.dispatch({type: "status.flash", message}, viewport(readingSurface.active));
     return true;
   }
   if (actionId === "detail.location") {

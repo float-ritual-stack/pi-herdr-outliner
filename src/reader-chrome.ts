@@ -72,7 +72,7 @@ function barWidth(buttons: readonly PaneBarButton[]): number {
  * One header row: who this pane is on the left, its pinned buttons and `[⋯]` on the right.
  * Buttons that don't fit are left off the bar, never out of the menu; `[⋯]` always stays.
  */
-export function renderPaneBar(width: number, identity: string, buttons: readonly PaneBarButton[], menuAction?: string): PaneBar {
+export function renderPaneBar(width: number, identity: string, buttons: readonly PaneBarButton[], menuAction?: string, options: {identityFirst?: boolean} = {}): PaneBar {
   const menu: PaneBarButton[] = menuAction ? [{actionId: menuAction, text: "[⋯]"}] : [];
   if (width <= 3) {
     return menuAction ? {line: truncateToWidth(outlinerActionLink(menuAction, "[⋯]"), Math.max(0, width)), controls: width === 3 ? [{x: 0, width: 3, action: menuAction}] : []}
@@ -80,7 +80,8 @@ export function renderPaneBar(width: number, identity: string, buttons: readonly
   }
   // Identity is the caller's: dynamic text in it is sanitized there, so it may carry action links.
   // Who the pane is outranks extra pins: identity keeps up to half the row before buttons drop.
-  const keepForIdentity = identity ? Math.min(visibleWidth(identity), Math.floor(width / 2)) + 1 : 0;
+  // `identityFirst` (a live filter or selection cue) drops pins before any of it.
+  const keepForIdentity = identity ? Math.min(visibleWidth(identity), options.identityFirst ? width : Math.floor(width / 2)) + 1 : 0;
   const shown = [...buttons];
   while (shown.length && barWidth([...shown, ...menu]) + keepForIdentity > width) shown.pop();
   const all = [...shown, ...menu];

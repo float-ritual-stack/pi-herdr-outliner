@@ -435,6 +435,7 @@ type ActionScopes = string | readonly string[];
  * actions such as Detail's Alt+Enter "Keep Preview here" don't reach it.
  */
 const MENU_SCOPES: ReadonlySet<string> = new Set(["menu", "action-menu"]);
+const MENU_OWN_KEYS: ReadonlySet<string> = new Set(["Enter", "Esc", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Backspace", "Space", "Tab"]);
 function wildcardApplies(scopes: readonly string[]): boolean {
   return !scopes.every(scope => MENU_SCOPES.has(scope));
 }
@@ -692,6 +693,11 @@ export class OutlinerActionKeymap {
         throw new Error(`Outliner action ${actionId} must map to an array of key chords`);
       }
       const chords = raw.map(normalizeActionChord);
+      // A menu keeps letters for Find and Enter/Esc/arrows/Backspace for itself; the pin key can't take them.
+      if (actionId.endsWith(".menu.pin")) {
+        const taken = chords.find(chord => MENU_OWN_KEYS.has(chord) || (!chord.includes("Ctrl+") && !chord.includes("Alt+") && chord.replace("Shift+", "").length === 1));
+        if (taken) throw new Error(`Outliner action ${actionId} can't use ${taken}: an open menu uses it`);
+      }
       if (new Set(chords).size !== chords.length) {
         throw new Error(`Outliner action ${actionId} contains duplicate key chords`);
       }

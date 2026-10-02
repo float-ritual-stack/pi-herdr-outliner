@@ -28,6 +28,17 @@ export function paneKindName(kind: PaneKind): string {
   return PANE_NAMES[kind];
 }
 
+/** One wording for every host's chrome toggle and pin results. */
+export function chromeToggleLabel(kind: PaneKind, current: ChromeLevel): string {
+  return `${PANE_NAMES[kind]} chrome: ${current} → ${current === "compact" ? "full" : "compact"}`;
+}
+export function chromeToggledText(kind: PaneKind, level: ChromeLevel): string {
+  return `${PANE_NAMES[kind]} chrome: ${level}`;
+}
+export function pinResultText(kind: PaneKind, label: string, pinned: boolean): string {
+  return `${pinned ? "Pinned" : "Unpinned"} ${label} ${pinned ? "to" : "from"} the ${PANE_NAMES[kind]} bar`;
+}
+
 export function resolveOutlinerUiConfigPath(env: NodeJS.ProcessEnv = process.env): string {
   const override = env.OUTLINER_UI_PATH?.trim();
   if (override) return override;
@@ -39,6 +50,8 @@ interface ParsedUiConfig {
   raw: Record<string, unknown>;
   bars: Map<PaneKind, readonly string[]>;
   chrome: Map<PaneKind, ChromeLevel>;
+  /** Pins that were left off: unknown or renamed actions, another surface's, repeats. */
+  warnings: string[];
 }
 
 function isKind(value: string): value is PaneKind {
@@ -56,16 +69,19 @@ function parseUiConfig(input: unknown): ParsedUiConfig {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("ui.json must be a JSON object");
   const raw = input as Record<string, unknown>;
   const bars = new Map<PaneKind, readonly string[]>();
+  const warnings: string[] = [];
   for (const [kind, value] of Object.entries(objectField(raw, "bar"))) {
     if (!isKind(kind)) continue;
     if (!Array.isArray(value) || value.some(id => typeof id !== "string")) throw new Error(`ui.json bar.${kind} must be an array of action ids`);
-    const ids = value as string[];
-    for (const id of ids) {
+    // One stale pin (a renamed action, a typo) drops only itself, never the whole file.
+    const ids: string[] = [];
+    for (const id of value as string[]) {
       const surface = outlinerActionSurface(id);
-      if (!surface) throw new Error(`ui.json bar.${kind}: unknown action ${id}`);
-      if (surface !== PANE_SURFACE[kind]) throw new Error(`ui.json bar.${kind}: ${id} is a ${surface} action`);
+      if (!surface) warnings.push(`bar.${kind}: unknown action ${id}`);
+      else if (surface !== PANE_SURFACE[kind]) warnings.push(`bar.${kind}: ${id} is a ${surface} action`);
+      else if (ids.includes(id)) warnings.push(`bar.${kind}: ${id} listed twice`);
+      else ids.push(id);
     }
-    if (new Set(ids).size !== ids.length) throw new Error(`ui.json bar.${kind} lists an action twice`);
     bars.set(kind, ids);
   }
   const chrome = new Map<PaneKind, ChromeLevel>();
@@ -74,7 +90,7 @@ function parseUiConfig(input: unknown): ParsedUiConfig {
     if (value !== "compact" && value !== "full") throw new Error(`ui.json chrome.${kind} must be "compact" or "full"`);
     chrome.set(kind, value);
   }
-  return {raw, bars, chrome};
+  return {raw, bars, chrome, warnings};
 }
 
 function errorText(error: unknown): string {
@@ -82,6 +98,7 @@ function errorText(error: unknown): string {
 }
 
 export type UiConfigResult = {ok: true} | {ok: false; error: string};
+export type UiReloadResult = {ok: true; warnings: readonly string[]} | {ok: false; error: string};
 
 export class OutlinerUiConfig {
   #parsed: ParsedUiConfig;
@@ -102,10 +119,15 @@ export class OutlinerUiConfig {
   }
 
   /** Replaces the whole config only when the file is valid; otherwise keeps what is shown. */
-  reload(): UiConfigResult {
+  /** What was left off the bars when the file was last read. */
+  get warnings(): readonly string[] {
+    return this.#parsed.warnings;
+  }
+
+  reload(): UiReloadResult {
     try {
       this.#parsed = parseUiConfig(readUiFile(this.path));
-      return {ok: true};
+      return {ok: true, warnings: this.#parsed.warnings};
     } catch (error) {
       return {ok: false, error: errorText(error)};
     }
@@ -127,9 +149,12 @@ export class OutlinerUiConfig {
   togglePin(kind: PaneKind, actionId: string): {ok: true; pinned: boolean} | {ok: false; error: string} {
     const surface = outlinerActionSurface(actionId);
     if (surface !== PANE_SURFACE[kind]) return {ok: false, error: `${actionId} can't go on the ${PANE_NAMES[kind]} bar`};
+    // The ♦ marks come from memory; take the file as it is now so a toggle matches what it changes.
+    void this.reload();
     let pinned = false;
     const result = this.write(parsed => {
       const current = parsed.bars.get(kind) ?? DEFAULT_PANE_BARS[kind];
+      // Stale entries the parser dropped are dropped from the file too.
       pinned = !current.includes(actionId);
       const bar = pinned ? [...current, actionId] : current.filter(id => id !== actionId);
       return {...parsed.raw, bar: {...objectField(parsed.raw, "bar"), [kind]: bar}};

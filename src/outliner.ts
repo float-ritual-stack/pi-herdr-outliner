@@ -81,11 +81,13 @@ let paneOwnsRightClick = rightClickOwnership === "outliner";
 
 /** While a menu is open the pane takes right-clicks (they pin), then hands them back to Herdr. */
 function syncRightClickOwnership(): void {
-  const wanted = rightClickOwnership === "outliner" || controller.view().mode === "action-menu";
+  // Only a menu whose items pin wants right-clicks; selection and destination menus leave them to Herdr.
+  const wanted = rightClickOwnership === "outliner" || controller.view().actionMenuBar !== undefined;
   if (wanted === paneOwnsRightClick || stopping) return;
   paneOwnsRightClick = wanted;
   setImmediate(() => {
-    try { configureCurrentPaneRightClick(wanted ? "outliner" : "herdr"); }
+    if (stopping) return;
+    try { configureCurrentPaneRightClick(paneOwnsRightClick ? "outliner" : "herdr"); }
     catch (error) { enqueueWork(() => controller.handleError(error)); }
   });
 }

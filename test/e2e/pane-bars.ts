@@ -91,6 +91,7 @@ if (import.meta.main) {
     const item = "Navigate · toggle indentation follow";
     const pinnedTree = async () => (await s.readUiConfig() as {bar: {tree: string[]}}).bar.tree;
     await s.keys(tree, "?");
+    await s.waitVisible(tree, "Find:");
     await s.text(tree, "indentation");
     await s.waitFor("menu filtered", frame, f => f.includes("Find: indentation") && f.includes("pin to Tree bar") && f.includes(item));
     await s.waitFor("attached client shows the filtered menu", screen, f => f.includes("Find: indentation▏"));
@@ -140,8 +141,9 @@ if (import.meta.main) {
     await s.waitVisible(tree, "Keymap and bars reloaded");
     for (const kind of ["Tree", "Preview"]) {
       await s.keys(tree, "?");
+      await s.waitVisible(tree, "Find:");
       await s.text(tree, `${kind} chrome`);
-      await s.waitVisible(tree, `${kind} chrome: full → compact`);
+      await s.waitFor(`${kind} chrome item`, frame, f => f.includes(`Find: ${kind} chrome▏`) && f.includes(`${kind} chrome: full → compact`));
       await s.keys(tree, "enter");
       await s.waitFor(`${kind} compact`, frame, f => !f.includes("Find:") && f.includes(`${kind} chrome: compact`));
     }

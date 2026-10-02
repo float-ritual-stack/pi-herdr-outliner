@@ -5,7 +5,7 @@ import {parsePreviewRegionActionUri} from "./detail-preview-regions";
 import {PaneDisplay} from "./pane-display";
 import {listItemRemovalMenu, checklistStatusMenu} from "./checklist-ui";
 import type {ChecklistChoice} from "./checklist-session";
-import {OutlinerUiConfig} from "./ui-config";
+import {chromeToggleLabel, chromeToggledText, OutlinerUiConfig, pinResultText} from "./ui-config";
 import {adjacentReaderMenu, paneBarButtons, readerMenuFromAction, readerMenuItems, type ReaderMenu} from "./reader-chrome";
 import {EditRecoveryInput} from "./edit-recovery-input";
 import {EditRecoveryClient} from "./edit-recovery-client";
@@ -577,8 +577,7 @@ let actionMenu: {
 
 function openActionMenu(items: readonly OutlinerActionMenuItem[], invoke: (id: string) => Promise<void>, cancelled?: () => void, title?: string, pinnable = false): void {
   actionMenu?.cancelled?.();
-  const current = uiConfig.chrome("detail");
-  const labelled = pinnable ? items.map(item => item.id === "detail.chrome.toggle" ? {...item, label: `Detail chrome: ${current} → ${current === "compact" ? "full" : "compact"}`} : item) : items;
+  const labelled = pinnable ? items.map(item => item.id === "detail.chrome.toggle" ? {...item, label: chromeToggleLabel("detail", uiConfig.chrome("detail"))} : item) : items;
   actionMenu = {items: labelled, invoke, query: "", index: 0, cancelled, title, pinnable};
   draw();
 }
@@ -596,7 +595,7 @@ async function chromeAction(id: string): Promise<boolean> {
   if (id === "detail.chrome.toggle") {
     const value = uiConfig.chrome("detail") === "compact" ? "full" : "compact";
     const result = uiConfig.setChrome("detail", value);
-    await readingSurface.active.dispatch({type: "status.set", message: result.ok ? `Detail chrome: ${value}` : result.error}, viewport(readingSurface.active));
+    await readingSurface.active.dispatch({type: "status.flash", message: result.ok ? chromeToggledText("detail", value) : result.error}, viewport(readingSurface.active));
     draw(); return true;
   }
   if (id === "detail.location") {
@@ -907,7 +906,7 @@ async function handleInput(str: string, key: TerminalKey): Promise<void> {
       const selected = items[menu.index];
       if (selected) {
         const result = uiConfig.togglePin("detail", selected.id);
-        menu.notice = result.ok ? `${result.pinned ? "Pinned" : "Unpinned"} ${selected.label} ${result.pinned ? "to" : "from"} the Detail bar` : result.error;
+        menu.notice = result.ok ? pinResultText("detail", selected.label, result.pinned) : result.error;
       }
     }
     else if (key.name === "return") {

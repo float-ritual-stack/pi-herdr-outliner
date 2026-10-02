@@ -822,6 +822,8 @@ export type DetailIntent =
   | { type: "focus.outliner"; announce?: boolean }
   | { type: "viewport.changed" }
   | { type: "status.set"; message: string }
+  /** A routine result: shows in the hint row for a few seconds, then the hints return. */
+  | { type: "status.flash"; message: string }
   | { type: "redraw" };
 
 export interface DetailController {
@@ -4373,6 +4375,9 @@ export function createDetailController(
         break;
       case "status.set":
         state.status = intent.message;
+        break;
+      case "status.flash":
+        routineNotice(intent.message);
         break;
       case "redraw":
         break;

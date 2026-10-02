@@ -55,11 +55,15 @@ test("hand edits reload; a broken file keeps what is shown and is never overwrit
   const path = fixture("{}");
   const config = OutlinerUiConfig.load({OUTLINER_UI_PATH: path});
   writeFileSync(path, JSON.stringify({bar: {preview: ["tree.preview.close"]}, chrome: {preview: "full"}}));
-  expect(config.reload()).toEqual({ok: true});
+  expect(config.reload()).toEqual({ok: true, warnings: []});
   expect(config.bar("preview")).toEqual(["tree.preview.close"]);
   expect(config.chrome("preview")).toBe("full");
-  for (const broken of ["{not json", JSON.stringify({bar: {preview: ["tree.nope"]}}), JSON.stringify({bar: {preview: ["detail.edit.begin"]}}),
-    JSON.stringify({chrome: {tree: "roomy"}}), JSON.stringify({bar: {tree: ["tree.goto", "tree.goto"]}})]) {
+  // A stale pin drops only itself, and says so.
+  writeFileSync(path, JSON.stringify({bar: {preview: ["tree.preview.close", "tree.nope", "detail.edit.begin", "tree.preview.close"]}, chrome: {preview: "full"}}));
+  expect(config.reload()).toEqual({ok: true, warnings: ["bar.preview: unknown action tree.nope", "bar.preview: detail.edit.begin is a detail action", "bar.preview: tree.preview.close listed twice"]});
+  expect(config.bar("preview")).toEqual(["tree.preview.close"]);
+  expect(config.chrome("preview")).toBe("full");
+  for (const broken of ["{not json", JSON.stringify({bar: {preview: "tree.preview.close"}}), JSON.stringify({chrome: {tree: "roomy"}})]) {
     writeFileSync(path, broken);
     const result = config.reload();
     expect(result.ok).toBe(false);
@@ -81,6 +85,7 @@ test("Alt+Enter pins in a menu: menus own their keys, so Keep Preview's wildcard
   expect(keymap.resolve("detail", "preview", "", {name: "return", meta: true}).actionId).toBe("detail.reading.keep");
   expect(keymap.resolve("tree", "browse", "", {name: "return", meta: true}).actionId).toBe("tree.read.focus");
   // Rebinding the pin key is an ordinary keymap override, checked for collisions like any other.
+  for (const taken of [["p"], ["Shift+P"], ["Enter"], ["ArrowDown"]]) expect(() => new OutlinerActionKeymap("<test>", {"tree.menu.pin": taken})).toThrow("an open menu uses it");
   const rebound = new OutlinerActionKeymap("<test>", {"detail.menu.pin": ["Ctrl+P"]});
   expect(rebound.resolve("detail", "menu", "", {name: "p", ctrl: true}).actionId).toBe("detail.menu.pin");
 });
@@ -94,6 +99,12 @@ test("the bar keeps [⋯] and drops pins that don't fit; every button is a link 
     for (const control of bar.controls) expect(getOsc8LinkAtColumn(bar.line, control.x + 1)).toBe(`pi-outliner-action:${control.action}`);
   }
   expect(renderPaneBar(40, "○ Preview", buttons, "tree.preview.menu").controls.map(c => c.action)).toEqual([...DEFAULT_PANE_BARS.preview, "tree.preview.menu"]);
+  // A live cue outranks pins: they drop first, [⋯] stays.
+  const cue = "● Tree · Filter: status=open · [Clear filter] Find: alpha";
+  const crowded = renderPaneBar(64, cue, buttons, "tree.menu.open", {identityFirst: true});
+  expect(stripTerminalSequences(crowded.line)).toContain("Find: alpha");
+  expect(crowded.controls.at(-1)?.action).toBe("tree.menu.open");
+  expect(crowded.controls.length).toBeLessThan(buttons.length + 1);
 });
 
 test("the hint row is generated from bound actions, leads with the menu key and shows a status instead while it is fresh", () => {

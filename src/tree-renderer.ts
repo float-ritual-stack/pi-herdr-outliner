@@ -506,7 +506,9 @@ export function renderTreeFrame(
   const recovery = view.mode === "browse" && Boolean(view.recoveryHelp) && hintRow;
   // Recovery controls can displace the bar; even a one-row pane must offer an escape.
   if (!(recovery && height <= 1)) {
-    output.push(renderPaneBar(width, treeIdentity(view, width, options), view.bar ?? [], "tree.menu.open").line);
+    // A filter, selection or branch-filter cue is state the person must see: it outranks pins.
+    const cues = Boolean(view.activeFilter || view.branchFilterCue || view.selectionCue || view.recoverableSelections || view.visibleCompleteness.kind === "truncated");
+    output.push(renderPaneBar(width, treeIdentity(view, width, options), view.bar ?? [], "tree.menu.open", {identityFirst: cues}).line);
   }
   if (!compact) {
     const counts = `${countLabel(view.physicalRowCount, "physical block")} · ${countLabel(view.occurrenceRowCount, "projected occurrence")}`;

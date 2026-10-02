@@ -157,8 +157,9 @@ Every pane draws its chrome from three shared parts, never its own:
 - [`ui-config.ts`](../src/ui-config.ts) owns `ui.json` beside `keybindings.json`:
   `bar.<kind>` (pinned action IDs in order) and `chrome.<kind>` (`compact` |
   `full`) for the kinds `tree`, `preview` and `detail`, with the defaults in
-  code. It validates IDs against the action registry and the kind's surface,
-  reloads atomically (a broken file keeps what is shown), and writes a pin on
+  code. It checks IDs against the action registry and the kind's surface
+  (a stale pin is left off with a warning, not the whole file), reloads
+  atomically (a file that doesn't parse keeps what is shown), and writes a pin on
   top of the file as it is now, keeping kinds and keys it doesn't know. That
   last rule is what lets ep0ch-door (PIE-492) share the file and its shape:
   `{"bar": {"<kind>": ["<action id>", …]}, "chrome": {"<kind>": "compact"|"full"}}`.
@@ -179,7 +180,9 @@ Every pane draws its chrome from three shared parts, never its own:
 Tree and its Preview share one hint row at the bottom of the pane
 (`TREE_HINT_ROWS`); `treePreviewFrame` lays both out above it for the renderer
 and the controller alike. Docked below, Preview's bar doubles as the divider:
-dragging its title resizes. Status is a flash (`TREE_STATUS_FLASH_MS`). Right-
+dragging its title resizes. Status is a flash: Tree's `TREE_STATUS_FLASH_MS`,
+Detail's `status.flash` intent (its routine notice); refusals stay until the next
+action. Right-
 click belongs to Herdr's pane menu unless the pane takes it: hosts take it
 while one of their menus is open (`configureCurrentPaneRightClick`), so a
 right-click on a menu item pins it.

@@ -1,7 +1,7 @@
 import {TreeComments} from "./tree-comments";
 import {TreeBranchFilter} from "./tree-branch-filter";
 import {adjacentReaderMenu, paneBarButtons, readerMenuFromAction, readerMenuItems, type ChromeLevel, type PaneBarButton, type PaneBarState, type ReaderMenu} from "./reader-chrome";
-import {OutlinerUiConfig, paneKindName, type PaneKind} from "./ui-config";
+import {chromeToggleLabel, chromeToggledText, OutlinerUiConfig, pinResultText, type PaneKind} from "./ui-config";
 import {wrapTextWithAnsi} from '@earendil-works/pi-tui';
 import {inspectWorkspaceConnection,type WorkspaceReport} from './workspace-diagnostics';
 import {layoutWorkspaceReport} from './workspace-report-view';
@@ -726,8 +726,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     let items = readerMenuItems(actionKeymap.menuItems("tree", actionMenuScope), actionMenuCategory).map(item => {
       if (item.id === "tree.chrome.toggle" || item.id === "tree.preview.chrome.toggle") {
         const kind: PaneKind = item.id === "tree.chrome.toggle" ? "tree" : "preview";
-        const current = uiConfig.chrome(kind);
-        return {...item, label: `${paneKindName(kind)} chrome: ${current} → ${current === "compact" ? "full" : "compact"}`};
+        return {...item, label: chromeToggleLabel(kind, uiConfig.chrome(kind))};
       }
       if (item.id === "tree.navigation.link") return {...item, label: `Opens in: ${sanitizeDynamicText(navigationDisplay.text)} · Change`};
       if (item.id === "tree.preview.auto") return {...item, label: `Auto dock Preview: ${previewPreferences.dock === "auto" ? "on → off" : "off → on"}`};
@@ -2363,7 +2362,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       const item = filteredActionMenuItems()[actionMenuIndex];
       if (!item) return;
       const result = uiConfig.togglePin(menuBarKind, item.id);
-      status = result.ok ? `${result.pinned ? "Pinned" : "Unpinned"} ${item.label} ${result.pinned ? "to" : "from"} the ${paneKindName(menuBarKind)} bar` : result.error;
+      status = result.ok ? pinResultText(menuBarKind, item.label, result.pinned) : result.error;
       effects.invalidate(); return;
     }
     if (actionId === "tree.filter" || actionId === "tree.filter.clear" || actionId === "tree.filter.properties") {
@@ -2475,7 +2474,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
       const next = uiConfig.chrome(kind) === "compact" ? "full" : "compact";
       if (mode === "action-menu") mode = actionMenuReturnMode;
       const result = uiConfig.setChrome(kind, next);
-      status = result.ok ? `${paneKindName(kind)} chrome: ${next}` : result.error;
+      status = result.ok ? chromeToggledText(kind, next) : result.error;
       effects.invalidate(); return;
     }
     if (actionId === "tree.location") {
@@ -2807,7 +2806,7 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
     if (actionId === "tree.keymap.reload") {
       const keys = actionKeymap.reload();
       const ui = uiConfig.reload();
-      status = keys.ok && ui.ok ? "Keymap and bars reloaded"
+      status = keys.ok && ui.ok ? `Keymap and bars reloaded${ui.warnings.length ? ` · left off: ${ui.warnings.join("; ")}` : ""}`
         : [keys.ok ? "" : `Keymap unchanged: ${keys.error}`, ui.ok ? "" : `Bars unchanged: ${ui.error}`].filter(Boolean).join(" · ");
       effects.invalidate();
       return;
@@ -3370,6 +3369,8 @@ export function createTreeController(effects: TreeControllerEffects): TreeContro
   }
 
   async function initialize(): Promise<void> {
+    // A stale pin in ui.json is said on screen, not only on stderr behind the alt screen.
+    if (uiConfig.warnings.length) status = `ui.json: left off ${uiConfig.warnings.join("; ")}`;
     void navigationDisplay.refresh();
     await observeService();
     await reload();

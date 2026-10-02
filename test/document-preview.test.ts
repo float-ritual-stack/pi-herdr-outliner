@@ -258,3 +258,17 @@ test('Preview keeps renderer installation stable across reflow and folds, then r
   expect(paint(80)).toContain('Done: 7');expect(paint(80)).not.toContain('Done: 5');
  } finally {if(prior===undefined)delete process.env.OUTLINER_DOCUMENT_RENDERERS;else process.env.OUTLINER_DOCUMENT_RENDERERS=prior;rmSync(directory,{recursive:true,force:true});}
 });
+
+test('docked below, Preview bar is the divider: its title drags, its buttons click', async () => {
+ const {initTheme}=await import('@earendil-works/pi-coding-agent');initTheme(undefined,false);
+ const {treePreviewFrame}=await import('../src/tree-preview');
+ const reader=new DocumentPreview({async request<T>():Promise<T>{throw Error('not used');}},()=>{});
+ await reader.loadText({kind:'block',blockId:'source'},'Source',Promise.resolve('Body'));
+ const buttons=[{actionId:'tree.preview.right',text:'[▐]'},{actionId:'tree.preview.close',text:'[×]'}];
+ const frame=treePreviewFrame(reader.state!,80,30,'',{enabled:true,dock:'bottom',sideFraction:.5,bottomFraction:.5},{chrome:'compact',buttons});
+ expect(frame.placement).toBe('below');
+ expect(frame.rect.y).toBe(frame.treeHeight);
+ expect(frame.rect.y+frame.rect.height).toBe(29);
+ expect(frame.divider).toEqual({x:0,y:frame.rect.y,width:frame.controls![0]!.rect.x-1,height:1});
+ expect(frame.controls!.every(control=>control.rect.x>frame.divider!.x+frame.divider!.width-1)).toBe(true);
+});

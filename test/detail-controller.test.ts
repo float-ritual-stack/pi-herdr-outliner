@@ -6231,3 +6231,15 @@ describe("resource projections in Detail", () => {
     expect(harness.controller.state.projectedSelectedText).toContain("After refresh");
   });
 });
+
+test("status.flash is a routine notice: it clears itself so compact Detail's hints return", async () => {
+  const harness = createHarness(makeBlock());
+  await harness.controller.initialize();
+  await harness.controller.dispatch({ type: "status.flash", message: "Detail chrome: full" }, viewport);
+  expect(harness.controller.state.status).toBe("Detail chrome: full");
+  await new Promise(resolve => setTimeout(resolve, 3_100));
+  expect(harness.controller.state.status).toBe("");
+  await harness.controller.dispatch({ type: "status.set", message: "Bars unchanged: broken" }, viewport);
+  await new Promise(resolve => setTimeout(resolve, 3_100));
+  expect(harness.controller.state.status).toBe("Bars unchanged: broken");
+}, 10_000);
