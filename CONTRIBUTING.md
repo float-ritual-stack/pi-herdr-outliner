@@ -478,6 +478,12 @@ that the change used the architecture before checking anything else:
   changed; it does not re-derive it.
 - **Protocol:** an additive change is a capability, as in
   [Protocol and schema changes](#protocol-and-schema-changes).
+- **Did you really?** List each shared part the brief or PR said it would use,
+  and check the diff actually uses it. Name any place where it built its own
+  instead: a second renderer or parser, a client re-deriving what the service
+  owns, a tool path that skips the shared action list, a switch on a kind's name.
+  Expect at least one; fix it or say why not. The same rule is in ep0ch-door's
+  review checklist and the `ep0ch-core` skill.
 - **Docs:** a new shared part is named in the docs (Source boundaries or
   [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) so the next change finds it.
 
