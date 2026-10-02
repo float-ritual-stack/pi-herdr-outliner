@@ -93,7 +93,12 @@ describe("block focus resolution", () => {
       block: { id: roadmap.id },
       kind: "title-terms",
     });
+    // One term within its typo budget ("reviw"), one not ("rdmp"): all but one term.
     expect(rankBlockFocusMatches(blocks, "rdmp reviw")[0]).toMatchObject({
+      block: { id: roadmap.id },
+      kind: "partial-terms",
+    });
+    expect(rankBlockFocusMatches(blocks, "rdmprvw")[0]).toMatchObject({
       block: { id: roadmap.id },
       kind: "title-fuzzy",
     });

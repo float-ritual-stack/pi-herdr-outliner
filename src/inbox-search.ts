@@ -1,4 +1,4 @@
-import {rankTextSearchMatches} from './block-focus';
+import {rankTextSearchMatches} from './search-match';
 import {summarizeInboxResult} from './inbox-repository';
 import {blockDisplayTitle} from './references';
 import type {SearchCollection,SearchExcerpt} from './search-ranking';

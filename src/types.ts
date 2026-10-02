@@ -1493,11 +1493,18 @@ export interface GotoSearchMatch {
   path: string;
   snippet: string;
   exact: boolean;
+  /**
+   * An empty query asked from a note (`contextBlockId`) lists, in order: what its parent and siblings link to
+   * (`linked`), notes near it (`near`), the person's own recent edits (`yours`).
+   */
+  reason?: "linked" | "near" | "yours";
 }
 
 export interface GotoSearchCollection {
   matches: GotoSearchMatch[];
   completeness: BlockCollectionCompleteness;
+  /** The note the search was asked from (`contextBlockId`), when it is live. */
+  context?: { blockId: string; title: string; path: string };
   semantic: {
     status: "lexical" | "ranked" | "unavailable";
     message?: string;
@@ -1770,6 +1777,22 @@ export const OUTLINER_CAPABILITIES = [
    * kind `agent`; `resources.projection.refresh` on the line asks again.
    */
   "extensions.agents",
+  /**
+   * Forgiving search (src/search-match.ts): `tree.search`, `inbox.search`, `pages.complete` and the backlink
+   * filter fold punctuation, forgive typos and rank all-but-one-term matches below full ones; `pages.complete`
+   * takes `semantic` as `tree.search` does and answers with `semantic`; `blocks.query` `text` matches every
+   * word, in any order, instead of one phrase.
+   */
+  "search.forgiving",
+  /**
+   * `tree.search` and `pages.complete` take `contextBlockId`, the note being edited: inside each rung, nearer
+   * notes in the physical tree come first, then the more recently edited; an empty `tree.search` lists what
+   * its parent and siblings link to, notes near it, then the person's recent edits (`reason`); Jev's state
+   * carries the note's title and path.
+   */
+  "search.context",
+  /** `ping` reports `searchMatch`: the version of src/search-match.ts, which the door copies. */
+  "ping.searchMatch",
 ] as const;
 
 /**
@@ -1817,6 +1840,8 @@ export interface OutlinerServiceStatus {
   propertyGrammar?: { version: number };
   /** The draft.patch compare clients may copy (capability `ping.draftPatchCompare`, src/draft-patch-compare.ts). */
   draftPatchCompare?: { version: number };
+  /** The search matcher clients may copy (capability `ping.searchMatch`, src/search-match.ts). */
+  searchMatch?: { version: number };
 }
 
 /** The outline host behind a socket: one per user and machine, serving outlines by name. */
@@ -1955,7 +1980,7 @@ export type OutlinerRequestAction =
   | { id: string; action: "workspace.snapshot"; view?: WorkspaceSnapshotView }
   | { id: string; action: "tree.index"; view?: WorkspaceSnapshotView }
   | { id: string; action: "tree.query"; query: BlockSearchQuery }
-  | { id: string; action: "tree.search"; query: string; semantic?: boolean }
+  | { id: string; action: "tree.search"; query: string; semantic?: boolean; contextBlockId?: string }
   | { id: string; action: "tree.focus"; query: string }
   | { id: string; action: "events.subscribe"; client: OutlinerClientRegistration }
   | { id: string; action: "clients.list"; role?: OutlinerClientRole }
@@ -2363,7 +2388,7 @@ export type OutlinerRequestAction =
       author?: BlockAuthor;
       provenance?: BlockProvenance;
     }
-  | { id: string; action: "pages.complete"; query?: string; limit: number }
+  | { id: string; action: "pages.complete"; query?: string; limit: number; semantic?: boolean; contextBlockId?: string }
   | {
       id: string;
       action: "pages.rename";

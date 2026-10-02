@@ -1,5 +1,5 @@
 import { isOpenBacklinkStage } from "./backlink-facets";
-import { subsequenceScore } from "./block-focus";
+import { matchesSearchText } from "./search-match";
 import {
   BACKLINK_STAGE_BUCKETS,
   type BacklinkCollection,
@@ -83,13 +83,8 @@ export interface BacklinkView {
   kinds: Array<{ kind: string; label: string }>;
 }
 
-function normalizeFilter(value: string): string {
-  return value.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
-}
-
 function matchesText(source: BacklinkSource, query: string): boolean {
-  if (!query) return true;
-  const fields = [
+  return matchesSearchText(query, [
     source.title,
     source.parentContext,
     source.facets?.kindLabel ?? "",
@@ -98,8 +93,7 @@ function matchesText(source: BacklinkSource, query: string): boolean {
       group.kind === "property" ? group.propertyKey : group.kind
     ),
     ...source.occurrences.map((occurrence) => occurrence.snippet),
-  ].map(normalizeFilter);
-  return fields.some((field) => field.includes(query) || subsequenceScore(query, field) >= 900);
+  ]);
 }
 
 function matchesStage(source: BacklinkSource, stage: BacklinkStageFilter): boolean {
@@ -133,7 +127,7 @@ export function backlinkView(
 ): BacklinkView {
   const all = collection?.sources ?? [];
   const faceted = all.length > 0 && all.every((source) => source.facets !== undefined);
-  const query = normalizeFilter(options.filter);
+  const query = options.filter;
   let hiddenRelated = 0;
   let hiddenResolved = 0;
   const shown: BacklinkSource[] = [];

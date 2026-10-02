@@ -67,7 +67,7 @@ describe("Goto search", () => {
   test("preserves exact identities and shows explicit bounded results", () => {
     const many = Array.from({ length: 120 }, (_, i) => block(`note-${i}`, `Reference ${i}\nCommon subject.`));
     many[100]!.properties = [{ key: "work-id", value: "PIE-999" }];
-    expect(gotoCandidates(many, "PIE-999", "note-100").matches[0]!.block.id).toBe("note-100");
+    expect(gotoCandidates(many, "PIE-999", { exactAddressId: "note-100" }).matches[0]!.block.id).toBe("note-100");
     expect(visibleGotoResults(gotoCandidates(many, "reference"))).toMatchObject({ matches: expect.any(Array), completeness: { kind: "truncated", limit: 30 } });
     expect(gotoCandidates(many, "reference").matches).toHaveLength(80);
     expect(gotoCandidates(many, "totally unrelated query").matches).toHaveLength(0);

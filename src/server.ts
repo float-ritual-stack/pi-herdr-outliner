@@ -12,6 +12,7 @@ import {rankSearchWithJev} from './search-ranking';
 import { blockDisplayTitle } from "./references";
 import { previewPropertyParse } from "./properties";
 import { PROPERTY_GRAMMAR_VERSION } from "./property-grammar";
+import { SEARCH_MATCH_VERSION } from "./search-match";
 import { rankGotoWithJev, visibleGotoResults } from "./goto-search";
 import { InboxWorker, assistantActivity } from "./inbox-worker";
 import { InboxRepository, summarizeInboxResult } from "./inbox-repository";
@@ -117,6 +118,8 @@ import {
   type ResourceRetentionPin,
   type ResourceRetentionReference,
   type ResourceRevisionRef,
+  type GotoSearchCollection,
+  type PageAddressCollection,
 } from "./types";
 
 function eventResultId(value: unknown, label: string): string {
@@ -1557,13 +1560,36 @@ export class OutlinerServer {
         return {id:request.id,ok:true,result:visibleInboxSearch(result),sequence:this.store.sequence};
       }catch(error){return {id:request.id,ok:false,error:error instanceof Error?error.message:String(error),sequence:this.store.sequence};}
     }
+    if (request.action === "pages.complete" && request.semantic) {
+      try {
+        if (typeof request.semantic !== "boolean") throw new Error("semantic must be a boolean");
+        const ranked = this.store.rankPageAddresses(request.query, request.limit, request.contextBlockId);
+        const context = ranked.context ? { context: ranked.context } : {};
+        let result: PageAddressCollection & Pick<GotoSearchCollection, "semantic" | "context"> = { addresses: ranked.addresses.map(({ exact: _exact, ...address }) => address), completeness: ranked.completeness, semantic: { status: "lexical" }, ...context };
+        if (request.query?.trim() && this.activeGotoRankings < 2) {
+          this.activeGotoRankings++;
+          try {
+            const candidates = ranked.addresses.map(address => ({ address, title: address.title.slice(0, 250), path: address.address, snippet: (this.store.get(address.blockId)?.text ?? "").slice(0, 1000), exact: address.exact }));
+            const reordered = await rankSearchWithJev(request.query, { matches: candidates, completeness: ranked.completeness, semantic: { status: "lexical" } }, { promptDirectory: this.promptDirectory, ...(ranked.context ? { note: { title: ranked.context.title, path: ranked.context.path } } : {}) });
+            // A model answer cannot resurrect an address renamed or deleted while it ranked.
+            const live = new Set(this.store.rankPageAddresses(request.query, request.limit).addresses.map(address => `${address.normalizedAddress}\u0000${address.blockId}`));
+            result = { addresses: reordered.matches.map(match => { const { exact: _exact, ...address } = match.address; return address; }).filter(address => live.has(`${address.normalizedAddress}\u0000${address.blockId}`)), completeness: ranked.completeness, semantic: reordered.semantic, ...context };
+          } finally { this.activeGotoRankings--; }
+        } else if (request.query?.trim()) {
+          result.semantic = { status: "unavailable", message: "Jev busy; showing text matches" };
+        }
+        return { id: request.id, ok: true, result, sequence: this.store.sequence };
+      } catch (error) {
+        return { id: request.id, ok: false, error: error instanceof Error ? error.message : String(error), sequence: this.store.sequence };
+      }
+    }
     if (request.action === "tree.search") {
       try {
         if (request.semantic !== undefined && typeof request.semantic !== "boolean") throw new Error("semantic must be a boolean");
-        let result = this.store.searchTree(request.query);
+        let result = this.store.searchTree(request.query, request.contextBlockId);
         if (request.semantic && this.activeGotoRankings < 2) {
           this.activeGotoRankings++;
-          try { result = await rankGotoWithJev(request.query, result, { promptDirectory: this.promptDirectory }); }
+          try { result = await rankGotoWithJev(request.query, result, { promptDirectory: this.promptDirectory, ...(result.context ? { note: { title: result.context.title, path: result.context.path } } : {}) }); }
           finally { this.activeGotoRankings--; }
           // A model answer cannot resurrect a deleted or edited candidate.
           result.matches = result.matches.filter(match => {
@@ -1807,7 +1833,7 @@ export class OutlinerServer {
           break;
         }
         case "ping":
-          result = { status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION, minClientProtocol: OUTLINER_MIN_CLIENT_PROTOCOL, capabilities: [...OUTLINER_CAPABILITIES, ...(this.host ? OUTLINER_HOST_CAPABILITIES : [])], location:{hostname:this.hostname,workspaceRoot:this.store.workspaceRoot,database:this.store.database.filename,stateDirectory:this.host ? this.stateDirectory : dirname(this.store.database.filename)}, propertyGrammar: { version: PROPERTY_GRAMMAR_VERSION }, draftPatchCompare: { version: DRAFT_PATCH_COMPARE_VERSION }, ...(this.outline ? { outline: { ...this.outline } } : {}), ...(this.host ? { host: this.host() } : {}) };
+          result = { status: "ready", protocolVersion: OUTLINER_PROTOCOL_VERSION, minClientProtocol: OUTLINER_MIN_CLIENT_PROTOCOL, capabilities: [...OUTLINER_CAPABILITIES, ...(this.host ? OUTLINER_HOST_CAPABILITIES : [])], location:{hostname:this.hostname,workspaceRoot:this.store.workspaceRoot,database:this.store.database.filename,stateDirectory:this.host ? this.stateDirectory : dirname(this.store.database.filename)}, propertyGrammar: { version: PROPERTY_GRAMMAR_VERSION }, draftPatchCompare: { version: DRAFT_PATCH_COMPARE_VERSION }, searchMatch: { version: SEARCH_MATCH_VERSION }, ...(this.outline ? { outline: { ...this.outline } } : {}), ...(this.host ? { host: this.host() } : {}) };
           break;
         case "outlines.list":
         case "outlines.create":
@@ -1884,7 +1910,7 @@ export class OutlinerServer {
           break;
         case "tree.search":
           if (request.semantic) throw new Error("Semantic search requires asynchronous dispatch");
-          result = visibleGotoResults(this.store.searchTree(request.query));
+          result = visibleGotoResults(this.store.searchTree(request.query, request.contextBlockId));
           break;
         case "events.subscribe":
           result = { subscribed: true, client: subscribedClient ?? request.client };
@@ -2570,7 +2596,8 @@ export class OutlinerServer {
           );
           break;
         case "pages.complete":
-          result = this.store.completePageAddresses(request.query, request.limit);
+          if (request.semantic !== undefined && typeof request.semantic !== "boolean") throw new Error("semantic must be a boolean");
+          result = this.store.completePageAddresses(request.query, request.limit, request.contextBlockId);
           break;
         case "pages.rename":
           result = this.store.renamePageAddress(

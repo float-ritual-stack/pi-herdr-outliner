@@ -1697,11 +1697,12 @@ test("serves mutations and property queries over the local socket", async () => 
     query: "protocol",
     limit: 20,
   })).toMatchObject({
+    // The page by its address first; then a Work ID whose note's title holds the word.
     addresses: [{
       address: "Protocol Page",
       blockId: followedPage.block!.id,
       kind: "page",
-    }],
+    }, { kind: "work-id", title: "Protocol work target" }],
     completeness: { kind: "complete" },
   });
   expect(await client.request<PageAddressRecord>({

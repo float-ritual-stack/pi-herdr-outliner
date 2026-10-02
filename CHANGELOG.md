@@ -4,6 +4,21 @@ This file records notable user-facing changes. The project remains active dogfoo
 
 ## [Unreleased]
 
+### Forgiving search, and search from a note
+
+- Goto, Inbox history search, `[[` completion and the Backlinks filter share one
+  matcher (`src/search-match.ts`): punctuation folds ("Claude - now" is "claude
+  now"), words match in any order, a longer word may be off by a typo or two
+  ("party hast" finds "party hats"), and all but one word still matches, always
+  below every match as typed. `[[` also finds a Work ID by its note's title.
+- `blocks.query` `text` matches every word, in any order, not one phrase.
+- `tree.search` and `pages.complete` take `contextBlockId`, the note being
+  edited: nearer notes first inside each rung; an empty search lists what its
+  parent and siblings link to, nearby notes, then your recent edits. Jev's
+  ranking is told the note too (the `goto-ranking.json` prompt says so).
+- `ping` reports `searchMatch` for clients that copy the matcher; capabilities
+  `search.forgiving`, `search.context` and `ping.searchMatch`.
+
 ### Pane bars you choose, glyph dock buttons, and a chrome budget (PIE-525)
 
 - Preview's bar is back to one click for docking: `[▐]` right, `[▄]` below,
