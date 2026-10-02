@@ -22,6 +22,7 @@ This file records notable user-facing changes. The project remains active dogfoo
   (no longer read). **View → Tree/Preview/Detail chrome** switches it.
 - Tree and Preview at a 65×20 pane: 10 content rows with the former full chrome,
   18 now; chrome rows around Tree with Preview below went from 11 to 3.
+
 ### The Claude mod follows the folder you run Claude in (PIE-526)
 
 - A Claude session's Recent Mentions, links and outline tools use the outline
