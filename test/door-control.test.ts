@@ -41,60 +41,22 @@ describe("showing a block in ep0ch-door", () => {
     expect(door.requests).toEqual([{ cmd: "act", action: "open", args: { id: BLOCK, from: "claude" }, as: "claude-code" }]);
   });
 
-  test("a door without that tile, or older than from=, is asked again without it: where its own open puts notes", async () => {
-    for (const refusal of ["no tile claude; tiles: #1 tree (t1), or focused", "open takes no from; it takes id"]) {
-      door = await fakeDoor(request => (request.args.from ? { ok: false, error: refusal } : { ok: true, result: { reader: "side" } }));
-      expect(await openInDoor(door.path, BLOCK, { actor: "claude-code", from: "claude" })).toEqual({ reader: "side" });
-      expect(door.requests.map(request => request.args.from ?? null)).toEqual(["claude", null]);
-      await door.close(); door = undefined;
-    }
+  test("a door without that tile is asked again without it: where its own open puts notes", async () => {
+    door = await fakeDoor(request => (request.args.from ? { ok: false, error: "no tile claude; tiles: #1 tree (t1), or focused" } : { ok: true, result: { reader: "side" } }));
+    expect(await openInDoor(door.path, BLOCK, { actor: "claude-code", from: "claude" })).toEqual({ reader: "side" });
+    expect(door.requests.map(request => request.args.from ?? null)).toEqual(["claude", null]);
   });
 
   test("from alone (the Claude mod): the person on middle, a door without the tile lands it where its opens land, never naming middle", async () => {
     // The door refuses an agent that names the reader the person is on (ep0ch-door round 3); this caller never does.
-    door = await fakeDoor(request => (request.args.from ? { ok: false, error: "no tile claude-gone; tiles: #1 tree, #2 middle, #3 side, focused, or a block id" } : request.reader ? { ok: false, error: "middle has the person's keys; an agent doesn't open there" } : { ok: true, result: { reader: "side", id: BLOCK } }));
+    door = await fakeDoor(request => (request.args.from ? { ok: false, error: "no tile claude-gone; tiles: #1 tree, #2 middle, #3 side, focused, or a block id" } : { ok: true, result: { reader: "side", id: BLOCK } }));
     expect(await openInDoor(door.path, BLOCK, { actor: "claude-code", from: "claude-gone" })).toEqual({ reader: "side", id: BLOCK });
-    expect(door.requests.map(request => [request.args.from ?? null, request.reader ?? null])).toEqual([["claude-gone", null], [null, null]]);
-  });
-
-  test("with a reader too, a door older than from= is asked for that reader, then for none", async () => {
-    door = await fakeDoor(request => (request.args.from ? { ok: false, error: "open takes no from; it takes id" } : request.reader ? { ok: true, result: { reader: "5", id: BLOCK } } : { ok: true, result: { reader: "2" } }));
-    expect(await openInDoor(door.path, BLOCK, { actor: "claude-code", from: "claude", reader: "middle" })).toEqual({ reader: "5", id: BLOCK });
-    expect(door.requests.map(request => [request.args.from ?? null, request.reader ?? null])).toEqual([["claude", null], [null, "middle"]]);
-    await door.close(); door = undefined;
-    // A door that knows from= is never asked for the reader.
-    door = await fakeDoor(() => ({ ok: true, result: { reader: "side", id: BLOCK } }));
-    expect(await openInDoor(door.path, BLOCK, { actor: "claude-code", from: "claude", reader: "middle" })).toEqual({ reader: "side", id: BLOCK });
-    expect(door.requests).toHaveLength(1);
-    await door.close(); door = undefined;
-    // An old door with no middle either: where its own open puts notes.
-    door = await fakeDoor(request => (request.args.from ? { ok: false, error: "open takes no from; it takes id" } : request.reader ? { ok: false, error: "no reader middle on the desk; readers: 2" } : { ok: true, result: { reader: "2" } }));
-    expect(await openInDoor(door.path, BLOCK, { actor: "claude-code", from: "claude", reader: "middle" })).toEqual({ reader: "2" });
-    expect(door.requests).toHaveLength(3);
+    expect(door.requests.map(request => request.args.from ?? null)).toEqual(["claude-gone", null]);
   });
 
   test("any other refusal from the tile's link is the answer, never asked again", async () => {
     door = await fakeDoor(request => (request.args.from ? { ok: false, error: "reader middle is holding an edit or a comment on another note" } : { ok: true, result: {} }));
     await expect(openInDoor(door.path, BLOCK, { actor: "claude-code", from: "claude" })).rejects.toThrow("holding an edit");
-    expect(door.requests).toHaveLength(1);
-  });
-
-  test("an agent's open of the middle reader, attributed to the actor", async () => {
-    door = await fakeDoor(() => ({ ok: true, result: { reader: "5", id: BLOCK } }));
-    expect(await openInDoor(door.path, BLOCK, { actor: "claude-code", reader: "middle" })).toEqual({ reader: "5", id: BLOCK });
-    expect(door.requests).toEqual([{ cmd: "act", action: "open", args: { id: BLOCK }, as: "claude-code", reader: "middle" }]);
-  });
-
-  test("a door without that tile shows it where its own open puts notes", async () => {
-    // The door's own refusal for a reader it doesn't have (Desk.pickReader).
-    door = await fakeDoor(request => (request.reader ? { ok: false, error: "no reader middle on the desk; readers: 1 (tree), 2 (side), focused, or a block id" } : { ok: true, result: { reader: "2" } }));
-    expect(await openInDoor(door.path, BLOCK, { actor: "claude-code", reader: "middle" })).toEqual({ reader: "2" });
-    expect(door.requests.map(request => request.reader ?? null)).toEqual(["middle", null]);
-  });
-
-  test("any other refusal of the middle reader is the answer: never asked again without it (that would be the focused reader)", async () => {
-    door = await fakeDoor(request => (request.reader ? { ok: false, error: "reader middle is holding an edit or a comment on another note" } : { ok: true, result: { reader: "1" } }));
-    await expect(openInDoor(door.path, BLOCK, { actor: "claude-code", reader: "middle" })).rejects.toThrow("holding an edit");
     expect(door.requests).toHaveLength(1);
   });
 
@@ -127,7 +89,7 @@ describe("showing a block in ep0ch-door", () => {
     const link = join(dir, "agent-door-claude.sock");
     symlinkSync(path, link);
     try {
-      await expect(openInDoor(link, BLOCK, { actor: "claude-code", reader: "middle" })).rejects.toBeInstanceOf(DoorUnreachable);
+      await expect(openInDoor(link, BLOCK, { actor: "claude-code", from: "claude" })).rejects.toBeInstanceOf(DoorUnreachable);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -141,7 +103,7 @@ describe("showing a block in ep0ch-door", () => {
   test("no door listening is DoorUnreachable, so the caller can show it elsewhere", async () => {
     const dir = mkdtempSync(join(tmpdir(), "door-control-"));
     try {
-      await expect(openInDoor(join(dir, "gone.sock"), BLOCK, { actor: "claude-code", reader: "middle" })).rejects.toBeInstanceOf(DoorUnreachable);
+      await expect(openInDoor(join(dir, "gone.sock"), BLOCK, { actor: "claude-code", from: "claude" })).rejects.toBeInstanceOf(DoorUnreachable);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -149,7 +111,7 @@ describe("showing a block in ep0ch-door", () => {
 
   test("the CLI's door-open: the result on stdout, exit 3 when no door answers", async () => {
     door = await fakeDoor(() => ({ ok: true, result: { reader: "5", id: BLOCK } }));
-    const run = (control: string) => Bun.spawn([process.execPath, "src/cli.ts", "door-open", BLOCK, "--actor", "claude-code", "--reader", "middle"], {
+    const run = (control: string) => Bun.spawn([process.execPath, "src/cli.ts", "door-open", BLOCK, "--actor", "claude-code", "--from", "claude"], {
       env: { ...process.env, EP0CH_CONTROL: control },
       stdout: "pipe",
       stderr: "pipe",
@@ -157,7 +119,7 @@ describe("showing a block in ep0ch-door", () => {
     const ok = run(door.path);
     expect(await new Response(ok.stdout).text()).toBe(`{"reader":"5","id":"${BLOCK}"}\n`);
     expect(await ok.exited).toBe(0);
-    expect(door.requests[0]).toMatchObject({ as: "claude-code", reader: "middle" });
+    expect(door.requests[0]).toMatchObject({ as: "claude-code", args: { id: BLOCK, from: "claude" } });
 
     const gone = run(join(door.dir, "gone.sock"));
     expect(await new Response(gone.stderr).text()).toContain("error: no door at");

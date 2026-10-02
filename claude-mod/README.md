@@ -198,7 +198,7 @@ find it with `outline_find` first.
 ## Door tools
 
 When Claude runs in an ep0ch-door tile (`EP0CH_CONTROL` set), it also gets
-`door_where`, `door_peek`, `door_act { action, args?, reader? }` and
+`door_where`, `door_peek`, `door_act { action, args?, tile? }` and
 `door_open { id }`. They run `ep0ch where --json`, `ep0ch peek` and
 `ep0ch act …` on that socket; `door_open` is the same open as a click or `show`
 ([Where a note opens](#where-a-note-opens)). Without

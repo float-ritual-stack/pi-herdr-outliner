@@ -292,7 +292,7 @@ export const DOOR_TOOLS: readonly DoorToolDefinition[] = [
           additionalProperties: { type: ['string', 'number', 'boolean'] },
           description: 'The action’s arguments, key: value',
         },
-        reader: { type: 'string', description: 'The reader tile to act in, when the action needs one' },
+        tile: { type: 'string', description: 'The tile to act in, when the action needs one' },
         actor: ACTOR,
       },
       required: ['action'],
@@ -332,7 +332,7 @@ export function doorActArgv(
   const words: string[] = []
   let stdin: string | undefined
   for (const [key, raw] of Object.entries(args as Record<string, unknown>)) {
-    if (!ACT_KEY.test(key) || key === 'as' || key === 'reader') return `"${key}" is not an argument name (use reader and actor for those).`
+    if (!ACT_KEY.test(key) || key === 'as' || key === 'tile') return `"${key}" is not an argument name (use tile and actor for those).`
     if (!['string', 'number', 'boolean'].includes(typeof raw)) return `${key} must be a string, number or boolean.`
     const value = String(raw)
     if (value.startsWith('@')) {
@@ -343,9 +343,9 @@ export function doorActArgv(
       words.push(`${key}=${value}`)
     }
   }
-  if (input.reader !== undefined) {
-    if (!nonEmpty(input.reader) || String(input.reader).startsWith('@')) return 'reader is a tile name.'
-    words.push(`reader=${input.reader}`)
+  if (input.tile !== undefined) {
+    if (!nonEmpty(input.tile) || String(input.tile).startsWith('@')) return 'tile is a tile name.'
+    words.push(`tile=${input.tile}`)
   }
   return { argv: ['ep0ch', 'act', action, ...words, '--as', actor], ...(stdin === undefined ? {} : { stdin }) }
 }

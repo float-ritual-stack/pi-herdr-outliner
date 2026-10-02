@@ -227,9 +227,9 @@ describe('door tools', () => {
     const peek = await $.tool.call({ tool: 'mcp__pi-outliner__door_peek' })
     expect(JSON.parse(String((peek as { result: unknown }).result))).toEqual({ screen: { screen: 'desk', focus: 'middle' }, text: 'DESK  middle: Seed swap plan' })
 
-    await $.tool.call({ tool: 'mcp__pi-outliner__door_act', action: 'block.mark', args: { reason: 'needs your call', line: 3 }, reader: 'middle' })
+    await $.tool.call({ tool: 'mcp__pi-outliner__door_act', action: 'block.mark', args: { reason: 'needs your call', line: 3 }, tile: 'middle' })
     const act = session.runs.findLast(run => run.argv[1] === 'act')!
-    expect(act.argv).toEqual(['ep0ch', 'act', 'block.mark', 'reason=needs your call', 'line=3', 'reader=middle', '--as', 'loki'])
+    expect(act.argv).toEqual(['ep0ch', 'act', 'block.mark', 'reason=needs your call', 'line=3', 'tile=middle', '--as', 'loki'])
     expect(act.init?.env).toEqual({ EP0CH_CONTROL: CONTROL })
 
     // ep0ch reads a value starting with @ as a file: it goes through stdin instead.

@@ -1887,9 +1887,8 @@ old) and marks requests a restart cut off as `failed`. Every write is
 [`src/door-control.ts`](../src/door-control.ts) is a client of ep0ch-door's
 control socket (the door's `docs/AGENT-INTERFACE.md`): one JSON request per line,
 one answer per line. The door owns what its actions do; this only asks.
-`openInDoor` asks for an agent's `open` (`from` a tile, then a `reader`, then
-the door's own choice, each only when the door can't take the one before), and
-any other refusal is the answer. The CLI's `door-open` wraps it and exits 3 when
+`openInDoor` asks for an agent's `open` (`from` a tile, then the door's own
+choice when the door has no such tile), and any other refusal is the answer. The CLI's `door-open` wraps it and exits 3 when
 no door answers. The Claude mod opens a note the same way for a click on a
 reference, `show` and `door_open`: in a door first (`EP0CH_CONTROL` set), then a
 Herdr Detail split, else it says why it can't and gives the `((id))`.
