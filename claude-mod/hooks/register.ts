@@ -49,7 +49,8 @@ import {
  */
 type ReferenceContext = { workspace: Workspace | null; prefixes: string[] }
 let references: ReferenceContext | undefined
-let isLoadingReferences = false
+/** The load in flight, so a tool call made while the session starts waits for it rather than being refused. */
+let loadingReferences: Promise<void> | undefined
 /**
  * The environment an Outliner CLI run gets for one workspace: its bound
  * folder, whose client.json the CLI resolves the outline from itself (so every
@@ -76,10 +77,9 @@ let whereLoad: Promise<string | null> | undefined
  * The session's workspace is its folder's nearest bound ancestor, resolved by
  * the installed CLI the way every client resolves it (`sessionWorkspace`). An
  * unbound folder feeds nothing. The `workspaces` option, or, left empty,
- * `PI_OUTLINER_MENTIONS_WORKSPACES`, lists folders: with the `mode` option or
- * `PI_OUTLINER_MENTIONS_MODE` set to `folder` they are opted out; set to
- * `allowlist`, or unset beside a list (a config from before folder mode), they
- * are the only folders that feed (the strict mode). The engine hands an unset string
+ * `PI_OUTLINER_MENTIONS_WORKSPACES`, lists folders opted out; with the `mode`
+ * option or `PI_OUTLINER_MENTIONS_MODE` set to `allowlist` they are instead
+ * the only folders that feed (the strict mode). The engine hands an unset string
  * option over as '', so empty and unset are one case: an empty option cannot
  * override the environment.
  *
@@ -336,8 +336,13 @@ async function sessionWorkspace($: EngineInterface, options: PluginOptions): Pro
     $.session.cwd(),
   ])
   const listed = effectiveWorkspaces(options.workspaces, listedEnv, home)
-  const mode = mentionsModeOf(options.mode, modeEnv, listed)
+  const mode = mentionsModeOf(options.mode, modeEnv)
   if (mode === 'allowlist' || workspaceForCwd(cwd, listed) !== null) return sessionWorkspaceOf(cwd, mode, listed, null)
+  // A remote socket in Claude's environment would take every CLI run elsewhere than the folder's binding.
+  const [remote, socket] = await Promise.all([$.env.get('OUTLINER_REMOTE'), $.env.get('OUTLINER_SOCKET_PATH')])
+  if (remote?.trim() || socket?.trim()) {
+    throw Error("OUTLINER_REMOTE / OUTLINER_SOCKET_PATH in Claude's environment would send it elsewhere than this folder's outline; unset them, or use strict mode (PI_OUTLINER_MENTIONS_MODE=allowlist)")
+  }
   const root = await outlinerRootOf($)
   if (!root) return null
   const ran = await $.process.run(
@@ -480,9 +485,11 @@ async function runDoorTool(
  * service that cannot answer leaves pages and block references linked, bare
  * IDs not.
  */
-async function loadReferences($: EngineInterface, option: PluginOptions): Promise<void> {
-  if (isLoadingReferences) return
-  isLoadingReferences = true
+function loadReferences($: EngineInterface, option: PluginOptions): Promise<void> {
+  return (loadingReferences ??= readReferences($, option).finally(() => { loadingReferences = undefined }))
+}
+
+async function readReferences($: EngineInterface, option: PluginOptions): Promise<void> {
   try {
     const workspace = await sessionWorkspace($, option)
     if (!workspace) {
@@ -503,8 +510,6 @@ async function loadReferences($: EngineInterface, option: PluginOptions): Promis
     references = { workspace, prefixes: [...new Set(prefixes)] }
   } catch {
     // Linking is a convenience: the reply is drawn as before.
-  } finally {
-    isLoadingReferences = false
   }
 }
 

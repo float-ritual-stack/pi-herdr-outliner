@@ -170,7 +170,9 @@ source evidence or distinguish authored glyphs from controls.
 - `resolveFolderOutline` in `src/paths.ts` owns the folder rule (nearest bound
   folder, else repository name, else folder name, never `$HOME`, `/` or `/tmp`);
   `resolveClientPaths` uses it and the door mirrors it, rather than guessing names
-  themselves. `resolveInvocationPaths` in `src/outline-host-client.ts` owns
+  themselves. `boundFolderOf` (CLI: `outliner bound-folder`) is its rule 1 with
+  no guess, plus host-recorded roots: what follows a folder on its own (the
+  Claude mod) asks it, so an unbound folder reaches no outline. `resolveInvocationPaths` in `src/outline-host-client.ts` owns
   which outline a Herdr action invoked from a pane uses (the pane's registered
   outline first).
 - `src/outline-names.ts` owns every write of an outline's identity: the

@@ -118,7 +118,7 @@ describe('outline tools', () => {
       expect(run.argv).toEqual([...CLI, 'agent', call.operation, '--stdin', '--actor', 'claude-code', '--session', 'session-1'])
       expect(JSON.parse(run.init!.stdin!)).toEqual(call.json)
       expect(run.init?.cwd).toBe(WORKSPACE)
-      expect(run.init?.env).toEqual({ OUTLINER_WORKSPACE_ROOT: WORKSPACE })
+      expect(run.init?.env).toEqual({ OUTLINER_WORKSPACE_ROOT: WORKSPACE, OUTLINER_OUTLINE: 'garden', OUTLINER_CONFIG_PATH: '' })
     }
   })
 

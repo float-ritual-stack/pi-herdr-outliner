@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { boundFolderOf, hostedOutlinePaths, outlineHostPaths, resolveFolderOutline, writeClientConfig } from "../src/paths";
+import { dirname, join } from "node:path";
+import { boundFolderOf, hostedOutlinePaths, outlineHostPaths, resolveFolderOutline, resolvePaths, writeClientConfig } from "../src/paths";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -115,4 +115,27 @@ test("`bound-folder` prints the binding as one JSON line, and an unbound folder 
   expect(JSON.parse((await run([], camp)).stdout)).toEqual({ bound: true, source: "host-root", folder: camp, outline: "jam-shelf" });
   expect(JSON.parse((await run([plain], garden)).stdout)).toEqual({ bound: false, folder: plain });
   expect((await run(["--json"], plain)).exitCode).toBe(2);
+});
+
+test("a root too broad to name an outline after ($HOME, /) binds nothing by itself; a client.json there still does", () => {
+  const { env, home, folder, hosted, bind } = machine();
+  const repo = folder("random-repo");
+  hosted("inbox", home);
+  expect(boundFolderOf(repo, env)).toBeUndefined();
+  hosted("everything", "/");
+  expect(boundFolderOf(repo, env)).toBeUndefined();
+  bind(home, "fred-notes");
+  expect(boundFolderOf(repo, env)).toMatchObject({ source: "client", folder: home, outline: "fred-notes" });
+});
+
+test("a folder with its own hash database is not its ancestor's binding (every client uses that database there)", () => {
+  const { env, folder, bind } = machine();
+  const garden = folder("garden");
+  const shed = folder("garden", "shed");
+  bind(garden, "fred-notes");
+  const { database } = resolvePaths({ ...env, OUTLINER_WORKSPACE_ROOT: shed });
+  mkdirSync(dirname(database), { recursive: true });
+  writeFileSync(database, "");
+  expect(boundFolderOf(shed, env)).toBeUndefined();
+  expect(boundFolderOf(garden, env)).toMatchObject({ folder: garden });
 });

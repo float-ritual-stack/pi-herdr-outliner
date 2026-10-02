@@ -2480,8 +2480,10 @@ outline** switches a folder to another, and its "New outline here" takes a free
 `-2` suffix rather than attach. Herdr actions invoked from an outliner pane stay
 on that pane's outline. Reads (`list`, `read`, `doctor`) never create an
 outline. The Claude mod follows a session's folder by rule 1 only (or an
-outline root the host records; `outliner bound-folder` says which): it never
-takes a guess, so an unbound folder feeds no outline. The single-outline service (`bun run server`)
+outline root the host records, never one as broad as `$HOME`; `outliner
+bound-folder` says which): it never takes a guess, so an unbound folder feeds
+no outline. Ctrl-b u's guess records its folder as the outline's root, which
+binds it from then on. The single-outline service (`bun run server`)
 does not start for a folder that belongs to the host.
 
 ### Outline names

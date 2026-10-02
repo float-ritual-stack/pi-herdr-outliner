@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {mentionMessageOf,workspaceForCwd} from '../claude-mod/hooks/mention-message';
+import {boundWorkspaceOf,mentionMessageOf,mentionsModeOf,sessionWorkspaceOf,workspaceEnvOf,workspaceForCwd} from '../claude-mod/hooks/mention-message';
 import {register} from '../claude-mod/hooks/register';
 import {mkdtempSync,mkdirSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -36,12 +36,39 @@ test('a message carries the workspace folder; subagents, aborted and empty respo
   expect(mentionMessageOf({...answer,...change},{id:'session-1'},{root:'/work/hub'})).toBeNull();
 });
 
+// The mod's pure folder rules, also under `claude plugin test`; here so they run wherever Bun does.
+test('the mode is folder unless allowlist is asked for; a list never implies one',()=>{
+ expect(mentionsModeOf('',undefined)).toBe('folder');
+ expect(mentionsModeOf('', 'allowlist')).toBe('allowlist');
+ expect(mentionsModeOf('folder','allowlist')).toBe('folder');
+ expect(()=>mentionsModeOf('','everywhere')).toThrow('neither folder nor allowlist');
+});
+
+test("bound-folder's answer binds only a folder holding the cwd, pinned to the outline it names",()=>{
+ expect(boundWorkspaceOf('{"bound":true,"source":"client","folder":"/work/garden","mode":"host","outline":"garden"}','/work/garden/src')).toEqual({root:'/work/garden',outline:'garden',pinned:true});
+ expect(boundWorkspaceOf('{"bound":true,"source":"client","folder":"/work/garden","mode":"remote"}','/work/garden')).toEqual({root:'/work/garden',pinned:true});
+ expect(boundWorkspaceOf('{"bound":true,"source":"host-root","folder":"/work/jam","outline":"jam-shelf"}','/work/jam/x')).toEqual({root:'/work/jam',outline:'jam-shelf',pinned:true});
+ for(const [stdout,cwd] of [['{"bound":false,"folder":"/tmp/x"}','/tmp/x'],['{"bound":true,"source":"client","folder":"/work/garden","mode":"host","outline":"garden"}','/home/sam'],['{"bound":true,"source":"guess","folder":"/work/garden","outline":"garden"}','/work/garden'],['nope','/work']])
+  expect(boundWorkspaceOf(stdout,cwd)).toBeNull();
+});
+
+test("the session's workspace: opt-outs first, then the binding; strict mode lists only",()=>{
+ const bound={root:'/work/garden',pinned:true};
+ expect(sessionWorkspaceOf('/work/garden/src','folder',[],bound)).toEqual(bound);
+ expect(sessionWorkspaceOf('/tmp/x','folder',[],null)).toBeNull();
+ expect(sessionWorkspaceOf('/work/garden/src','folder',['/work'],bound)).toBeNull();
+ expect(sessionWorkspaceOf('/work/garden/src','allowlist',['/work/garden'],null)).toEqual({root:'/work/garden'});
+ expect(sessionWorkspaceOf('/work/garden/src','allowlist',[],bound)).toBeNull();
+ expect(workspaceEnvOf({root:'/w',outline:'o',pinned:true})).toEqual({OUTLINER_WORKSPACE_ROOT:'/w',OUTLINER_OUTLINE:'o',OUTLINER_CONFIG_PATH:''});
+ expect(workspaceEnvOf({root:'/w'})).toEqual({OUTLINER_WORKSPACE_ROOT:'/w'});
+});
+
 /**
  * The registered hooks against a real service and the real CLI: `root` is bound
  * to the service by its client.json (under a scratch config root), and the
  * session runs in `cwd`. Resolves to what the service then lists, and the runs.
  */
-async function completeTurnIn(cwdOf,optionsOf=()=>({}),sessionEnvOf=()=>({})){
+async function completeTurnIn(cwdOf,optionsOf=()=>({}),sessionEnvOf=()=>({}),claudeEnv={}){
  const temp=mkdtempSync(join(tmpdir(),'claude-folder-'));
  const root=join(temp,'workspace with spaces');
  mkdirSync(join(root,'projects','mod'),{recursive:true});
@@ -73,7 +100,7 @@ async function completeTurnIn(cwdOf,optionsOf=()=>({}),sessionEnvOf=()=>({})){
    inFlight++;
    try{
    if(argv[0]==='herdr')return {exitCode:0,stderr:'',stdout:JSON.stringify({result:{plugins:[{plugin_id:'float.pi-outliner',enabled:true,plugin_root:installation}]}})};
-   const child=Bun.spawn(argv,{cwd:init.cwd,env:{...inherited,...scratchEnv,...init.env},stdin:new Response(init.stdin),stdout:'pipe',stderr:'pipe'});
+   const child=Bun.spawn(argv,{cwd:init.cwd,env:{...inherited,...claudeEnv,...scratchEnv,...init.env},stdin:new Response(init.stdin),stdout:'pipe',stderr:'pipe'});
    const [exitCode,stdout,stderr]=await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);
    return {exitCode,stdout,stderr};
    }finally{inFlight--;}
@@ -101,8 +128,14 @@ test('folder mode: a reply in a bound folder\'s subfolder reaches the outline it
  expect(bound?.argv.at(-1)).toBe(join(root,'projects','mod'));
  const ingest=runs.find(run=>run.argv.includes('ingest'));
  expect(ingest?.init.cwd).toBe(root);
- expect(ingest?.init.env).toEqual({OUTLINER_WORKSPACE_ROOT:root});
+ expect(ingest?.init.env).toEqual({OUTLINER_WORKSPACE_ROOT:root,OUTLINER_OUTLINE:'',OUTLINER_CONFIG_PATH:''});
  expect(JSON.parse(ingest?.init.stdin).workspaceRoot).toBe(root);
+ expect(entries.map(entry=>entry.block?.id)).toEqual([target.id]);
+},15000);
+
+test('folder mode: an OUTLINER_OUTLINE or OUTLINER_CONFIG_PATH in Claude\'s environment never moves the reply off the folder\'s binding',async()=>{
+ const {target,entries,toasts}=await completeTurnIn(root=>join(root,'projects','mod'),()=>({}),()=>({}),{OUTLINER_OUTLINE:'someone-else',OUTLINER_CONFIG_PATH:'/nonexistent/client.json'});
+ expect(toasts).toEqual([]);
  expect(entries.map(entry=>entry.block?.id)).toEqual([target.id]);
 },15000);
 
@@ -115,12 +148,19 @@ test('folder mode: a reply in an unbound folder reaches no outline',async()=>{
 },15000);
 
 test('folder mode: an opted-out bound folder reaches no outline, and its binding is never asked for',async()=>{
- for(const [optionsOf,envOf] of [[()=>({}),root=>({PI_OUTLINER_MENTIONS_MODE:'folder',PI_OUTLINER_MENTIONS_WORKSPACES:join(root,'projects')})],[root=>({workspaces:`${root}/`,mode:'folder'}),()=>({})]]){
+ for(const [optionsOf,envOf] of [[()=>({}),root=>({PI_OUTLINER_MENTIONS_WORKSPACES:join(root,'projects')})],[root=>({workspaces:`${root}/`}),()=>({})]]){
   const {runs,entries}=await completeTurnIn(root=>join(root,'projects','mod'),optionsOf,envOf);
   expect(runs.some(run=>run.argv.includes('bound-folder')||run.argv.includes('ingest'))).toBe(false);
   expect(entries).toEqual([]);
  }
 },20000);
+
+test("folder mode: OUTLINER_REMOTE in Claude's environment feeds nothing and says why",async()=>{
+ const {runs,entries,toasts}=await completeTurnIn(root=>join(root,'projects','mod'),()=>({}),()=>({OUTLINER_REMOTE:'1',OUTLINER_SOCKET_PATH:'/elsewhere.sock'}));
+ expect(runs.some(run=>run.argv.includes('bound-folder')||run.argv.includes('ingest'))).toBe(false);
+ expect(entries).toEqual([]);
+ expect(toasts[0]).toContain('OUTLINER_REMOTE');
+},15000);
 
 test('strict allowlist mode: a listed folder feeds the outline as before, and an unlisted bound one does not',async()=>{
  const listed=await completeTurnIn(root=>join(root,'projects','mod'),root=>({workspaces:root,mode:'allowlist'}));

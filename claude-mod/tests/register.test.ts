@@ -155,7 +155,7 @@ describe('register', () => {
       'ingest',
     ])
     expect(ingest.init?.cwd).toBe(WORKSPACE)
-    expect(ingest.init?.env).toEqual({ OUTLINER_WORKSPACE_ROOT: WORKSPACE })
+    expect(ingest.init?.env).toEqual({ OUTLINER_WORKSPACE_ROOT: WORKSPACE, OUTLINER_OUTLINE: 'garden', OUTLINER_CONFIG_PATH: '' })
     expect(JSON.parse(ingest.init?.stdin ?? '')).toEqual({
       workspaceRoot: WORKSPACE,
       agent: 'claude',
@@ -176,7 +176,7 @@ describe('register', () => {
     await session.clock.settle()
     const ingest = session.delivered()[1]!
     expect(ingest.init?.cwd).toBe(nested)
-    expect(ingest.init?.env).toEqual({ OUTLINER_WORKSPACE_ROOT: nested })
+    expect(ingest.init?.env).toEqual({ OUTLINER_WORKSPACE_ROOT: nested, OUTLINER_OUTLINE: 'mod-notes', OUTLINER_CONFIG_PATH: '' })
     expect(JSON.parse(ingest.init?.stdin ?? '').workspaceRoot).toBe(nested)
   })
 
@@ -189,7 +189,7 @@ describe('register', () => {
     await session.clock.settle()
     const ingest = session.delivered()[1]!
     expect(ingest.init?.cwd).toBe(root)
-    expect(ingest.init?.env).toEqual({ OUTLINER_WORKSPACE_ROOT: root, OUTLINER_OUTLINE: 'jam-shelf' })
+    expect(ingest.init?.env).toEqual({ OUTLINER_WORKSPACE_ROOT: root, OUTLINER_OUTLINE: 'jam-shelf', OUTLINER_CONFIG_PATH: '' })
   })
 
   test('an unbound folder: nothing is ingested, nothing linked, and no outline is guessed or defaulted', async ($, on) => {
@@ -252,13 +252,25 @@ describe('register', () => {
     expect(ingest.init?.env).toEqual({ OUTLINER_WORKSPACE_ROOT: listed })
   })
 
-  test('a list with no mode is a config from before folder mode: still the allowlist it was', async ($, on) => {
-    const session = sessionIn(on, `${WORKSPACE}-listed/src`, succeeding, `${WORKSPACE}-listed`)
-    await session.begin(() => $.session.start({ ...START, cwd: `${WORKSPACE}-listed/src` }))
+  test('a list with no mode opts out: an allowlist from before folder mode fails closed', async ($, on) => {
+    const session = sessionIn(on, `${WORKSPACE}/src`, succeeding, WORKSPACE)
+    await session.begin(() => $.session.start({ ...START, cwd: `${WORKSPACE}/src` }))
     await $.turn.complete(ANSWER)
     await session.clock.settle()
     expect(session.bindings).toEqual([])
-    expect(session.runs.find(run => run.argv.includes('ingest'))?.init?.cwd).toBe(`${WORKSPACE}-listed`)
+    expect(session.runs).toEqual([])
+  })
+
+  test("a remote socket in Claude's environment: nothing is fed, and it says why once", async ($, on) => {
+    const session = sessionIn(on, WORKSPACE, succeeding, '', { OUTLINER_REMOTE: '1', OUTLINER_SOCKET_PATH: '/elsewhere/outliner.sock' })
+    await session.begin(() => $.session.start(START))
+    await $.turn.complete(ANSWER)
+    await $.turn.complete({ ...ANSWER, turnId: 'turn-2' })
+    await session.clock.settle()
+    expect(session.bindings).toEqual([])
+    expect(session.runs).toEqual([])
+    expect(session.toasts).toHaveLength(1)
+    expect(session.toasts[0]).toContain('OUTLINER_REMOTE / OUTLINER_SOCKET_PATH')
   })
 
   test('strict allowlist mode: a bound folder that is not listed feeds nothing', async ($, on) => {
@@ -658,7 +670,7 @@ describe('register', () => {
       '--author', 'agent', '--actor', 'claude-code', '--session', 'session-1',
     ])
     expect(run.init?.cwd).toBe(WORKSPACE)
-    expect(run.init?.env).toEqual({ OUTLINER_WORKSPACE_ROOT: WORKSPACE })
+    expect(run.init?.env).toEqual({ OUTLINER_WORKSPACE_ROOT: WORKSPACE, OUTLINER_OUTLINE: 'garden', OUTLINER_CONFIG_PATH: '' })
 
     await $.tool.call({ tool: 'mcp__pi-outliner__work_complete', item: 'PIE-8', deliveries: ['d-1', 'PIE-8/door'], proof: 'Proof\n\nChecked.' })
     const completed = session.runs.findLast(candidate => candidate.argv.includes('complete'))!

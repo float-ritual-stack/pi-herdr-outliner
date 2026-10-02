@@ -57,29 +57,36 @@ export function effectiveWorkspaces(option: unknown, environment: string | undef
 export type MentionsMode = 'folder' | 'allowlist'
 
 /**
- * The `mode` option when set, otherwise `PI_OUTLINER_MENTIONS_MODE`. Neither
- * set: `folder`, unless folders are listed. A list with no mode is a config
- * written before folder mode, when the list was the allowlist, so it keeps
- * meaning that (rerunning the installer moves it to folder mode). Any other
- * value is an error, never read as one of them.
+ * The `mode` option when set, otherwise `PI_OUTLINER_MENTIONS_MODE`; neither:
+ * `folder`. A list with no mode is opted out, so a list that was the allowlist
+ * before folder mode fails closed (its folders feed nothing) until strict mode
+ * is set or the list removed. Any other value is an error, never read as one.
  */
-export function mentionsModeOf(option: unknown, environment: string | undefined, listed: readonly string[] = []): MentionsMode {
+export function mentionsModeOf(option: unknown, environment: string | undefined): MentionsMode {
   const typed = typeof option === 'string' && option.trim() !== '' ? option.trim() : (environment ?? '').trim()
-  if (typed === '') return listed.length > 0 ? 'allowlist' : 'folder'
-  if (typed === 'folder' || typed === 'allowlist') return typed
+  if (typed === '' || typed === 'folder' || typed === 'allowlist') return typed === 'allowlist' ? 'allowlist' : 'folder'
   throw Error(`Outliner mentions mode "${typed}" is neither folder nor allowlist`)
 }
 
 /**
- * The folder a session's Outliner CLI runs start from, and, for an outline
- * root the host serves, that outline's name (a folder's own `client.json`
- * names it for the CLI; a recorded root does not).
+ * The folder a session's Outliner CLI runs start from. A bound folder (folder
+ * mode) is `pinned` to the outline `bound-folder` found, `outline` when it
+ * names a host outline: its CLI runs go there whatever Claude's environment
+ * says. A strict-mode folder is the CLI's to resolve, as before folder mode.
  */
-export type Workspace = { root: string; outline?: string }
+export type Workspace = { root: string; outline?: string; pinned?: true }
 
-/** The environment an Outliner CLI run gets for a workspace: its folder, and its outline when only the host knows it. */
+/**
+ * The environment an Outliner CLI run gets for a workspace: its folder and,
+ * when pinned, the outline that bound it, blanking an inherited
+ * OUTLINER_OUTLINE or OUTLINER_CONFIG_PATH so the write lands where the folder
+ * was found bound (`resolveClientPaths` reads an empty one as unset).
+ */
 export function workspaceEnvOf(workspace: Workspace): Record<string, string> {
-  return { OUTLINER_WORKSPACE_ROOT: workspace.root, ...(workspace.outline ? { OUTLINER_OUTLINE: workspace.outline } : {}) }
+  return {
+    OUTLINER_WORKSPACE_ROOT: workspace.root,
+    ...(workspace.pinned ? { OUTLINER_OUTLINE: workspace.outline ?? '', OUTLINER_CONFIG_PATH: '' } : {}),
+  }
 }
 
 /**
@@ -94,8 +101,12 @@ export function boundWorkspaceOf(stdout: string, cwd: string): Workspace | null 
   if (bound !== true || typeof folder !== 'string') return null
   const root = absolutePath(folder)
   if (root === null || workspaceForCwd(cwd, [root]) !== root) return null
-  if (source === 'host-root') return typeof outline === 'string' && outline !== '' ? { root, outline } : null
-  return source === 'client' ? { root } : null
+  const named = typeof outline === 'string' && outline !== '' ? outline : undefined
+  if (source === 'host-root') return named ? { root, outline: named, pinned: true } : null
+  // A client.json naming a host outline is pinned to it; a local or remote choice is the folder's config to resolve.
+  if (source !== 'client') return null
+  const { mode } = answer as Record<string, unknown>
+  return mode === 'host' ? (named ? { root, outline: named, pinned: true } : null) : { root, pinned: true }
 }
 
 /**

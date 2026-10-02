@@ -7,14 +7,14 @@
     "workspaces": {
       "type": "string",
       "title": "Outliner folders (opt-outs, or the strict allowlist)",
-      "description": "Absolute folders, separated by ':' or ','. Mode folder: sessions in them (and their subfolders) feed no outline, even when bound to one. Mode allowlist, or no mode set: only they feed (strict mode, as before folder mode). Empty: PI_OUTLINER_MENTIONS_WORKSPACES applies.",
+      "description": "Absolute folders, separated by ':' or ','. Sessions in them (and their subfolders) feed no outline, even when bound to one. In allowlist mode, instead only they feed (strict mode, as before folder mode). Empty: PI_OUTLINER_MENTIONS_WORKSPACES applies.",
       "required": false,
       "default": ""
     },
     "mode": {
       "type": "string",
       "title": "How a session finds its outline",
-      "description": "folder: each session feeds the outline its folder's nearest bound ancestor names (its client.json, or an outline root the host serves); an unbound folder feeds nothing, and listed folders are opted out. allowlist: only the listed folders feed, as before. Empty: PI_OUTLINER_MENTIONS_MODE applies; neither set, folder, unless folders are listed (an old allowlist).",
+      "description": "folder: each session feeds the outline its folder's nearest bound ancestor names (its client.json, or an outline root the host serves); an unbound folder feeds nothing, and listed folders are opted out. allowlist: only the listed folders feed, as before. Empty: PI_OUTLINER_MENTIONS_MODE applies; neither set: folder.",
       "required": false,
       "default": ""
     }

@@ -51,11 +51,9 @@ describe('mention-message', () => {
     expect(effectiveWorkspaces('', undefined)).toEqual([])
   })
 
-  test('the mode: folder unless allowlist is asked for, or folders are listed with no mode; the option wins', async () => {
+  test('the mode: folder unless allowlist is asked for; the option wins over the environment', async () => {
     expect(mentionsModeOf('', undefined)).toBe('folder')
-    expect(mentionsModeOf(undefined, ' ', [])).toBe('folder')
-    expect(mentionsModeOf('', undefined, ['/work/garden'])).toBe('allowlist')
-    expect(mentionsModeOf('', 'folder', ['/work/garden'])).toBe('folder')
+    expect(mentionsModeOf(undefined, ' ')).toBe('folder')
     expect(mentionsModeOf('', 'allowlist')).toBe('allowlist')
     expect(mentionsModeOf('folder', 'allowlist')).toBe('folder')
     expect(mentionsModeOf(' allowlist ', undefined)).toBe('allowlist')
@@ -64,9 +62,11 @@ describe('mention-message', () => {
 
   test("bound-folder's answer: a bound folder containing the cwd, or nothing", async () => {
     const client = '{"bound":true,"source":"client","folder":"/work/garden","configPath":"/c/client.json","mode":"host","outline":"garden"}'
-    expect(boundWorkspaceOf(client, '/work/garden/src')).toEqual({ root: '/work/garden' })
+    expect(boundWorkspaceOf(client, '/work/garden/src')).toEqual({ root: '/work/garden', outline: 'garden', pinned: true })
+    expect(boundWorkspaceOf('{"bound":true,"source":"client","folder":"/work/garden","mode":"local"}', '/work/garden')).toEqual({ root: '/work/garden', pinned: true })
+    expect(boundWorkspaceOf('{"bound":true,"source":"client","folder":"/work/garden","mode":"host"}', '/work/garden')).toBeNull()
     expect(boundWorkspaceOf('{"bound":true,"source":"host-root","folder":"/work/jam/notes/","outline":"jam-shelf"}', '/work/jam/notes'))
-      .toEqual({ root: '/work/jam/notes', outline: 'jam-shelf' })
+      .toEqual({ root: '/work/jam/notes', outline: 'jam-shelf', pinned: true })
     expect(boundWorkspaceOf('{"bound":false,"folder":"/tmp/scratch"}', '/tmp/scratch')).toBeNull()
     // A folder that doesn't hold the session, a sibling prefix, a relative folder or an unknown source binds nothing.
     expect(boundWorkspaceOf(client, '/home/sam')).toBeNull()
@@ -88,8 +88,11 @@ describe('mention-message', () => {
     expect(sessionWorkspaceOf('/work/garden/src', 'allowlist', [], bound)).toBeNull()
   })
 
-  test("a workspace's CLI environment names the outline only for a host's recorded root", async () => {
+  test("a bound workspace's CLI environment pins the outline that bound it; a strict-mode one is the CLI's to resolve", async () => {
     expect(workspaceEnvOf({ root: '/work/garden' })).toEqual({ OUTLINER_WORKSPACE_ROOT: '/work/garden' })
-    expect(workspaceEnvOf({ root: '/work/jam/notes', outline: 'jam-shelf' })).toEqual({ OUTLINER_WORKSPACE_ROOT: '/work/jam/notes', OUTLINER_OUTLINE: 'jam-shelf' })
+    expect(workspaceEnvOf({ root: '/work/jam/notes', outline: 'jam-shelf', pinned: true }))
+      .toEqual({ OUTLINER_WORKSPACE_ROOT: '/work/jam/notes', OUTLINER_OUTLINE: 'jam-shelf', OUTLINER_CONFIG_PATH: '' })
+    // A local or remote choice: an inherited OUTLINER_OUTLINE or OUTLINER_CONFIG_PATH is blanked, so the folder's config decides.
+    expect(workspaceEnvOf({ root: '/work/garden', pinned: true })).toEqual({ OUTLINER_WORKSPACE_ROOT: '/work/garden', OUTLINER_OUTLINE: '', OUTLINER_CONFIG_PATH: '' })
   })
 })

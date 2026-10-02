@@ -202,7 +202,7 @@ test("Claude mod installer opts folders out, keeps strict mode on request, and r
     // Strict mode: folders given bare (the old form) or with --allowlist; the opt-outs never become allowed folders.
     const strict = await runClaudeModInstaller(configDir, "/w");
     expect(strict.exitCode).toBe(0);
-    expect(strict.stdout).toContain("Dropped the opted-out folders");
+    expect(strict.stdout).toContain("Dropped the listed folders");
     env = await envOf();
     expect([env.PI_OUTLINER_MENTIONS_MODE, env.PI_OUTLINER_MENTIONS_WORKSPACES]).toEqual(["allowlist", "/w"]);
     expect((await runClaudeModInstaller(configDir, "--allowlist", "/v")).exitCode).toBe(0);
@@ -219,7 +219,7 @@ test("Claude mod installer opts folders out, keeps strict mode on request, and r
   }
 });
 
-test("Claude mod installer moves a list from before folder mode to folder mode, naming the folders bound to no outline", async () => {
+test("Claude mod installer leaves a list from before folder mode opted out until --folder drops it, naming folders bound to no outline", async () => {
   const directory = await mkdtemp(join(tmpdir(), "claude-mod-installer-"));
   const settingsPath = join(directory, "settings.json");
   const bound = join(directory, "garden");
@@ -227,12 +227,20 @@ test("Claude mod installer moves a list from before folder mode to folder mode, 
     await mkdir(bound, { recursive: true });
     writeClientConfig({ XDG_CONFIG_HOME: join(directory, "xdg"), OUTLINER_STATE_DIR: join(directory, "outliner-state") }, { mode: "host", workspaceRoot: bound, outline: "fred-notes" });
     await writeFile(settingsPath, JSON.stringify({ env: { PI_OUTLINER_MENTIONS_WORKSPACES: `${bound}:/scratch/unbound` } }));
-    const moved = await runClaudeModInstaller(directory);
+    const kept = await runClaudeModInstaller(directory);
+    expect(kept.exitCode).toBe(0);
+    expect(kept.stdout).toContain("with no mode: those folders are opted out");
+    expect(kept.stdout).toContain("--folder");
+    let env = JSON.parse(await readFile(settingsPath, "utf8")).env;
+    expect(env.PI_OUTLINER_MENTIONS_WORKSPACES).toBe(`${bound}:/scratch/unbound`);
+    expect(env.PI_OUTLINER_MENTIONS_MODE).toBeUndefined();
+
+    const moved = await runClaudeModInstaller(directory, "--folder");
     expect(moved.exitCode).toBe(0);
-    expect(moved.stdout).toContain("Folder mode");
+    expect(moved.stdout).toContain("Dropped the allowlist");
     expect(moved.stdout).toContain("feed nothing: /scratch/unbound.");
     expect(moved.stdout).not.toContain(`nothing: ${bound}`);
-    const env = JSON.parse(await readFile(settingsPath, "utf8")).env;
+    env = JSON.parse(await readFile(settingsPath, "utf8")).env;
     expect(env.PI_OUTLINER_MENTIONS_WORKSPACES).toBeUndefined();
     expect(env.PI_OUTLINER_MENTIONS_MODE).toBeUndefined();
   } finally {

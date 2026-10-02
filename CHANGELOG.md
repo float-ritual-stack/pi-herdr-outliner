@@ -30,12 +30,12 @@ This file records notable user-facing changes. The project remains active dogfoo
   to no outline feeds nothing (never the host's default outline).
 - `outliner bound-folder [folder]` prints that binding as JSON (never a guess).
 - `PI_OUTLINER_MENTIONS_WORKSPACES` (and the mod's `workspaces` option) opts
-  folders out under `PI_OUTLINER_MENTIONS_MODE=folder`. `allowlist` keeps the
-  old behaviour, and a list with no mode is still read as the allowlist it was.
-- `install-claude-mod.ts` needs no folder: run alone it loads the mod and moves
-  an old allowlist to folder mode, naming listed folders bound to no outline.
-  `--exclude` opts a folder out; folders given bare (or `--allowlist`) are
-  strict mode. `install.sh` gains `--claude-exclude`; `--claude-workspace` is
+  folders out. `PI_OUTLINER_MENTIONS_MODE=allowlist` keeps the old behaviour.
+  An old allowlist with no mode now opts its folders out (it fails closed):
+  drop it with `install-claude-mod.ts --folder`, or set strict mode.
+- `install-claude-mod.ts` needs no folder. `--exclude` opts a folder out,
+  `--folder` drops an old allowlist (naming listed folders bound to no
+  outline), and folders given bare (or `--allowlist`) are strict mode. `install.sh` gains `--claude-exclude`; `--claude-workspace` is
   strict mode, and `--claude-mod` no longer asks for a folder.
 
 ### Anyone with the link: `[publish::public]` (PIE-518)

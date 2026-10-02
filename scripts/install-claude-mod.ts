@@ -7,15 +7,16 @@ import {boundFolderOf} from '../src/paths';
 // folder: the nearest folder bound to an outline (client.json, or an outline
 // root the host serves) feeds that outline; an unbound folder feeds nothing.
 //
-//   install-claude-mod.ts                        load the mod (folder mode)
+//   install-claude-mod.ts                        load the mod; the folder list and mode are kept
 //   install-claude-mod.ts --exclude FOLDER…      and opt these folders out
-//   install-claude-mod.ts --folder               leave strict mode for folder mode
+//   install-claude-mod.ts --folder               folder mode, dropping an allowlist (strict
+//                                                mode's, or a list from before folder mode)
 //   install-claude-mod.ts [--allowlist] FOLDER…  strict mode: only these folders feed
 //
-// A folder list with no PI_OUTLINER_MENTIONS_MODE was written before folder
-// mode, when it was the allowlist; the mod still reads it so. Run without
-// folders, the installer moves it to folder mode and says which listed folders
-// are bound to no outline (bind them with the choose-outline action).
+// A list with no PI_OUTLINER_MENTIONS_MODE is opted out. One written before
+// folder mode was the allowlist, so its folders now feed nothing (it fails
+// closed); the installer says so, and --folder drops it, naming the listed
+// folders bound to no outline.
 const usage='Usage: install-claude-mod.ts [--exclude FOLDER]... | --folder | [--allowlist] FOLDER...';
 const excluded:string[]=[];
 const allowed:string[]=[];
@@ -63,7 +64,6 @@ env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS='1';
 // The folder list and its mode, as the mod reads them (mentionsModeOf in claude-mod/hooks/mention-message.ts).
 const listed=split(env.PI_OUTLINER_MENTIONS_WORKSPACES,/[:,]/);
 const setMode=(env.PI_OUTLINER_MENTIONS_MODE??'').trim();
-const mode=setMode||(listed.length?'allowlist':'folder');
 const notes:string[]=[];
 const unbound=(folders:string[])=>folders.filter(folder=>{
  try{return !boundFolderOf(folder);}catch{return true;}
@@ -71,29 +71,31 @@ const unbound=(folders:string[])=>folders.filter(folder=>{
 const write=(nextMode:'folder'|'allowlist',folders:string[])=>{
  if(folders.length)env.PI_OUTLINER_MENTIONS_WORKSPACES=folders.join(':');
  else delete env.PI_OUTLINER_MENTIONS_WORKSPACES;
- // Folder mode with nothing opted out needs no setting; a list always says which mode it is.
+ // Folder mode with nothing opted out needs no setting; a list the installer writes always says its mode.
  if(nextMode==='folder'&&!folders.length)delete env.PI_OUTLINER_MENTIONS_MODE;
  else env.PI_OUTLINER_MENTIONS_MODE=nextMode;
 };
 if(allowed.length){
- const kept=mode==='allowlist'?listed:[];
- if(mode!=='allowlist'&&listed.length)notes.push(`Dropped the opted-out folders (${listed.join(', ')}): strict mode lists the folders that feed instead.`);
+ const kept=setMode==='allowlist'?listed:[];
+ if(setMode!=='allowlist'&&listed.length)notes.push(`Dropped the listed folders (${listed.join(', ')}): strict mode lists the folders that feed instead.`);
  write('allowlist',[...new Set([...kept,...allowed.map(folder=>resolve(folder))])]);
  notes.push(`Strict mode: only ${env.PI_OUTLINER_MENTIONS_WORKSPACES} feed an outline, bound or not.`);
 }else if(setMode==='allowlist'&&!toFolderMode){
  if(excluded.length)throw Error('PI_OUTLINER_MENTIONS_MODE=allowlist is set (strict mode); pass --folder to leave it, then opt folders out.');
  notes.push(`Strict mode kept (PI_OUTLINER_MENTIONS_MODE=allowlist): only ${listed.join(', ')||'the listed folders'} feed. Pass --folder for folder mode.`);
-}else{
- // Folder mode. A list from before folder mode (or strict mode, left with --folder) was an allowlist:
- // it is dropped, never read as opt-outs.
- const optOuts=mode==='folder'?listed:[];
- if(mode==='allowlist'&&listed.length){
-  notes.push(`Folder mode: each session feeds the outline its folder is bound to. The old allowlist (${listed.join(', ')}) is no longer needed.`);
-  const loose=unbound(listed);
-  if(loose.length)notes.push(`Bound to no outline, so these now feed nothing: ${loose.join(', ')}. Bind each with the choose-outline action, or keep strict mode with --allowlist.`);
- }
- write('folder',[...new Set([...optOuts,...excluded.map(folder=>resolve(folder))])]);
+}else if(toFolderMode&&setMode!=='folder'&&listed.length){
+ // An allowlist (strict mode's, or a list from before folder mode) is dropped, never kept as opt-outs.
+ notes.push(`Folder mode: each session feeds the outline its folder is bound to. Dropped the allowlist (${listed.join(', ')}).`);
+ const loose=unbound(listed);
+ if(loose.length)notes.push(`Bound to no outline, so these feed nothing: ${loose.join(', ')}. Bind each with the choose-outline action, or keep strict mode with --allowlist.`);
+ write('folder',excluded.map(folder=>resolve(folder)));
+}else if(excluded.length||toFolderMode){
+ write('folder',[...new Set([...listed,...excluded.map(folder=>resolve(folder))])]);
  if(env.PI_OUTLINER_MENTIONS_WORKSPACES)notes.push(`Opted out: ${env.PI_OUTLINER_MENTIONS_WORKSPACES}.`);
+}else if(listed.length&&!setMode){
+ notes.push(`PI_OUTLINER_MENTIONS_WORKSPACES lists ${listed.join(', ')} with no mode: those folders are opted out. If it was your allowlist from before folder mode, run again with --folder to drop it (bound folders feed on their own), or with --allowlist to keep strict mode.`);
+}else if(listed.length){
+ notes.push(`Opted out: ${listed.join(', ')}.`);
 }
 
 const next=`${JSON.stringify({...settings,env},null,2)}\n`;

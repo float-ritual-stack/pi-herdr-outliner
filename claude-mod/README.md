@@ -19,12 +19,23 @@ mod never keeps a resolver of its own.
 
 - A nested binding is nearer than its parent's, so a project bound to its own
   outline keeps it. Similar path prefixes do not match.
+- An outline root too broad to name an outline after (`$HOME`, `/`, `/tmp`)
+  binds nothing by itself (a `client.json` there still does). A subfolder with
+  its own hash database is not its ancestor's binding, since every client uses
+  that database there; it feeds nothing.
+- Opening an unbound folder's guessed outline from Herdr (Ctrl-b u) records
+  that folder (or its repository) as the outline's root. From then on it is
+  bound, and Claude sessions in it feed that outline.
 - **A folder bound to no outline feeds nothing**: no mentions, no links, and the
   outline tools refuse. The CLI's folder-name guess and the host's default
   outline are never used, so an unrelated session never reaches your outline.
 - Mentions, links, `show`, the workboard and outline tools all use that folder
-  and its outline. For a root only the host records, the mod passes the
-  outline's name (`OUTLINER_OUTLINE`), since no `client.json` names it.
+  and the outline it was found bound to: the mod passes that outline's name
+  (`OUTLINER_OUTLINE`, or blanks an inherited one for a local or remote
+  choice) and blanks an inherited `OUTLINER_CONFIG_PATH`, so Claude's
+  environment never moves a write elsewhere. With `OUTLINER_REMOTE` or
+  `OUTLINER_SOCKET_PATH` in Claude's environment nothing is fed (one toast);
+  use strict mode for that setup.
 - The folder is found when the session starts (links and tools) and again after
   each answer (mentions), so binding a folder mid-session starts its mentions.
 - Herdr discovers the Outliner (`herdr plugin list --plugin float.pi-outliner`),
@@ -40,9 +51,13 @@ folders, separated by `:` or `,`. What the list means is
 
 | Mode | The list |
 |---|---|
-| `folder` | Folders opted out: a session in one, or below it, feeds nothing even when bound. |
-| `allowlist` | Strict mode, as before folder mode: only listed folders (and their subfolders) feed, bound or not; the nearest listed folder is the workspace, and its outline comes from its `client.json`. |
-| unset | `folder`, unless folders are listed: a list with no mode was written before folder mode, when it was the allowlist, so it is still read as one. Rerun the installer to move to folder mode. |
+| `folder` (or unset) | Folders opted out: a session in one, or below it, feeds nothing even when bound. |
+| `allowlist` | Strict mode, as before folder mode: only listed folders (and their subfolders) feed, bound or not; the nearest listed folder is the workspace, and the CLI resolves its outline as it always did. |
+
+A list written before folder mode (with no mode) was the allowlist; it is now
+read as opt-outs, so its folders feed nothing until you drop it
+(`install-claude-mod.ts --folder`: bound folders then feed on their own) or
+keep strict mode (`--allowlist`). It fails closed, never open.
 
 The option wins over the environment variable when it is set. Claude Code
 passes an unset option as an empty string, so an empty option always falls back
@@ -221,10 +236,10 @@ other copy of this mod and backing the file up first.
 
 | Installer | Does |
 |---|---|
-| `install-claude-mod.ts` | Loads the mod in folder mode. A list from before folder mode (no mode set) is dropped, and the listed folders bound to no outline are named: bind them, or use strict mode. Opt-outs and an explicit strict mode are kept. |
+| `install-claude-mod.ts` | Loads the mod. The folder list and mode are kept; a list with no mode is named as opted out. |
 | `install-claude-mod.ts --exclude /folder` | Opts the folder out (repeatable; `PI_OUTLINER_MENTIONS_MODE=folder`). |
 | `install-claude-mod.ts /folder` (or `--allowlist /folder`) | Strict mode: only these folders feed (`PI_OUTLINER_MENTIONS_MODE=allowlist`). |
-| `install-claude-mod.ts --folder` | Leaves strict mode for folder mode, dropping the allowlist. |
+| `install-claude-mod.ts --folder` | Folder mode, dropping an allowlist (strict mode's, or a list with no mode from before folder mode) and naming its folders bound to no outline. |
 
 `install.sh` passes `--claude-exclude` as `--exclude` and `--claude-workspace`
 as strict-mode folders. To stop the mod, remove its folder from
