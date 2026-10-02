@@ -865,14 +865,23 @@ publisher and the same index. It is stricter than the tailnet one:
   notes embed as usual;
 - `[publish::never]` still wins: a locked public note is `404`, and a locked
   embed says "locked note";
-- `public` is checked again on every request, so removing it takes the note
-  off at once;
-- attached files are served exactly as on the tailnet, with the same checks
-  and the same sandbox CSP, and every response carries
-  `X-Robots-Tag: noindex, nofollow`.
+- `public` is checked again on every request, for the page and for every
+  note it embeds or links, so removing it takes the note off at once;
+- `[publish::public:false]` (or `no`, `off`, `0`) is off and
+  `[publish::public:never]` locks, never a public slug;
+- attached files are served as on the tailnet, with the same checks and the
+  same sandbox CSP. One difference: an attached markdown file is served with
+  its links and embeds resolved by these rules, raw as well as with
+  `?view=html`, so a `((…))` to a note that isn't public never reaches a
+  reader as written. `?view=source` of a React, SVG or mermaid file is the
+  file itself, which is what you shared;
+- a note's own subtree is shown as on the tailnet, children included, so
+  share a note whose children hold nothing private;
+- every response carries `X-Robots-Tag: noindex, nofollow`.
 
 `--public-url` (or `OUTLINER_PUBLIC_URL`) says where anyone opens the
-listener, such as `https://float-2.example.ts.net:8443/share`. Its path is the
+listener, such as `https://float-2.example.ts.net:8443/share`; `--public-bind`
+(or `OUTLINER_PUBLIC_BIND`, default `127.0.0.1`) is the one address it listens on. Its path is the
 mount (default `/share`); with the whole URL, the tailnet index and
 `publish list` show each public note's full public link in their PUBLIC
 column (`-` for a tailnet-only note).
@@ -888,6 +897,34 @@ tailscale funnel status   # 8443 (Funnel on); 443 still "tailnet only"
 
 Funnel needs the node's `funnel` attribute in the tailnet policy (Funnel ports
 443, 8443 and 10000).
+
+**A custom domain.** Switching domains is configuration only: links inside
+public pages are relative to the mount, and `--public-url` sets the links the
+index and `publish list` print and adds that URL's host to the Hosts the
+publisher answers. To serve `https://share.example.org/share/p/<slug>` from a
+public box on the same tailnet (Caddy, or a Cloudflare Tunnel), bind the public
+listener to this machine's tailnet address instead of 127.0.0.1 and proxy to it:
+
+```sh
+# on the publishing machine (ExecStart or the shell)
+outliner publish serve --outline pie --port 8790 --base-path /pub \
+  --public-port 8791 --public-bind "$(tailscale ip -4)" --public-url https://share.example.org/share
+```
+
+```caddy
+# Caddyfile on the public box
+share.example.org {
+  handle /share/* {
+    reverse_proxy <publishing machine's tailnet IP>:8791
+  }
+  respond 404
+}
+```
+
+`--public-bind` takes one address, never `0.0.0.0` or `::`, so the public
+listener is never on the LAN by accident. Caddy keeps the `Host` header, which
+`--public-url` allowed. Turn the Funnel off (`tailscale funnel --https=8443 off`)
+once the domain serves it, or keep both.
 
 #### Artifacts
 

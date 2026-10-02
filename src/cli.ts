@@ -97,11 +97,12 @@ if (process.argv[2] === "outlines" || process.argv[2] === "outline") {
   process.exit(await runOutlinesCommand(process.argv[2], process.argv.slice(3)));
 }
 /**
- * `publish serve [--port N] [--root DIR]… [--max-bytes N] [--base-path /pub] [--allow-host NAME]… [--artifact-cache DIR] [--public-port N] [--public-url URL] [--outline NAME]`:
+ * `publish serve [--port N] [--root DIR]… [--max-bytes N] [--base-path /pub] [--allow-host NAME]… [--artifact-cache DIR] [--public-port N] [--public-url URL] [--public-bind ADDR] [--outline NAME]`:
  * serves blocks carrying `[publish::…]` read-only on 127.0.0.1 (src/publish.ts).
  * React artifacts compile into `--artifact-cache` (default `<state root>/publish/artifacts`).
  * `--public-port` adds the public listener (only `[publish::public]` notes, no index) for
- * `tailscale funnel`; `--public-url` (or OUTLINER_PUBLIC_URL) is where anyone opens it.
+ * `tailscale funnel`; `--public-url` (or OUTLINER_PUBLIC_URL) is where anyone opens it, and
+ * `--public-bind` (or OUTLINER_PUBLIC_BIND, default 127.0.0.1) the one address it listens on.
  * `publish list [--json]` prints the same index once, with each public note's public URL.
  */
 if (process.argv[2] === "publish") {
@@ -111,7 +112,7 @@ if (process.argv[2] === "publish") {
 async function runPublishCommand(operation: string | undefined, args: string[]): Promise<number> {
   try {
     if (operation !== "serve" && operation !== "list") {
-      throw new Error("publish expects: serve [--port N] [--root DIR]… [--max-bytes N] [--base-path /pub] [--allow-host NAME]… [--artifact-cache DIR] [--public-port N] [--public-url URL] [--outline NAME] | list [--public-url URL] [--json]");
+      throw new Error("publish expects: serve [--port N] [--root DIR]… [--max-bytes N] [--base-path /pub] [--allow-host NAME]… [--artifact-cache DIR] [--public-port N] [--public-url URL] [--public-bind ADDR] [--outline NAME] | list [--public-url URL] [--json]");
     }
     const { values } = parseArgs({
       args, strict: true,
@@ -119,6 +120,7 @@ async function runPublishCommand(operation: string | undefined, args: string[]):
         port: { type: "string" }, root: { type: "string", multiple: true }, "max-bytes": { type: "string" },
         "base-path": { type: "string" }, "allow-host": { type: "string", multiple: true }, outline: { type: "string" },
         "artifact-cache": { type: "string" }, "public-port": { type: "string" }, "public-url": { type: "string" },
+        "public-bind": { type: "string" },
         json: { type: "boolean" },
       },
     });
@@ -131,6 +133,10 @@ async function runPublishCommand(operation: string | undefined, args: string[]):
     if (publicPort !== undefined && (!Number.isInteger(publicPort) || publicPort < 0 || publicPort > 65535)) throw new Error("--public-port must be a port number");
     if (publicPort !== undefined && publicPort !== 0 && publicPort === port) throw new Error("--public-port must differ from --port");
     const publicUrl = values["public-url"] ?? process.env.OUTLINER_PUBLIC_URL;
+    const publicBind = (values["public-bind"] ?? process.env.OUTLINER_PUBLIC_BIND ?? "127.0.0.1").trim();
+    if (!/^(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9a-fA-F:]+)$/.test(publicBind) || publicBind === "0.0.0.0" || publicBind === "::") {
+      throw new Error("--public-bind must be one IP address of this machine (127.0.0.1, or its tailnet address), never every interface");
+    }
     const { Publisher, servePublisher, renderIndexText } = await import("./publish");
     const publisher = new Publisher({
       client: createOutlinerClient(resolveClientPaths()),
@@ -152,10 +158,10 @@ async function runPublishCommand(operation: string | undefined, args: string[]):
     }
     const server = servePublisher(publisher, port);
     // One publisher, one index; the public listener is the same publisher seen by the public audience.
-    const publicServer = publicPort === undefined ? undefined : servePublisher(publisher, publicPort, "public");
+    const publicServer = publicPort === undefined ? undefined : servePublisher(publisher, publicPort, "public", publicBind);
     console.log(JSON.stringify({
       status: "publishing", url: `http://127.0.0.1:${server.port}${publisher.basePath}/`,
-      ...(publicServer ? { publicListener: `http://127.0.0.1:${publicServer.port}${publisher.publicBase.basePath}/p/…`, publicUrl: `${publisher.publicBase.origin ?? ""}${publisher.publicBase.basePath}` } : {}),
+      ...(publicServer ? { publicListener: `http://${publicBind.includes(":") ? `[${publicBind}]` : publicBind}:${publicServer.port}${publisher.publicBase.basePath}/p/…`, publicUrl: `${publisher.publicBase.origin ?? ""}${publisher.publicBase.basePath}` } : {}),
       outline: status.outline?.name ?? process.env.OUTLINER_OUTLINE ?? null, roots: publisher.roots,
     }));
     const stopped = Promise.withResolvers<void>();
