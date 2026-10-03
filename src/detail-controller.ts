@@ -136,6 +136,7 @@ import type {
   BrowsingContextState,
   InternResourceReceipt,
   PageAddressCollection,
+  GotoSearchCollection,
   OutlinerEvent,
   PropertyPatchOperation,
   RenderedPassageObservation,
@@ -688,6 +689,8 @@ export interface DetailEffects {
   /** Write a heading's anchor through the service (`fragments.ensure`). */
   ensureFragment?(input: { blockId: string; lineIndex: number; expectedRevision: number }): Promise<{ fragmentId: string; created: boolean }>;
   queryPageAddresses(query: string | undefined, limit: number): Promise<PageAddressCollection>;
+  /** The one search (`tree.search`) for `((`, from the note being edited. */
+  searchBlocks?(query: string, contextBlockId?: string): Promise<GotoSearchCollection>;
   readFile(block: Block): Promise<ReferencedFile>;
   completeFiles(query: string): Promise<ReferencedPathCandidate[]>;
   focusOutliner(): Promise<void>;
@@ -3084,6 +3087,7 @@ export function createDetailController(
     ...(effects.fragmentCandidates ? { fragmentCandidates: (query: FragmentCandidateQuery) => effects.fragmentCandidates!(query) } : {}),
     ...(effects.ensureFragment ? { ensureFragment: (input: { blockId: string; lineIndex: number; expectedRevision: number }) => effects.ensureFragment!(input) } : {}),
     queryPageAddresses: (query, limit) => effects.queryPageAddresses(query, limit),
+    ...(effects.searchBlocks ? { searchBlocks: (query: string, contextBlockId?: string) => effects.searchBlocks!(query, contextBlockId) } : {}),
     completeFiles: query => effects.completeFiles(query),
     readContext: async blockId => {
       const document = await effects.loadTarget({kind:"block",blockId});

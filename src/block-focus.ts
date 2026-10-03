@@ -14,6 +14,7 @@ export interface BlockFocusMatch {
   title: string;
   /** The share of the query found in the title (src/search-match.ts). */
   inTitle: number;
+  edits?: number;
 }
 
 export type BlockFocusResolution =
@@ -37,7 +38,7 @@ const titleOf = (block: Block) => displayTitle(block.text) || block.id;
 
 function scoreBlock(block: Block, query: SearchQuery): BlockFocusMatch | null {
   const match = scoreSearchDocument({ id: block.id, title: titleOf(block), text: block.text }, query);
-  return match ? { block, kind: match.kind, score: match.score, title: match.title, inTitle: match.inTitle } : null;
+  return match ? { block, kind: match.kind, score: match.score, title: match.title, inTitle: match.inTitle, ...(match.edits !== undefined ? { edits: match.edits } : {}) } : null;
 }
 
 function rankAllBlockFocusMatches(
@@ -75,12 +76,14 @@ export function resolveBlockFocus(
   if (allMatches.length === 0) return { kind: "none", matches: [] };
   const [first, second] = allMatches;
   const matches = allMatches.slice(0, limit);
-  const isDirectMatch =
+  // A typo, a missing word or a few words is a guess: never focused without asking, even alone.
+  const guess = first.kind === "typo-terms" || first.kind === "partial-terms" || first.kind === "some-terms";
+  const isDirectMatch = !guess && (
     first.kind === "exact-id" ||
     (first.kind === "exact-title" && second?.kind !== "exact-title") ||
     allMatches.length === 1 ||
     (first.kind === "id-prefix" && second?.kind !== "id-prefix") ||
-    (second !== undefined && first.score - second.score >= 10_000);
+    (second !== undefined && first.score - second.score >= 10_000));
   return isDirectMatch
     ? { kind: "match", match: first, matches }
     : { kind: "ambiguous", matches };

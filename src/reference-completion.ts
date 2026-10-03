@@ -5,7 +5,7 @@ import {ensureHeadingFragment, fragmentCandidates, parseFragmentCompletionQuery,
 import {blockDisplayTitle} from './references';
 import {propertyInspectorAuthoredText} from './property-inspector';
 import type {ReferencedPathCandidate} from './files';
-import type {Block, BlockSearchQuery, PageAddressCollection, SelectionContext, VisibleBlockCollection} from './types';
+import type {Block, BlockSearchQuery, GotoSearchCollection, PageAddressCollection, SelectionContext, VisibleBlockCollection} from './types';
 import type {FragmentCandidateCollection, FragmentCandidateQuery} from './fragment-search';
 import type {TextBuffer} from './text-buffer';
 
@@ -38,6 +38,8 @@ export interface ReferenceCompletionProvider {
   fragmentCandidates?(query:FragmentCandidateQuery):Promise<FragmentCandidateCollection>;
   /** The service writes a heading's anchor, revision-checked. */
   ensureFragment?(input:{blockId:string;lineIndex:number;expectedRevision:number}):Promise<{fragmentId:string;created:boolean}>;
+  /** The one search (`tree.search`, src/search-match.ts), from the note being edited; `((` uses it when given. */
+  searchBlocks?(query:string,contextBlockId?:string):Promise<GotoSearchCollection>;
 }
 const unsupportedAction=(error:unknown)=>/unsupported action|unknown action/i.test(error instanceof Error?error.message:String(error));
 export interface CompletionDraft {blockId:string;text:string}
@@ -72,6 +74,13 @@ export async function lookupReferenceCompletion(provider:ReferenceCompletionProv
         const message='No matching block fragments';
         return {start:target.start,end:target.end,index:0,items,truncatedLimit,incompleteness,message:items.length?incompleteness:message};
       }catch(error){if(!unsupportedAction(error))throw error;}
+    }
+    if(!fragment&&provider.searchBlocks){
+      // Goto's ranker: punctuation, word order and typos forgiven, nearer the draft's note first; `((` alone lists what's linked around it.
+      const found=await provider.searchBlocks(target.query,draft?.blockId);
+      items=found.matches.slice(0,LIMIT).map(match=>({label:match.title,blockId:match.block.id,kind:'block',context:[match.path,snippet(match.snippet)].filter(Boolean).join(' › '),insertion:`((${match.block.id}))`}));
+      if(found.matches.length>LIMIT)truncatedLimit=LIMIT;
+      return {start:target.start,end:target.end,index:0,items,truncatedLimit,incompleteness,message:items.length?(truncatedLimit?`Showing first ${truncatedLimit} matches`:''):'No matching blocks'};
     }
     const result=await provider.queryBlocks(fragment?{limit:500}:{text:target.query||undefined,limit:LIMIT});
     if(result.completeness.kind==='truncated'){truncatedLimit=result.completeness.limit;incompleteness=fragment?`Searched only ${result.blocks.length} blocks; more blocks were not checked`:'';}
@@ -179,6 +188,7 @@ export function referenceCompletionProvider(client:OutlinerRequester,actorId:str
     fragmentCandidates:query=>client.request({action:"fragments.candidates",query}),
     ensureFragment:input=>client.request({action:"fragments.ensure",...input,mutation:{author:"user",actorId}}),
     queryPageAddresses:(query,limit)=>client.request({action:"pages.complete",query,limit}),
+    searchBlocks:(query,contextBlockId)=>client.request({action:"tree.search",query,...(contextBlockId?{contextBlockId}:{})}),
     completeFiles:prefix=>client.request({action:"files.complete",prefix}),
     readContext:blockId=>client.request({action:"blocks.context",blockId}),
     updateBlock:input=>client.request({action:"update",...input,mutation:{author:"user",actorId}}),

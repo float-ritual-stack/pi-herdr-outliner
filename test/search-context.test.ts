@@ -37,9 +37,7 @@ describe("search from a note", () => {
   });
 
   test("a far match as typed still beats a near typo", () => {
-    // From the tomato bed, "garden tools": nothing near holds it; "Gardn tools" is far but every word
-    // of the query is there only within a typo, so "Workshop garden" (far, one term as typed) is not lifted
-    // above it, and no near note jumps a rung.
+    // From the tomato bed (a niece of the near seed order): the near one first, the far one next.
     const kinds = gotoCandidates(blocks, "seed order", { contextBlockId: "tomato" }).matches.map(match => match.block.id);
     expect(kinds.slice(0, 2)).toEqual(["near-seed", "far-seed"]);
     const near = [...blocks, block("near-typo", "Sed ordr", "allotment", 30)];
@@ -137,4 +135,37 @@ test("over the socket: tree.search and pages.complete take the note, ping names 
     await server.close(); store.close();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+describe("the service's own edges", () => {
+  test("blocks.query text: every word in any order, apostrophes kept, on the plain and the ranked path alike", () => {
+    const dir = mkdtempSync(join(tmpdir(), "search-text-"));
+    try {
+      const store = new OutlinerStore(join(dir, "outline.sqlite"), { workspaceRoot: dir });
+      const now = store.create("Claude - now");
+      const dont = store.create("Don't water the beans");
+      store.create("Water the beans");
+      const ids = (text: string) => store.queryBlocks({ text, limit: 10 }).blocks.map(block => block.id);
+      expect(ids("claude now")).toEqual([now.id]);
+      expect(ids("now Claude")).toEqual([now.id]);
+      expect(ids("don't water")).toEqual([dont.id]);
+      expect(ids("dont water")).toEqual([]);
+      store.close();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("an unknown context note gives today's order and no context; a lone typo is never focused without asking", async () => {
+    expect(gotoCandidates(blocks, "seed order", { contextBlockId: "gone" }).context).toBeUndefined();
+    expect(() => gotoCandidates(blocks, "seed", { contextBlockId: 7 as never })).toThrow(/contextBlockId/);
+    const { resolveBlockFocus } = await import("../src/block-focus");
+    expect(resolveBlockFocus(blocks, "spade lievs").kind).toBe("ambiguous");
+    expect(resolveBlockFocus(blocks, "spade lives").kind).toBe("match");
+  });
+
+  test("a 4-letter term is a typo of a whole word only, never of a word's start", async () => {
+    const { typoDistance } = await import("../src/search-match");
+    expect(typoDistance("form", "foreign", 1)).toBe(2);
+    expect(typoDistance("from", "form", 1)).toBe(1);
+    expect(typoDistance("gardn", "gardening", 1)).toBe(1);
+  });
 });

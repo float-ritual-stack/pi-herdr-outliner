@@ -70,6 +70,8 @@ export interface TextSearchMatch<T> {
   title: string;
   /** The share of the query found in the title (0–1): inside a rung, the quality a context never reorders across. */
   inTitle: number;
+  /** Typo edits it took (`typo-terms`, `partial-terms`): fewer is better, which a context never reorders across either. */
+  edits?: number;
 }
 
 // Search prose often contains words absent from the remembered note's title.
@@ -86,6 +88,17 @@ export function searchNormalize(value: string): string {
  */
 export function searchFold(value: string): string {
   return value.normalize("NFKC").toLowerCase().replace(/['’ʼ]/g, "").replace(/[^\p{L}\p{M}\p{N}]+/gu, " ").trim();
+}
+
+/**
+ * The words `blocks.query` `text` requires, each as a case-folded substring of a note's text (SQLite's `INSTR` on
+ * `LOWER(text)` and the same in memory): split where `searchFold` splits, but with apostrophes kept, since the
+ * stored text isn't folded. A query of punctuation alone is one term as typed.
+ */
+export function searchTextTerms(value: string): string[] {
+  const lower = value.normalize("NFKC").toLowerCase();
+  const terms = lower.split(/[^\p{L}\p{M}\p{N}'’ʼ]+/u).map(term => term.replace(/^['’ʼ]+|['’ʼ]+$/g, "")).filter(Boolean);
+  return terms.length ? [...new Set(terms)] : lower.trim() ? [lower.trim()] : [];
 }
 
 /** The letters of `query` in order in `candidate`: 1000 less the gaps and the extra length, or 0. */
@@ -115,8 +128,9 @@ export function typoBudget(term: string): number {
 
 /**
  * The Damerau–Levenshtein distance (optimal string alignment: an adjacent swap is one edit) from `term`
- * to `word` or to the start of `word` (4 characters or more), whichever is less, or `max + 1` once it is
- * sure to be more than `max`. A word under 4 characters is never a typo of anything.
+ * to `word` or, for a term of 5 characters or more, to the start of `word` (4 characters or more), whichever
+ * is less, or `max + 1` once it is sure to be more than `max`. A word under 4 characters is never a typo of
+ * anything. (A 4-letter term against word starts would match half the dictionary: "form" in "foreign".)
  */
 export function typoDistance(term: string, word: string, max: number): number {
   const m = term.length, shortest = Math.max(TYPO_MIN_LENGTH, m - max);
@@ -138,6 +152,7 @@ export function typoDistance(term: string, word: string, max: number): number {
     [before, previous, current] = [previous, current, before];
   }
   let best = max + 1;
+  if (m < 5) return word.length > n ? max + 1 : Math.min(previous[n]!, max + 1);
   for (let j = shortest; j <= n; j++) if (previous[j]! < best) best = previous[j]!;
   return best;
 }
@@ -163,7 +178,8 @@ export function searchMemo<T>(compute: (key: string) => T, size = 20_000): (key:
 }
 
 interface Field { folded: string; words: string[] | null }
-const field = searchMemo<Field>(value => ({ folded: searchFold(value), words: null }));
+// Two keys per note (its title and text), so 50,000 a generation holds an outline of ~25,000 notes warm.
+const field = searchMemo<Field>(value => ({ folded: searchFold(value), words: null }), 50_000);
 function words(f: Field): string[] {
   return f.words ??= [...new Set(f.folded.split(" "))].filter(Boolean);
 }
@@ -248,8 +264,8 @@ export function scoreSearchDocument<T extends SearchDocument>(document: T, q: Se
     // Within a rung: terms in the title, terms as typed, a title about as long as the query, fewer edits.
     const matched = typed + typos, penalty = Math.min(distance, 5) * 100;
     const near = shortness / 2 + 300 * (q.phrase.length / Math.max(q.phrase.length, titleText.length));
-    if (matched === n) return { document, kind: "typo-terms", score: 16_000 + (titled / n) * 2_000 + (typed / n) * 1_000 + near - penalty, title, inTitle: titled / n };
-    if (n >= 2 && matched === n - 1) return { document, kind: "partial-terms", score: 12_700 + (titled / n) * 1_000 + (typed / n) * 800 + near - penalty, title, inTitle: titled / n };
+    if (matched === n) return { document, kind: "typo-terms", score: 16_000 + (titled / n) * 2_000 + (typed / n) * 1_000 + near - penalty, title, inTitle: titled / n, edits: distance };
+    if (n >= 2 && matched === n - 1) return { document, kind: "partial-terms", score: 12_700 + (titled / n) * 1_000 + (typed / n) * 800 + near - penalty, title, inTitle: titled / n, edits: distance };
     // A two-letter term ("no" of "no-such-thing") is in too many words to be evidence on its own.
     if (telling > 0) return { document, kind: "some-terms", score: 12_000 + (typed / n) * 150, title, inTitle: inTitle / n };
   }
@@ -280,8 +296,9 @@ export function rankTextSearchMatches<T extends SearchDocument>(documents: reado
  * every term is in some field (each within its typo budget unless `typos` is false), or the query's letters
  * appear in one field in order and close together. An empty query passes everything.
  */
-export function matchesSearchText(query: string, fields: readonly string[], options: { typos?: boolean } = {}): boolean {
-  const q = prepareSearchQuery(query);
+export function matchesSearchText(query: string | SearchQuery | null, fields: readonly string[], options: { typos?: boolean } = {}): boolean {
+  // A list filters every row with one query: prepare it once (`prepareSearchQuery`) and pass that.
+  const q = typeof query === "string" ? prepareSearchQuery(query) : query;
   if (!q) return true;
   const folded = fields.map(value => q.folded ? field(value) : { folded: searchNormalize(value), words: null });
   if (folded.some(f => f.folded.includes(q.phrase))) return true;

@@ -156,6 +156,7 @@ import {
   type OutlinerRegion,
   type InternResourceReceipt,
   type PageAddressCollection,
+  type GotoSearchCollection,
   type OutlinerNavigationTarget,
   type ResourceDescription,
   type ResolvedBlockReferences,
@@ -753,6 +754,9 @@ const effects: DetailEffects = {
   },
   async queryPageAddresses(query, limit) {
     return client.request<PageAddressCollection>({ action: "pages.complete", query, limit });
+  },
+  async searchBlocks(query, contextBlockId) {
+    return client.request<GotoSearchCollection>({ action: "tree.search", query, ...(contextBlockId ? { contextBlockId } : {}) });
   },
   async readFile(block) {
     const path = getProperty(block.properties, "file");

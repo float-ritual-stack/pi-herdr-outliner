@@ -1,6 +1,7 @@
 import { rankBlockFocusMatches } from "./block-focus";
 import type { NormalizedPageAddress } from "./page-addresses";
 import { blockDisplayTitle } from "./references";
+import { searchTextTerms } from "./search-match";
 import { ancestorPath, contextList, searchContext, sortByContext, type ContextReason } from "./search-context";
 import type { Block, GotoSearchCollection } from "./types";
 
@@ -35,7 +36,8 @@ export function gotoCandidates(blocks: readonly Block[], query: string, options:
     if (index >= 0) ranked.splice(index, 1);
     ranked.unshift({ block: address, title: blockDisplayTitle(address), kind: "exact-address" });
   }
-  const terms = query.toLowerCase().split(/\s+/).filter(term => term.length >= 3);
+  // Where a word of the query is (split as blocks.query splits it), for the snippet.
+  const terms = searchTextTerms(query).filter(term => term.length >= 3);
   return {
     matches: ranked.slice(0, GOTO_CANDIDATE_LIMIT).map(({ block, title, kind, reason }) => {
       const lower = block.text.toLowerCase();

@@ -1572,8 +1572,7 @@ export class OutlinerServer {
             const candidates = ranked.addresses.map(address => ({ address, title: address.title.slice(0, 250), path: address.address, snippet: (this.store.get(address.blockId)?.text ?? "").slice(0, 1000), exact: address.exact }));
             const reordered = await rankSearchWithJev(request.query, { matches: candidates, completeness: ranked.completeness, semantic: { status: "lexical" } }, { promptDirectory: this.promptDirectory, ...(ranked.context ? { note: { title: ranked.context.title, path: ranked.context.path } } : {}) });
             // A model answer cannot resurrect an address renamed or deleted while it ranked.
-            const live = new Set(this.store.rankPageAddresses(request.query, request.limit).addresses.map(address => `${address.normalizedAddress}\u0000${address.blockId}`));
-            result = { addresses: reordered.matches.map(match => { const { exact: _exact, ...address } = match.address; return address; }).filter(address => live.has(`${address.normalizedAddress}\u0000${address.blockId}`)), completeness: ranked.completeness, semantic: reordered.semantic, ...context };
+            result = { addresses: reordered.matches.map(match => { const { exact: _exact, ...address } = match.address; return address; }).filter(address => this.store.pageAddressLive(address.normalizedAddress, address.blockId)), completeness: ranked.completeness, semantic: reordered.semantic, ...context };
           } finally { this.activeGotoRankings--; }
         } else if (request.query?.trim()) {
           result.semantic = { status: "unavailable", message: "Jev busy; showing text matches" };
@@ -2597,6 +2596,7 @@ export class OutlinerServer {
           break;
         case "pages.complete":
           if (request.semantic !== undefined && typeof request.semantic !== "boolean") throw new Error("semantic must be a boolean");
+          if (request.semantic) throw new Error("Semantic search requires asynchronous dispatch");
           result = this.store.completePageAddresses(request.query, request.limit, request.contextBlockId);
           break;
         case "pages.rename":

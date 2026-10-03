@@ -22,7 +22,7 @@ import { extensionActorId, extensionWriteRefusal, type ExtensionRecordOwner } fr
 import { authoredTextDigest } from "./authored-links";
 import { resolveBacklinkRelation } from "./backlinks";
 import { rankBlockFocusMatches } from "./block-focus";
-import { rankTextSearchMatches, searchFold } from "./search-match";
+import { rankTextSearchMatches, searchTextTerms } from "./search-match";
 import { normalizeBlockReadFields, normalizeBlockReadIds, projectBlock } from "./block-projection";
 import { gotoCandidates } from "./goto-search";
 import { contextList, searchContext, sortByContext, type SearchContext } from "./search-context";
@@ -2833,6 +2833,14 @@ export class OutlinerStore {
     return { addresses: addresses.map(({ exact: _exact, ...address }) => address), completeness, ...(context ? { context } : {}) };
   }
 
+  /** Whether `normalizedAddress` still names `blockId`, a live note (after a Jev ranking, which takes seconds). */
+  pageAddressLive(normalizedAddress: string, blockId: string): boolean {
+    return !!this.database.query(`
+      SELECT 1 FROM page_addresses address JOIN blocks block ON block.id = address.block_id
+      WHERE address.normalized_address = ? AND address.block_id = ? AND block.effective_deleted_root_id IS NULL
+    `).get(normalizedAddress, blockId);
+  }
+
   /**
    * `completePageAddresses`, each address saying whether it is the query itself (Jev never reorders those).
    * With `contextBlockId` (the note being edited), addresses whose notes are nearer it come first inside each
@@ -2874,7 +2882,8 @@ export class OutlinerStore {
         const matches = rankTextSearchMatches(rows.map(row => ({ id: "", title: row.display_address, text: `${row.display_address}\n${titleOf(row)}`, row })), query.trim())
           .filter(match => match.kind !== "text-fuzzy");
         if (context) {
-          const sorted = sortByContext(matches.map(match => ({ match, block: byId.get(match.document.row.block_id)!, kind: match.kind, inTitle: match.inTitle })).filter(entry => entry.block), context);
+          const sorted = sortByContext(matches.map(match => ({ match, block: byId.get(match.document.row.block_id)!, kind: match.kind, inTitle: match.inTitle, edits: match.edits })).filter(entry => entry.block), context,
+            (a, b) => byAddress(a.match.document.row, b.match.document.row));
           ranked = sorted.map(({ match }) => ({ row: match.document.row, exact: match.kind === "exact-title" }));
         } else {
           ranked = matches.sort((a, b) => b.score - a.score || byAddress(a.document.row, b.document.row))
@@ -2887,8 +2896,8 @@ export class OutlinerStore {
             const resolved = this.resolvePageAddressFromCurrentRead(reference);
             return resolved.status === "resolved" ? resolved.block?.id : undefined;
           }).map(({ block }, index) => [block.id, index]));
-          const at = (row: PageAddressMatchRow) => order.get(row.block_id) ?? Infinity;
-          rows.sort((a, b) => at(a) - at(b));
+          const at = (row: PageAddressMatchRow) => order.get(row.block_id) ?? Number.MAX_SAFE_INTEGER;
+          rows.sort((a, b) => at(a) - at(b) || byAddress(a, b));
         }
         ranked = rows.map(row => ({ row, exact: false }));
       }
@@ -3370,7 +3379,7 @@ export class OutlinerStore {
   }
 
   focusTree(query: string): TreeFocusCollection {
-    if (typeof query !== "string") throw new Error("Tree focus query must be text");
+    if (typeof query !== "string" || query.length > 500) throw new Error("Tree focus query must be text of at most 500 characters");
     return this.database.transaction(() => {
       const blocks = [...this.loadGraph().byId.values()].filter(block => !block.effectiveDeletedRootId);
       const matches = rankBlockFocusMatches(blocks, query, 21);
@@ -3531,8 +3540,7 @@ export class OutlinerStore {
     if (query.text) {
       // Every word, in any order, punctuation folded (src/search-match.ts): "Claude now" finds "Claude - now".
       // A query of punctuation alone is matched as typed.
-      const terms = searchFold(query.text).split(" ").filter(Boolean);
-      for (const term of terms.length ? terms : [query.text]) {
+      for (const term of searchTextTerms(query.text)) {
         predicates.push("INSTR(LOWER(block.text), LOWER(?)) > 0");
         parameters.push(term);
       }
@@ -3821,7 +3829,8 @@ export class OutlinerStore {
     options: LoadedGraphTraversalOptions,
   ): VisibleBlock[] {
     const blocks: VisibleBlock[] = [];
-    const filterText = options.text?.toLowerCase();
+    // The same words the ranked path's SQL requires (searchTextTerms): every one, in any order.
+    const filterTerms = options.text ? searchTextTerms(options.text) : [];
     const deletedMode = options.deletedMode ?? "active";
     const propertyScope = options.propertyScope ?? "block";
     const where = options.where ? compileQueryExpression(options.where, options.now) : null;
@@ -3848,7 +3857,7 @@ export class OutlinerStore {
           matchesFilters(propertyRecords, options.filters, propertyScope)) &&
         (!where || where({ ...block, childProperties: () => (graph.byParent.get(block.id) ?? [])
           .filter((child) => !child.effectiveDeletedRootId).map((child) => child.properties) }, propertyRecords, propertyScope)) &&
-        (!filterText || block.text.toLowerCase().includes(filterText));
+        (!filterTerms.length || filterTerms.every(term => block.text.toLowerCase().includes(term)));
       if (matches) {
         const children = (graph.byParent.get(block.id) ?? []).filter((child) =>
           deletedMode === "active" ? !child.effectiveDeletedRootId : true

@@ -67,14 +67,17 @@ const tier = (kind: string) => {
 
 /**
  * Matches in their rungs' order, and inside a rung by how much of the query is in the title (a title match
- * is better evidence than a mention in a body); then nearer the context note first, then the more recently edited.
+ * is better evidence than a mention in a body) and by fewer typo edits; then nearer the context note first,
+ * then the more recently edited.
  */
-export function sortByContext<T extends { block: Block; kind: string; inTitle: number }>(matches: T[], context: SearchContext): T[] {
+export function sortByContext<T extends { block: Block; kind: string; inTitle: number; edits?: number }>(matches: T[], context: SearchContext, tie?: (a: T, b: T) => number): T[] {
   return matches.sort((a, b) =>
     tier(a.kind) - tier(b.kind) ||
     b.inTitle - a.inTitle ||
+    (a.edits ?? 0) - (b.edits ?? 0) ||
     context.distance(a.block) - context.distance(b.block) ||
     b.block.updatedAt.localeCompare(a.block.updatedAt) ||
+    (tie?.(a, b) ?? 0) ||
     a.block.id.localeCompare(b.block.id));
 }
 

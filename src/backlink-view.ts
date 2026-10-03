@@ -1,5 +1,5 @@
 import { isOpenBacklinkStage } from "./backlink-facets";
-import { matchesSearchText } from "./search-match";
+import { matchesSearchText, prepareSearchQuery, type SearchQuery } from "./search-match";
 import {
   BACKLINK_STAGE_BUCKETS,
   type BacklinkCollection,
@@ -83,7 +83,7 @@ export interface BacklinkView {
   kinds: Array<{ kind: string; label: string }>;
 }
 
-function matchesText(source: BacklinkSource, query: string): boolean {
+function matchesText(source: BacklinkSource, query: SearchQuery | null): boolean {
   return matchesSearchText(query, [
     source.title,
     source.parentContext,
@@ -127,7 +127,7 @@ export function backlinkView(
 ): BacklinkView {
   const all = collection?.sources ?? [];
   const faceted = all.length > 0 && all.every((source) => source.facets !== undefined);
-  const query = options.filter;
+  const query = prepareSearchQuery(options.filter);
   let hiddenRelated = 0;
   let hiddenResolved = 0;
   const shown: BacklinkSource[] = [];

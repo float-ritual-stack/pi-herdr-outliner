@@ -1,4 +1,4 @@
-import {rankTextSearchMatches} from './search-match';
+import {rankTextSearchMatches,searchTextTerms} from './search-match';
 import {summarizeInboxResult} from './inbox-repository';
 import {blockDisplayTitle} from './references';
 import type {SearchCollection,SearchExcerpt} from './search-ranking';
@@ -30,7 +30,7 @@ export function searchInboxHistory(store:OutlinerStore,query:string):InboxSearch
         titles:blocks.map(block=>blockDisplayTitle(block)),revisions:blocks.map(block=>({id:block.id,revision:block.revision}))};
     });
     const matches=query.trim()?rankTextSearchMatches(documents,query,CANDIDATES+1):documents.slice(0,CANDIDATES+1).map(document=>({document,kind:'recent'}));
-    const terms=query.toLowerCase().split(/\s+/).filter(term=>term.length>=3);
+    const terms=searchTextTerms(query).filter(term=>term.length>=3);
     return {matches:matches.slice(0,CANDIDATES).map(({document,kind})=>{
       const lower=document.text.toLowerCase();
       const at=terms.map(term=>lower.indexOf(term)).filter(index=>index>=0).sort((a,b)=>a-b)[0]??0;

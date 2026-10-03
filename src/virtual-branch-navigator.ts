@@ -1,5 +1,4 @@
 import {
-  fuzzyFilter,
   Markdown,
   stripTerminalSequences,
   truncateToWidth,
@@ -22,6 +21,7 @@ import {
   type OutlinerActionKeymap,
 } from "./outliner-actions";
 import { blockDisplayTitle } from "./references";
+import { matchesSearchText, prepareSearchQuery } from "./search-match";
 import { sanitizeDynamicText, type TerminalInputAction, type TerminalKey } from "./terminal";
 import { hideLiteralMarkers } from "./document-presentation";
 import {
@@ -407,7 +407,7 @@ export class VirtualBranchNavigatorController {
     query = this.filter,
   ): void {
     this.visibleRows = query
-      ? fuzzyFilter([...this.rows], query, rowSearchText)
+      ? ((q) => this.rows.filter((row) => matchesSearchText(q, [rowSearchText(row)])))(prepareSearchQuery(query))
       : this.rows;
     const exactIndex = preferredRowId
       ? this.visibleRows.findIndex((row) => row.rowId === preferredRowId)

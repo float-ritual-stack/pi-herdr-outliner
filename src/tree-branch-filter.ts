@@ -1,4 +1,4 @@
-import {fuzzyFilter} from '@earendil-works/pi-tui';
+import {matchesSearchText,prepareSearchQuery} from './search-match';
 import type {OutlinerRequester} from './client-target';
 import type {Block,TreeIndexBlock} from './types';
 import type {TreeRow,VirtualBranchProjection} from './virtual-branches';
@@ -53,7 +53,7 @@ export class TreeBranchFilter {
     // Work-ID prefixes are literal; fuzzy subsequences must not turn DEM-37 into DEM-307.
     const matches=new Set((!query?candidates:/^[\p{L}\d]+-\d+/u.test(query)
       ?candidates.filter(row=>text(row).toLocaleLowerCase().includes(query.toLocaleLowerCase()))
-      :fuzzyFilter(candidates,query,text)).map(row=>row.rowId));
+      :(q=>candidates.filter(row=>matchesSearchText(q,[text(row)])))(prepareSearchQuery(query))).map(row=>row.rowId));
     this.count=matches.size;
     const keep=new Set<string>([root.rowId]);
     const ancestry:Row[]=[];

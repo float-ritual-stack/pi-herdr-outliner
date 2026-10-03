@@ -1310,10 +1310,10 @@ Second paragraph`;
   test("bounds search explicitly and reports when more matching blocks exist", () => {
     const store = makeStore();
     const parent = store.create("Collapsed parent");
-    const first = store.create("Matching child one", parent.id);
-    const second = store.create("Matching child two", parent.id);
+    const first = store.create("Zorbled child one", parent.id);
+    const second = store.create("Zorbled child two", parent.id);
 
-    expect(store.queryBlocks({ text: "matching child", limit: 1 })).toEqual({
+    expect(store.queryBlocks({ text: "zorbled child", limit: 1 })).toEqual({
       blocks: [
         expect.objectContaining({
           id: first.id,
@@ -1322,7 +1322,7 @@ Second paragraph`;
       ],
       completeness: { kind: "truncated", limit: 1 },
     });
-    expect(store.queryBlocks({ text: "matching child", limit: 2 })).toEqual({
+    expect(store.queryBlocks({ text: "zorbled child", limit: 2 })).toEqual({
       blocks: [
         expect.objectContaining({ id: first.id }),
         expect.objectContaining({ id: second.id }),
