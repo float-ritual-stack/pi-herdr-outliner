@@ -11,7 +11,7 @@ import type { Block } from "../src/types";
 //              ├─ Seed order                (a sibling, titled like a far note)
 //              └─ Beds ── Tomato bed        (a cousin's parent and a niece)
 //   Kitchen ──── Recipes ── Seed order      (far away, same title)
-//   Workshop ─── Gardn tools                (far, a typo of "garden")
+//   Workshop ─── Gardening tools            (far)
 const at = (day: number) => `2026-09-${String(day).padStart(2, "0")}T10:00:00.000Z`;
 function block(id: string, text: string, parentId: string | null, day: number, author = "user"): Block {
   return { id, text, parentId, revision: 1, position: 0, properties: [], author, createdAt: at(1), updatedAt: at(day) } as Block;
@@ -26,7 +26,7 @@ const blocks = [
   block("recipes", "Recipes", "kitchen", 8),
   block("far-seed", "Seed order", "recipes", 20),
   block("workshop", "Workshop garden", null, 9, "agent"),
-  block("tools", "Gardn tools\nThe spade lives here.", "workshop", 10),
+  block("tools", "Gardening tools\nThe spade lives here.", "workshop", 10),
 ];
 const ids = (query: string, contextBlockId?: string) => gotoCandidates(blocks, query, { contextBlockId }).matches.map(match => match.block.id);
 
@@ -44,6 +44,14 @@ describe("search from a note", () => {
     expect(kinds.slice(0, 2)).toEqual(["near-seed", "far-seed"]);
     const near = [...blocks, block("near-typo", "Sed ordr", "allotment", 30)];
     expect(gotoCandidates(near, "seed order", { contextBlockId: "spring" }).matches.map(match => match.block.id).slice(0, 3)).toEqual(["near-seed", "far-seed", "near-typo"]);
+  });
+
+  test("inside a rung, a title match is not reordered below a nearer, newer mention in a body", () => {
+    // From the spring note, "gardning tools" (a typo): "Shed notes" (a sibling, newest) has the words in its body
+    // only; "Gardening tools" (far) has them in its title. Both are typo-terms; the title wins.
+    const mention = [...blocks, block("shed-notes", "Shed notes\nThe gardening tools hang by the door.", "allotment", 31)];
+    const ranked = gotoCandidates(mention, "gardning tools", { contextBlockId: "spring" }).matches.map(match => match.block.id);
+    expect(ranked.slice(0, 2)).toEqual(["tools", "shed-notes"]);
   });
 
   test("without a context note the order is today's", () => {

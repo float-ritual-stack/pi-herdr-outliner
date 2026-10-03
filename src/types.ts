@@ -1785,8 +1785,8 @@ export const OUTLINER_CAPABILITIES = [
    */
   "search.forgiving",
   /**
-   * `tree.search` and `pages.complete` take `contextBlockId`, the note being edited: inside each rung, nearer
-   * notes in the physical tree come first, then the more recently edited; an empty `tree.search` lists what
+   * `tree.search` and `pages.complete` take `contextBlockId`, the note being edited: inside each rung and share
+   * of the query in the title, nearer notes in the physical tree come first, then the more recently edited; an empty `tree.search` lists what
    * its parent and siblings link to, notes near it, then the person's recent edits (`reason`); Jev's state
    * carries the note's title and path.
    */

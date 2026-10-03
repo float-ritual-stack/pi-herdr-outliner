@@ -1202,8 +1202,9 @@ alias, then by address. It takes `semantic` as `tree.search` does. `blocks.query
 folded word, in any order (an `INSTR` per word), not one phrase.
 
 **From a note** (capability `search.context`): `tree.search` and `pages.complete` take
-`contextBlockId`, the note being edited. Inside each rung, matches nearer it in the physical tree come
-first (hops up from the note to the shared ancestor: its own subtree, then siblings', then cousins',
+`contextBlockId`, the note being edited. Inside each rung, a match with more of the query in its title
+still comes first (a title is better evidence than a mention in a body); among equals, matches nearer the
+note in the physical tree come first (hops up from the note to the shared ancestor: its own subtree, then siblings', then cousins',
 then other roots; virtual branches don't count), then the more recently edited. An empty
 `tree.search` lists what the note's parent and siblings link to (`((id))` and `[[address]]`, the most
 recently edited linking note first; `reason: "linked"`), then notes within two hops, newest first

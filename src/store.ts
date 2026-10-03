@@ -2874,7 +2874,7 @@ export class OutlinerStore {
         const matches = rankTextSearchMatches(rows.map(row => ({ id: "", title: row.display_address, text: `${row.display_address}\n${titleOf(row)}`, row })), query.trim())
           .filter(match => match.kind !== "text-fuzzy");
         if (context) {
-          const sorted = sortByContext(matches.map(match => ({ match, block: byId.get(match.document.row.block_id)!, kind: match.kind })).filter(entry => entry.block), context);
+          const sorted = sortByContext(matches.map(match => ({ match, block: byId.get(match.document.row.block_id)!, kind: match.kind, inTitle: match.inTitle })).filter(entry => entry.block), context);
           ranked = sorted.map(({ match }) => ({ row: match.document.row, exact: match.kind === "exact-title" }));
         } else {
           ranked = matches.sort((a, b) => b.score - a.score || byAddress(a.document.row, b.document.row))

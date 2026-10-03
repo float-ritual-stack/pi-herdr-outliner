@@ -63,7 +63,14 @@ export const SEARCH_MATCH_KINDS = [
 export type SearchMatchKind = (typeof SEARCH_MATCH_KINDS)[number];
 
 export interface SearchDocument { id: string; title: string; text: string }
-export interface TextSearchMatch<T> { document: T; kind: SearchMatchKind; score: number; title: string }
+export interface TextSearchMatch<T> {
+  document: T;
+  kind: SearchMatchKind;
+  score: number;
+  title: string;
+  /** The share of the query found in the title (0–1): inside a rung, the quality a context never reorders across. */
+  inTitle: number;
+}
 
 // Search prose often contains words absent from the remembered note's title.
 const QUERY_FILLER = new Set("a an the that this those these it its of on in at to for with and or about where when how i we my our was is are were be been thing things note page block please find show me what did does do would could should can have has had will then again something some any using get got".split(" "));
@@ -201,16 +208,16 @@ function closest(q: SearchQuery, index: number, f: Field): number {
 export function scoreSearchDocument<T extends SearchDocument>(document: T, q: SearchQuery): TextSearchMatch<T> | null {
   const title = document.title;
   const id = document.id.toLowerCase();
-  if (id === q.raw) return { document, kind: "exact-id", score: 100_000, title };
-  if (q.raw.length >= 4 && id.startsWith(q.raw)) return { document, kind: "id-prefix", score: 90_000 + q.raw.length, title };
+  if (id === q.raw) return { document, kind: "exact-id", score: 100_000, title, inTitle: 1 };
+  if (q.raw.length >= 4 && id.startsWith(q.raw)) return { document, kind: "id-prefix", score: 90_000 + q.raw.length, title, inTitle: 1 };
 
   const titleField = field(title), textField = field(document.text);
   const titleText = q.folded ? titleField.folded : searchNormalize(title);
   const bodyText = q.folded ? textField.folded : searchNormalize(document.text);
-  if (titleText === q.phrase) return { document, kind: "exact-title", score: 80_000, title };
-  if (titleText.startsWith(q.phrase)) return { document, kind: "title-prefix", score: 70_000, title };
-  if (titleText.includes(q.phrase)) return { document, kind: "title-contains", score: 60_000, title };
-  if (bodyText.includes(q.phrase)) return { document, kind: "text-contains", score: 50_000, title };
+  if (titleText === q.phrase) return { document, kind: "exact-title", score: 80_000, title, inTitle: 1 };
+  if (titleText.startsWith(q.phrase)) return { document, kind: "title-prefix", score: 70_000, title, inTitle: 1 };
+  if (titleText.includes(q.phrase)) return { document, kind: "title-contains", score: 60_000, title, inTitle: 1 };
+  if (bodyText.includes(q.phrase)) return { document, kind: "text-contains", score: 50_000, title, inTitle: 0 };
 
   const n = q.terms.length;
   if (n) {
@@ -222,9 +229,9 @@ export function scoreSearchDocument<T extends SearchDocument>(document: T, q: Se
       if (x) inText++;
       if (t || x) { typed++; if (t) titled++; if (term.length >= 3) telling++; } else missing.push(index);
     });
-    if (inTitle === n) return { document, kind: "title-terms", score: 40_000 + n, title };
+    if (inTitle === n) return { document, kind: "title-terms", score: 40_000 + n, title, inTitle: 1 };
     const shortness = 1_000 / (1 + bodyText.length / 1_000);
-    if (!missing.length) return { document, kind: "text-terms", score: 20_000 + (inTitle / n) * 10_000 + shortness, title };
+    if (!missing.length) return { document, kind: "text-terms", score: 20_000 + (inTitle / n) * 10_000 + shortness, title, inTitle: inTitle / n };
     // Typos only reach the rungs below every term-as-typed one, so they never outrank exact evidence.
     let unmatched = 0;
     for (const index of missing) {
@@ -241,16 +248,16 @@ export function scoreSearchDocument<T extends SearchDocument>(document: T, q: Se
     // Within a rung: terms in the title, terms as typed, a title about as long as the query, fewer edits.
     const matched = typed + typos, penalty = Math.min(distance, 5) * 100;
     const near = shortness / 2 + 300 * (q.phrase.length / Math.max(q.phrase.length, titleText.length));
-    if (matched === n) return { document, kind: "typo-terms", score: 16_000 + (titled / n) * 2_000 + (typed / n) * 1_000 + near - penalty, title };
-    if (n >= 2 && matched === n - 1) return { document, kind: "partial-terms", score: 12_700 + (titled / n) * 1_000 + (typed / n) * 800 + near - penalty, title };
+    if (matched === n) return { document, kind: "typo-terms", score: 16_000 + (titled / n) * 2_000 + (typed / n) * 1_000 + near - penalty, title, inTitle: titled / n };
+    if (n >= 2 && matched === n - 1) return { document, kind: "partial-terms", score: 12_700 + (titled / n) * 1_000 + (typed / n) * 800 + near - penalty, title, inTitle: titled / n };
     // A two-letter term ("no" of "no-such-thing") is in too many words to be evidence on its own.
-    if (telling > 0) return { document, kind: "some-terms", score: 12_000 + (typed / n) * 150, title };
+    if (telling > 0) return { document, kind: "some-terms", score: 12_000 + (typed / n) * 150, title, inTitle: inTitle / n };
   }
   if (q.phrase.length >= 3) {
     const titleScore = subsequenceScore(q.phrase, titleText);
-    if (titleScore > 0) return { document, kind: "title-fuzzy", score: 10_000 + titleScore, title };
+    if (titleScore > 0) return { document, kind: "title-fuzzy", score: 10_000 + titleScore, title, inTitle: 1 };
     const textScore = subsequenceScore(q.phrase, bodyText);
-    if (textScore > 0) return { document, kind: "text-fuzzy", score: 5_000 + textScore, title };
+    if (textScore > 0) return { document, kind: "text-fuzzy", score: 5_000 + textScore, title, inTitle: 0 };
   }
   return null;
 }

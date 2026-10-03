@@ -12,6 +12,8 @@ export interface BlockFocusMatch {
   kind: BlockFocusMatchKind;
   score: number;
   title: string;
+  /** The share of the query found in the title (src/search-match.ts). */
+  inTitle: number;
 }
 
 export type BlockFocusResolution =
@@ -35,7 +37,7 @@ const titleOf = (block: Block) => displayTitle(block.text) || block.id;
 
 function scoreBlock(block: Block, query: SearchQuery): BlockFocusMatch | null {
   const match = scoreSearchDocument({ id: block.id, title: titleOf(block), text: block.text }, query);
-  return match ? { block, kind: match.kind, score: match.score, title: match.title } : null;
+  return match ? { block, kind: match.kind, score: match.score, title: match.title, inTitle: match.inTitle } : null;
 }
 
 function rankAllBlockFocusMatches(
