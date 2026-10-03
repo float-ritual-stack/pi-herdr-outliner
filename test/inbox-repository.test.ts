@@ -379,7 +379,7 @@ describe("InboxRepository", () => {
 
   test("archives a concise linked source and keeps original text only in recovery", () => {
     const { store, repository } = fixture();
-    const source = capture(store, "Verbose capture\n\nOriginal-only secret wording for recovery.");
+    const source = capture(store, "Verbose capture\n\nOriginalonly secret wording for recovery.");
     const result = repository.apply("archive", source, plan({
       summary: "Extracted one useful observation.",
       source: { disposition: "archive", text: "Extracted one useful observation." },
@@ -388,8 +388,8 @@ describe("InboxRepository", () => {
     const archived = store.require(source.id);
     expect(archived.parentId).toBe(folder(store, "processed")[0]!.id);
     expect(archived.text).toContain(`((${result.outputIds[0]}))`);
-    expect(archived.text).not.toContain("Original-only");
-    expect(store.queryBlocks({ text: "Original-only", limit: 10 }).blocks).toEqual([]);
+    expect(archived.text).not.toContain("Originalonly");
+    expect(store.queryBlocks({ text: "Originalonly", limit: 10 }).blocks).toEqual([]);
     repository.undo(result.id);
     expect(store.require(source.id).text).toBe(source.text);
     expect(store.require(source.id).parentId).toBe(source.parentId);
